@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../app/controller.dart';
 import 'views.dart';
 import '../core/models.dart';
+import '../app_version.dart';
 
 class ContextHubApp extends StatelessWidget {
   const ContextHubApp({super.key, required this.controller});
@@ -187,7 +188,7 @@ class _HubShellState extends State<HubShell> {
               onPressed: () => showAboutDialog(
                 context: context,
                 applicationName: 'ContextHub Flutter',
-                applicationVersion: '0.2.0',
+                applicationVersion: appVersion,
                 applicationLegalese: 'MIT License · mozuq-lab',
               ),
             ),
