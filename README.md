@@ -40,7 +40,7 @@ scripts/build.sh android
 scripts/build.sh macos
 ```
 
-読取テストのfixture（`assets/*.json`、`test/fixtures/numeric-policy.json`）は本体の生成物です。`scripts/check_fixture_drift.mjs` が固定参照の本体で再生成した出力とキー構造・記録の種類を比較し、`flutter test` と `scripts/verify.sh` から実行されます。submoduleを更新して差分が出た場合は、`node scripts/prepare_policy_fixtures.mjs` と `node scripts/prepare_numeric_policy_fixture.mjs` で再生成し、Dart側の読取を合わせます。本体のCIもこのクライアントの既定ブランチで同じ検査を行います。
+読取テストのfixture（`assets/*.json`、`test/fixtures/numeric-policy.json`）は本体の生成物です。`scripts/check_fixture_drift.mjs` が固定参照の本体で再生成した出力と比較します。日時・ULID・hashだけを置換し、記録の種類・frontmatter/JSONの値・本文の書式・期待値の差を検出します。`flutter test`（`scripts/verify.sh` も含む）から実行されます。fixtureに含まれない `Input/`・`90_system/intake/`・`90_system/associations/` は対象外で、書き込み側はprotocolテストが確認します。submoduleを更新して差分が出た場合は、`node scripts/prepare_policy_fixtures.mjs` と `node scripts/prepare_numeric_policy_fixture.mjs` で再生成し、Dart側の読取を合わせます。本体のCIもこのクライアントの既定ブランチで同じ検査を行います。
 
 FlutterがPATHにない場合は `FLUTTER_BIN=/path/to/flutter` を指定します。Androidは必要なら `JAVA_HOME` をAndroid Studio内のJDKへ指定します。MacでXcodeをコマンド単位に選ぶ場合は `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` を指定します。
 
