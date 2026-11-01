@@ -40,6 +40,8 @@ scripts/build.sh android
 scripts/build.sh macos
 ```
 
+読取テストのfixture（`assets/*.json`、`test/fixtures/numeric-policy.json`）は本体の生成物です。`scripts/check_fixture_drift.mjs` が固定参照の本体で再生成した出力とキー構造・記録の種類を比較し、`flutter test` と `scripts/verify.sh` から実行されます。submoduleを更新して差分が出た場合は、`node scripts/prepare_policy_fixtures.mjs` と `node scripts/prepare_numeric_policy_fixture.mjs` で再生成し、Dart側の読取を合わせます。本体のCIもこのクライアントの既定ブランチで同じ検査を行います。
+
 FlutterがPATHにない場合は `FLUTTER_BIN=/path/to/flutter` を指定します。Androidは必要なら `JAVA_HOME` をAndroid Studio内のJDKへ指定します。MacでXcodeをコマンド単位に選ぶ場合は `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` を指定します。
 
 Macはプロジェクト内でSwift Package Managerを有効にしています。現行のMac依存にCocoaPodsは不要です。Xcode27.2のSDKが対応するmacOS 12以降・arm64を明示し、Intel用ビルドは対象にしていません。FlutterやXcodeのグローバル設定を切り替える必要はありません。

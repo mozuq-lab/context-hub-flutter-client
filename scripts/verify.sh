@@ -5,6 +5,7 @@ git submodule update --init
 test "$(git -C vendor/context-hub rev-parse HEAD)" = ce82c3eec5806c00ea4429b6bfec57be0004cc40
 npm ci --ignore-scripts
 npm run build:protocol
+node scripts/check_fixture_drift.mjs
 flutter_bin="${FLUTTER_BIN:-flutter}"
 "$flutter_bin" pub get
 "$flutter_bin" analyze --no-pub
