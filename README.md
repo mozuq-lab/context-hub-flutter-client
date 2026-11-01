@@ -1,67 +1,120 @@
 # ContextHub Flutter
 
-Mac・AndroidでContextHubのMarkdown Vaultを読む、探す、メモを追加するクライアントです。MITライセンス。iPad/iOSは対象外です。
+[ContextHub](https://github.com/mozuq-lab/context-hub)のVault（Markdownのフォルダー）を、MacとAndroidで読んだり、メモを追加したりするためのアプリです。
 
-プロジェクトの「現在地・次の一手・未解決・提案」、原文と出典・日時、最近のメモ、アイデア、本文検索、出典付きcontextコピー、Inputへのメモ/AI作業要約の追加に対応します。候補の確認待ち一覧・採用・却下も使えます。保存先はMarkdownのままです。
+ContextHubは、AIとの作業要約や日々の思いつきをMarkdownに集め、Mac mini上の本体が「現在地・次の一手・未解決」に整理する仕組みです（アプリの画面では、このMac miniを「Mini」と表示します）。このアプリは、その整理結果を手元の端末で確認し、新しいメモや判断の依頼を送る窓口です。整理そのものは行いません。
 
-Androidはエミュレーターで検証済みです。Mac版はApple Silicon・macOS 12以降向けのreleaseビルドと、実アプリでのサンプル閲覧・保存・候補操作を確認しています。OSで選択したフォルダー権限の再起動復元は別項目として検証します。[検証状況と残事項](docs/verification.md)を確認してください。
+- 対応OS: Mac（Apple Silicon、macOS 12以降）、Android
+- 対象外: iPad/iOS、Intel Mac
+- 現在の版: 0.3.0
+- 検証状況: Androidはエミュレーターで、Macは実アプリでサンプルの閲覧・保存・候補操作を確認済みです。Macのフォルダー選択と再起動後の権限復元、実機のAndroid端末、実際の同期は未検証です。詳しくは[検証状況](docs/verification.md)を参照してください。
+- ライセンス: MIT
 
-ビルド済みの.app/APKはこのGitリポジトリには含めていません。利用する成果物は、下記の「ソースから検証・ビルド」の手順で生成します。
+## できること
 
-## 使い始める
+- **プロジェクトの現在地を見る**: プロジェクトごとの「現在地・次の一手・未解決・提案」を表示します。要約から元のメモ（原文）と出典・日時へたどれます。
+- **最近のメモ・アイデアを見る**: 最近追加されたメモや、整理されたアイデアを一覧で確認できます。
+- **検索する**: タイトルと本文を検索します。
+- **AIに渡す文脈（context）をコピーする**: 出典付きの文脈をクリップボードへコピーし、別のAIとの会話に貼り付けられます。
+- **メモを追加する**: 思いつきのメモや、AIとの作業要約をVaultの `Input/` へ追加します。
+- **候補を確認して採用・却下する**: AIが提案したプロジェクト案・知識・方針の候補を読み、採用・却下を依頼できます。方針は、元のメモでの指定やAIの推定を確認したうえで、共通にするか特定のプロジェクトに限るか（採用先）を選んで採用でき、採用履歴から適用停止も依頼できます。詳しくは[候補確認の使い方](docs/candidate-review.md)と[本体の方針の説明](https://github.com/mozuq-lab/context-hub/blob/main/docs/policies.md)を参照してください。
 
-Macは生成した `artifacts/ContextHub Flutter.app` をFinderから開きます。毎回ターミナルで起動する必要はありません。Androidは `artifacts/context-hub-flutter-android.apk` を端末へ転送し、本人の操作でインストールします。このAPKは手元検証用の署名です。
+アプリが行うのは「依頼をInputへ保存する」ところまでです。採用後の正式なデータの作成や整理は、Mac mini側の本体が行います。原文や生成された要約の編集、AIとのチャット、同期やモデル・Gatewayの設定はアプリに含みません。
 
-1. 初回は「サンプルで試す」で架空の内容を確認できます。
-2. 「Vaultフォルダーを選ぶ」で既存の同期済みVaultのルートを選びます。Androidはローカルのファイル選択画面で、既存の同期先フォルダーを選んでアクセスを許可します。クラウドproviderやストレージ全体のルートは使いません。
-3. プロジェクトを開き、要約から出典の原文へ移動します。「検索」はタイトル・本文を対象にします。
-4. 「メモを追加」は雑な思いつきでも構いません。1〜8000文字、プロジェクト指定は任意です。AIの作業要約は未検証として扱います。
-5. 同期後に「再読込」し、受付状況を確認します。
-6. 「確認待ち」で候補の内容と原文を読み、採用・却下を依頼できます。[候補確認の使い方](docs/candidate-review.md)を参照してください。
+## 使う前に必要なもの
 
-「この端末のInputに保存」「Mini受領」「整理済み」は別の段階です。アプリは同期を実行しません。既存のSyncthing等がファイルを同期し、Mini側のContextHubが受領・整理します。Androidでは同期アプリがアクセスできる場所を選んでください。アプリ専用のサンプル領域は同期用ではありません。
+アプリだけでは動きません。次の環境が別に必要です。
 
-生成物はAIによる未検証の要約です。原文・出典・訂正の注意を確認してください。コピー直前に変更を検出した場合は表示を更新して停止するので、内容を確認してもう一度コピーします。未知・破損・整合性未確認の記録がある場合もコピーを止めます。
+1. **ContextHub本体**: 常時稼働するMac miniなどで、受付と整理を行います。導入は[本体のREADME](https://github.com/mozuq-lab/context-hub)を参照してください。
+2. **同期の仕組み**: Syncthingなどで、Vaultフォルダーを端末とMac miniの間で同期します。アプリ自体は同期を行いません。
+3. **端末上の同期済みVault**: アプリでは、端末に同期されたVaultのフォルダーを選びます。
 
-## 保存確認待ち
+まず動作だけ確認したい場合は、アプリ内の「サンプルで試す」で架空のデータを表示できます。この場合、上の環境は不要です。
 
-同じ操作を再送して受付ファイルを増やすことはありません。フォームを保持したまま「同じ操作を確認」を使ってください。フォームを閉じた後は「受付状況」から確認できます。再起動後の未保存本文復元は保証しません。
+## 使い方
 
-確認情報が壊れた場合は新規保存を停止し、閲覧は続けます。アプリ専用領域やInputを削除してやり直す前に、[復旧とデータ保全](SECURITY.md)を確認してください。
+### インストール
 
-## ソースから検証・ビルド
+**先にビルドが必要です。** ビルド済みのアプリはこのリポジトリでは配布していません。下の「[ビルド方法](#ビルド方法)」で作成してください。
 
-Flutter 3.41.5 / Dart 3.11.3、Node 24 / npm、MacはXcode、AndroidはSDKとJDK 21を使っています。Nodeは上流protocolの開発時検証専用で、端末上では不要です。
+- **Mac**: `artifacts/ContextHub Flutter.app` をFinderから開きます。ターミナルから起動する必要はありません。
+- **Android**: `artifacts/context-hub-flutter-android.apk` を端末に転送してインストールします。このAPKは手元で使うための署名で、Playストアでは配布していません。実機のAndroid端末へのインストールは、まだ検証していません。
+
+### 基本の流れ
+
+1. 初回は「サンプルで試す」で、架空のVaultを使って画面を確認できます。
+2. 「Vaultフォルダーを選ぶ」で、同期済みVaultの最上位のフォルダー（`Input/` や `90_system/` があるフォルダー）を選びます。Androidでは端末内のローカルフォルダーを選んでアクセスを許可してください。クラウドストレージやストレージ全体のルートは選べません。
+3. 左側のメニュー（画面が狭いときは左上のメニューボタン）から、ホーム・最近のメモ・アイデア・確認待ち・検索・受付状況・各プロジェクトを開きます。
+4. 「メモを追加」で、思いつきや作業要約を書いて保存します（1〜8000文字、プロジェクトの指定は任意）。雑なメモで構いません。AIの作業要約は未検証の内容として扱われます。
+5. 同期が進んだら「再読込」を押し、「受付状況」でMini側に受け付けられたかを確認します。
+
+### メモが整理されるまでの段階
+
+メモは次の順に進みます。アプリで保存できても、整理まで終わったとは限りません。
+
+| 段階 | 誰が行うか |
+|---|---|
+| 1. この端末のInputに保存 | アプリ |
+| 2. Mac miniへ同期 | Syncthingなどの同期アプリ |
+| 3. Miniで受領 | ContextHub本体 |
+| 4. 整理済み | ContextHub本体 |
+
+アプリが表示する読込時刻は、同期が完了した時刻ではありません。Androidでは、同期アプリがアクセスできる場所にあるVaultを選んでください。「サンプルで試す」のデータはアプリ専用の領域にあり、同期されません。
+
+### 注意点
+
+- **要約はAIが作った未検証の内容です。** 大事な判断の前には、元のメモ・出典・訂正の注意を確認してください。
+- **文脈には有効な方針も含まれます。** コピーする内容には、共通と対象プロジェクトの有効な方針が全文入ります。方針が未同期の場合はコピーを止めます。
+- **コピーが止まることがあります。** コピーの直前に記録が変わった場合や、壊れた記録・整合性を確認できない記録がある場合、表示を更新してコピーを止めます。内容を確認してからもう一度コピーしてください。
+- **保存結果がわからないときは、同じ内容を送り直さないでください。** 「保存確認待ち」と表示されたら、フォームを開いたまま「同じ操作を確認」を押します。フォームを閉じた後は「受付状況」から確認できます。アプリを再起動すると、保存していない入力内容は戻らないことがあります。
+- **アプリのデータやInputを削除してやり直さないでください。** 確認情報が壊れた場合、アプリは新しい保存を止めますが、閲覧はできます。復旧の前に[データと権限](SECURITY.md)を読んでください。
+
+## ビルド方法
+
+### 必要なもの
+
+| 対象 | 必要なもの |
+|---|---|
+| 共通 | Flutter 3.41.5（Dart 3.11.3） |
+| Mac | Xcode |
+| Android | Android SDK、JDK 21 |
+| 動作確認（`scripts/verify.sh`） | 上記に加えてNode 24とnpm、ネットワーク接続（依存の取得）。Macではpython3も使います |
+
+Nodeはビルド前の検証にだけ使います。端末でアプリを使うときには不要です。
+
+### 手順
 
 ```sh
-git submodule update --init
-scripts/verify.sh
-scripts/build.sh android
-scripts/build.sh macos
+git clone --recurse-submodules https://github.com/mozuq-lab/context-hub-flutter-client.git
+cd context-hub-flutter-client
+scripts/verify.sh            # 静的解析とテスト（任意）
+scripts/build.sh android     # → artifacts/context-hub-flutter-android.apk
+scripts/build.sh macos       # → artifacts/ContextHub Flutter.app（Macでのみ実行可）
 ```
 
-読取テストのfixture（`assets/*.json`、`test/fixtures/numeric-policy.json`）は本体の生成物です。`scripts/check_fixture_drift.mjs` が固定参照の本体で再生成した出力と比較します。日時・ULID・hashだけを置換し、記録の種類・frontmatter/JSONの値・本文の書式・期待値の差を検出します。`flutter test`（`scripts/verify.sh` も含む）から実行されます。fixtureに含まれない `Input/`・`90_system/intake/`・`90_system/associations/` は対象外で、書き込み側はprotocolテストが確認します。submoduleを更新して差分が出た場合は、`node scripts/prepare_policy_fixtures.mjs` と `node scripts/prepare_numeric_policy_fixture.mjs` で再生成し、Dart側の読取を合わせます。本体のCIもこのクライアントの既定ブランチで同じ検査を行います。
+`scripts/build.sh` を引数なしで実行すると、AndroidとMacの両方をビルドします（Macでのみ実行できます）。
 
-FlutterがPATHにない場合は `FLUTTER_BIN=/path/to/flutter` を指定します。Androidは必要なら `JAVA_HOME` をAndroid Studio内のJDKへ指定します。MacでXcodeをコマンド単位に選ぶ場合は `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` を指定します。
+### うまくいかないとき
 
-Macはプロジェクト内でSwift Package Managerを有効にしています。現行のMac依存にCocoaPodsは不要です。Xcode27.2のSDKが対応するmacOS 12以降・arm64を明示し、Intel用ビルドは対象にしていません。FlutterやXcodeのグローバル設定を切り替える必要はありません。
+- FlutterがPATHにない場合は、`FLUTTER_BIN=/path/to/flutter scripts/build.sh android` のように指定します。
+- AndroidでJDKが見つからない場合は、`JAVA_HOME` をAndroid Studio内のJDKへ指定します。
+- Macで使うXcodeを指定したい場合は、`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` を指定します。グローバルのXcode設定を切り替える必要はありません。
+- Xcodeの利用規約が未承諾というエラーが出た場合は、ターミナルで `sudo env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -license` を実行し、内容を確認して同意してください。スクリプトは規約に自動で同意しません。
 
-Xcode規約未承諾のエラーが出る場合は、本人がターミナルで `sudo env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -license` を実行し、内容を確認して同意する必要があります。スクリプトは規約に自動同意せず、グローバルのXcode選択も変更しません。
+### Androidの署名鍵について
 
-Androidビルドは `.local-signing/` にこのcheckout専用の検証鍵を作ります。継続して同じAPKを上書き更新するにはこの鍵を保全してください。公開配布用の鍵ではありません。APKの実端末へのインストール、Play配布、MacのDeveloper ID署名・公証は別途対応が必要です。
+Androidのビルドでは、このclone（取得したフォルダー）専用の検証用の鍵を `.local-signing/` に作ります。同じアプリを上書き更新し続けるには、この鍵を残しておいてください。鍵を作り直すと、インストール済みのアプリを上書きできなくなります。この鍵は公開配布用ではなく、Gitにも含めません。
 
-実機テストは `flutter test integration_test/app_test.dart -d <device>`。AndroidのSAFテストは専用の架空Vaultを用意し、`integration_test/saf_test.dart` 実行中にOSの選択画面で選びます。実Vaultをテストに使わないでください。[検証記録](docs/verification.md)に実施済みと未検証を分けて記載しています。
+Playストアでの配布、MacのDeveloper ID署名・公証には対応していません。
 
-Macのbookmarkテストは `integration_test/macos_bookmark_test.dart` を `--dart-define=MAC_TEST_PHASE=choose`、プロセス終了後に `--dart-define=MAC_TEST_PHASE=restore` の順で実行します。`--dart-define=MAC_TEST_OPERATION=<同じUUID>` を両方へ渡し、OSの画面で同じ専用Vaultを選択します。専用Vaultの `90_system/mac-test-marker.json` に `{"purpose":"context-hub-native-bookmark-test"}` が必要です。symlink・容量超過の架空ファイルも使うため、詳細は検証記録を参照してください。
+## もっと詳しく
 
-## 構成
+- [候補確認の使い方](docs/candidate-review.md)
+- [構成と制限](docs/architecture.md): データの読取・保存の仕組み、対応範囲
+- [データと権限](SECURITY.md): 使う権限、データ保全と復旧
+- [検証状況](docs/verification.md): 確認済みの内容と未検証の項目
+- [開発者向けの情報](AGENTS.md): コード構成、テスト、本体との互換性の確認
 
-- `lib/core/`: 上限付きsnapshotのMarkdown/frontmatter・receipt・訂正の読取、検索、context。
-- `lib/storage/`: OSアクセス契約、本文を含まない操作journal、固定REQ IDによる保存確認。
-- `lib/app/` / `lib/ui/`: 共通画面、Vault切替の応答管理、安全なMarkdownリンク。
-- `macos/Runner/VaultBridge.swift` / `android/app/src/main/kotlin/.../VaultBridge.kt`: 限定されたネイティブアクセス。
-- `vendor/context-hub`: 候補確認と採用先付き方針に対応する本体の公開commitをsubmoduleで固定。`scripts/verify.sh` が参照先を検査します。
+## ライセンス
 
-原文/生成物の編集、AIチャット、同期・Gateway管理は含みません。承認後の正式データ作成はMini側が行います。データ処理と保存の詳細は[構成と制限](docs/architecture.md)を参照してください。
-
-採用先付き方針は0.3.0で対応しています。元メモの指定・AI推定を確認して採用先を選び、採用履歴から適用停止を依頼できます。contextコピーには共通と対象projectの有効方針を全文含め、未同期ならコピーを止めます。[本体の使い方](vendor/context-hub/docs/policies.md)と[検証状況](docs/verification.md)を参照してください。
+MIT Licenseで提供します。[LICENSE](LICENSE)と[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)を参照してください。
