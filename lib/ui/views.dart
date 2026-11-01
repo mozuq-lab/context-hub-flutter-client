@@ -1,0 +1,764 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:uuid/uuid.dart';
+import '../app/controller.dart';
+import '../core/models.dart';
+import '../core/repository.dart';
+import '../storage/capture_service.dart';
+import 'markdown_view.dart';
+import 'review_view.dart';
+
+void notice(BuildContext context, String text) =>
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+class NoticeBox extends StatelessWidget {
+  const NoticeBox(this.text, {super.key, this.error = false});
+  final String text;
+  final bool error;
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+    color: error
+        ? Theme.of(context).colorScheme.errorContainer
+        : Theme.of(context).colorScheme.secondaryContainer,
+    child: Text(
+      text,
+      style: TextStyle(
+        fontSize: 12,
+        height: 1.5,
+        color: error ? Theme.of(context).colorScheme.onErrorContainer : null,
+      ),
+    ),
+  );
+}
+
+class HubView extends StatefulWidget {
+  const HubView({
+    super.key,
+    required this.controller,
+    required this.page,
+    required this.onNavigate,
+  });
+  final HubController controller;
+  final String page;
+  final void Function(String) onNavigate;
+  @override
+  State<HubView> createState() => _HubViewState();
+}
+
+class _HubViewState extends State<HubView> {
+  String query = '';
+  HubController get c => widget.controller;
+  HubRepository get repo => c.repository!;
+  void open(String id) {
+    final record = repo.records[id];
+    if (record != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => RecordView(controller: c, record: record),
+        ),
+      );
+    }
+  }
+
+  Widget title(String eyebrow, String text, String subtitle) => Padding(
+    padding: const EdgeInsets.only(bottom: 28),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          eyebrow,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.4,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 30,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -.6,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(subtitle, style: const TextStyle(height: 1.7)),
+      ],
+    ),
+  );
+  Widget recordCard(HubRecord r, {Key? key}) => Card(
+    key: key,
+    child: ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      title: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          '${originLabel(r.origin)} · ${stateLabel(r.status)}\n${timeLabel(r.at)}',
+          style: const TextStyle(fontSize: 12, height: 1.7),
+        ),
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => open(r.id),
+    ),
+  );
+  @override
+  Widget build(BuildContext context) {
+    if (widget.page == 'review') return ReviewView(controller: c);
+    final children = <Widget>[];
+    for (final warning in repo.warnings) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: NoticeBox(warning, error: true),
+        ),
+      );
+    }
+    final page = widget.page;
+    if (page.startsWith('project:')) {
+      final project = repo.projects[page.substring(8)];
+      if (project == null) {
+        children.add(const Text('このVaultにプロジェクトがありません。'));
+      } else {
+        children.addAll(projectView(project));
+      }
+    } else if (page == 'home') {
+      children.add(
+        title(
+          'YOUR CONTEXT',
+          '今日、どこから始める？',
+          '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        ),
+      );
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Card(
+            child: ListTile(
+              key: const Key('home-review'),
+              leading: const Icon(Icons.fact_check_outlined),
+              title: Text('確認待ち ${c.review!.pending.length}件'),
+              subtitle: Text(
+                '要確認 ${c.review!.attention.length}件 · 採用前に内容と元のメモを確認',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => widget.onNavigate('review'),
+            ),
+          ),
+        ),
+      );
+      if (repo.projects.isEmpty) {
+        children.add(const Text('プロジェクトはまだありません。メモはproject未指定でも追加できます。'));
+      }
+      for (final project in repo.projects.values) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Card(
+              child: ListTile(
+                key: Key('project-${project.id}'),
+                contentPadding: const EdgeInsets.all(24),
+                title: Text(
+                  project.title,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    project.sections['next']?.firstOrNull?.text ??
+                        '次の一手はまだ整理されていません。',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                trailing: const Icon(Icons.arrow_forward),
+                onTap: () => widget.onNavigate('project:${project.id}'),
+              ),
+            ),
+          ),
+        );
+      }
+      children.add(const SizedBox(height: 28));
+      children.add(
+        const Text(
+          '最近のメモ',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+        ),
+      );
+      children.add(const SizedBox(height: 12));
+      children.addAll(
+        repo.recent
+            .take(5)
+            .map(
+              (r) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: recordCard(r),
+              ),
+            ),
+      );
+    } else if (page == 'search') {
+      children.add(
+        title('FIND A THOUGHT', '検索', 'タイトルと本文を検索します。複数の語は空白で区切ります。'),
+      );
+      children.add(
+        TextField(
+          key: const Key('search-query'),
+          decoration: const InputDecoration(
+            hintText: '思い出したいことを入力',
+            prefixIcon: Icon(Icons.search),
+          ),
+          onChanged: (v) => setState(() => query = v),
+        ),
+      );
+      children.add(const SizedBox(height: 20));
+      if (query.trim().isNotEmpty) {
+        final results = repo.search(query);
+        children.add(Text('${results.length}件（最大50件）'));
+        children.add(const SizedBox(height: 12));
+        children.addAll(
+          results.map(
+            (r) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: recordCard(r, key: const Key('search-result')),
+            ),
+          ),
+        );
+      }
+    } else if (page == 'intake') {
+      children.add(
+        title(
+          'CAPTURE STATUS',
+          '受付状況',
+          'Input保存、Mini受領、整理はそれぞれ別の段階です。同期後に再読込してください。',
+        ),
+      );
+      for (final result in c.pending) {
+        children.add(
+          Card(
+            child: ListTile(
+              title: const Text('保存確認待ち'),
+              subtitle: Text(result.requestId),
+              trailing: TextButton(
+                onPressed: c.saving
+                    ? null
+                    : () async {
+                        try {
+                          final r = await c.confirm(result.operationId);
+                          if (context.mounted) {
+                            notice(
+                              context,
+                              r.saved
+                                  ? 'この端末のInputに保存されています'
+                                  : 'まだ保存を確認できません。同じ操作IDを保持しています。',
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            notice(context, HubController.message(e));
+                          }
+                        }
+                      },
+                child: const Text('同じ操作を確認'),
+              ),
+            ),
+          ),
+        );
+      }
+      if (repo.intake.isEmpty && c.pending.isEmpty) {
+        children.add(const Text('この端末に受付ファイルはありません。'));
+      }
+      for (final status in repo.intake) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Card(
+              child: ListTile(
+                title: Text(stateLabel(status.state)),
+                subtitle: Text(
+                  '${status.title}\n${timeLabel(status.at)}\n${status.detail}',
+                  style: const TextStyle(height: 1.7),
+                ),
+                onTap: () {
+                  showDialog(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: Text(stateLabel(status.state)),
+                      content: SelectableText('${status.id}\n${status.detail}'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('閉じる'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      }
+    } else {
+      final ideas = page == 'ideas';
+      final records = ideas ? repo.ideas : repo.recent;
+      children.add(
+        title(
+          ideas ? 'IDEAS' : 'RECENT NOTES',
+          ideas ? 'アイデア' : '最近のメモ',
+          ideas ? '原文に戻りながら、育てたいアイデアを探します。' : '雑な思いつきも、作業の記録も、そのまま残せます。',
+        ),
+      );
+      if (records.isEmpty) {
+        children.add(const Text('まだ記録がありません。'));
+      }
+      children.addAll(
+        records.map(
+          (r) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: recordCard(r),
+          ),
+        ),
+      );
+    }
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1040),
+        child: ListView(
+          key: ValueKey('${c.location?.handle}:$page'),
+          padding: EdgeInsets.all(
+            MediaQuery.sizeOf(context).width < 600 ? 20 : 40,
+          ),
+          children: children,
+        ),
+      ),
+    );
+  }
+
+  List<Widget> projectView(HubProject project) => [
+    title(
+      'PROJECT / ${project.status.toUpperCase()}',
+      project.title,
+      '要約の生成: ${timeLabel(project.generatedAt)}\n最新の根拠: ${timeLabel(project.lastEvidenceAt)}',
+    ),
+    for (final warning in project.warnings)
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: NoticeBox(warning),
+      ),
+    const SizedBox(height: 12),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        key: const Key('copy-context'),
+        onPressed: c.loading
+            ? null
+            : () async {
+                try {
+                  final text = await c.context(project.id);
+                  await Clipboard.setData(ClipboardData(text: text));
+                  if (mounted) {
+                    notice(context, '出典付きcontextをコピーしました');
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    notice(context, HubController.message(e));
+                  }
+                }
+              },
+        icon: const Icon(Icons.copy, size: 18),
+        label: const Text('出典付きcontextをコピー'),
+      ),
+    ),
+    const SizedBox(height: 28),
+    for (final section in [
+      ('current', '現在地'),
+      ('next', '次の一手'),
+      ('open', '未解決'),
+      ('proposals', '提案'),
+    ]) ...[
+      Text(
+        section.$2,
+        style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 12),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (project.sections[section.$1]!.isEmpty)
+                const Text('まだ整理されていません。'),
+              for (final entry in project.sections[section.$1]!)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SafeMarkdown(
+                        text: entry.text,
+                        sourcePath:
+                            repo.records[project.nowRecordId]?.path ?? '',
+                        controller: c,
+                        onRecord: open,
+                      ),
+                      for (final warning in entry.warnings)
+                        Text(
+                          warning,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          for (final id in entry.references)
+                            TextButton.icon(
+                              key: const Key('source-record'),
+                              onPressed: () => open(id),
+                              icon: const Icon(
+                                Icons.article_outlined,
+                                size: 15,
+                              ),
+                              label: Text(
+                                repo.records[id]?.title ?? '出典を確認',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 28),
+    ],
+    if (project.notes.trim().isNotEmpty) ...[
+      const Text(
+        '手動メモ',
+        style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 12),
+      SafeMarkdown(
+        text: project.notes,
+        sourcePath: repo.records[project.nowRecordId]?.path ?? '',
+        controller: c,
+        onRecord: open,
+      ),
+      const SizedBox(height: 24),
+    ],
+    if (project.nowRecordId != null)
+      TextButton(
+        onPressed: () => open(project.nowRecordId!),
+        child: const Text('NOW本文と出典・日時を開く'),
+      ),
+  ];
+}
+
+class RecordView extends StatelessWidget {
+  const RecordView({super.key, required this.controller, required this.record});
+  final HubController controller;
+  final HubRecord record;
+  void open(BuildContext context, String id) {
+    final r = controller.repository?.records[id];
+    if (r != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => RecordView(controller: controller, record: r),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('記録の詳細')),
+    body: Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            Text(
+              record.title,
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '${originLabel(record.origin)} · ${stateLabel(record.status)}',
+            ),
+            const SizedBox(height: 20),
+            for (final warning in record.warnings)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: NoticeBox(warning),
+              ),
+            SafeMarkdown(
+              text: record.body,
+              sourcePath: record.path,
+              controller: controller,
+              onRecord: (id) => open(context, id),
+            ),
+            const SizedBox(height: 32),
+            const Divider(),
+            const SizedBox(height: 16),
+            const Text(
+              '出典・日時',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              '${record.sourceId}\n${record.path}\n入力元: ${record.source}\n発生: ${timeLabel(record.at)}\n受領: ${timeLabel(record.receivedAt)}\n生成: ${timeLabel(record.generatedAt)}',
+              style: const TextStyle(fontSize: 12, height: 1.9),
+            ),
+            for (final id in record.references)
+              TextButton(
+                onPressed: () => open(context, id),
+                child: Text(controller.repository?.records[id]?.title ?? '出典'),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+String timeLabel(DateTime? value) => value == null ? '未取得' : displayTime(value);
+String originLabel(String origin) => switch (origin) {
+  'user-note' => '本人のメモ',
+  'ai-self-report' => 'AIの作業自己報告・未検証',
+  'ai-generated' => 'AI生成・未検証',
+  _ => origin,
+};
+String stateLabel(String state) => switch (state) {
+  'waiting' => 'Mini受領待ち',
+  'accepted' => 'Mini受領',
+  'organized' => '整理済み',
+  'failed' => '整理失敗',
+  'rejected' => '受付失敗',
+  'conflict' => '競合',
+  'uncertain' => '保存確認待ち',
+  'unknown' => '整合性未確認',
+  _ => state,
+};
+
+Future<void> showCapture(BuildContext context, HubController c) async {
+  if (c.composing) {
+    return;
+  }
+  c.composing = true;
+  try {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => CaptureDialog(controller: c),
+    );
+  } finally {
+    c.composing = false;
+  }
+}
+
+class CaptureDialog extends StatefulWidget {
+  const CaptureDialog({super.key, required this.controller});
+  final HubController controller;
+  @override
+  State<CaptureDialog> createState() => _CaptureDialogState();
+}
+
+class _CaptureDialogState extends State<CaptureDialog> {
+  final text = TextEditingController();
+  final operation = const Uuid().v4();
+  String kind = 'memo';
+  String? project, error;
+  CaptureResult? result;
+  bool busy = false, locked = false;
+  @override
+  void dispose() {
+    text.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit() async {
+    if (text.text.trim().isEmpty || text.text.length > 8000) {
+      setState(() => error = '本文は1〜8000文字で入力してください。');
+      return;
+    }
+    setState(() {
+      busy = true;
+      locked = true;
+      error = null;
+    });
+    try {
+      final r = await widget.controller.save(
+        CaptureDraft(
+          operationId: operation,
+          text: text.text,
+          kind: kind,
+          project: project,
+        ),
+      );
+      if (mounted) {
+        setState(() => result = r);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = HubController.message(e));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => busy = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !busy,
+    child: AlertDialog(
+      title: const Text('思いつきを、そのまま。'),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '保存先: ${widget.controller.location?.name ?? ''}',
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('memo-text'),
+                controller: text,
+                readOnly: locked,
+                minLines: 5,
+                maxLines: 10,
+                maxLength: 8000,
+                decoration: const InputDecoration(
+                  hintText: '断片的なメモ、疑問、あとで考えたいこと…',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: kind,
+                decoration: const InputDecoration(labelText: '種類'),
+                items: const [
+                  DropdownMenuItem(value: 'memo', child: Text('メモ')),
+                  DropdownMenuItem(
+                    value: 'work-summary',
+                    child: Text('AIの作業要約・未検証'),
+                  ),
+                ],
+                onChanged: locked ? null : (v) => setState(() => kind = v!),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: project ?? '',
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'プロジェクト（任意）'),
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('指定しない')),
+                  for (final p
+                      in widget.controller.repository?.projects.values ??
+                          const <HubProject>[])
+                    DropdownMenuItem(
+                      value: p.id,
+                      child: Text(p.title, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: locked
+                    ? null
+                    : (v) => setState(() => project = v == '' ? null : v),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: NoticeBox(error!, error: true),
+                ),
+              if (result != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: NoticeBox(
+                    result!.saved
+                        ? 'この端末のInputに保存しました'
+                        : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                  ),
+                ),
+              if (locked)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: SelectableText(
+                    '操作ID: $operation',
+                    style: const TextStyle(fontSize: 10),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: busy ? null : () => Navigator.pop(context),
+          child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
+        ),
+        if (!locked)
+          FilledButton(
+            key: const Key('save-memo'),
+            onPressed: busy ? null : submit,
+            child: const Text('Inputへ保存'),
+          ),
+        if (locked && result?.saved != true)
+          FilledButton(
+            onPressed: busy
+                ? null
+                : () async {
+                    setState(() => busy = true);
+                    try {
+                      final r = await widget.controller.confirm(operation);
+                      if (mounted) {
+                        setState(() => result = r);
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        setState(() => error = HubController.message(e));
+                      }
+                    } finally {
+                      if (mounted) {
+                        setState(() => busy = false);
+                      }
+                    }
+                  },
+            child: const Text('同じ操作を確認'),
+          ),
+        if (busy)
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+      ],
+    ),
+  );
+}

@@ -1,0 +1,3 @@
+[submodule "vendor/context-hub"]
+	path = vendor/context-hub
+	url = https://github.com/mozuq-lab/context-hub.git

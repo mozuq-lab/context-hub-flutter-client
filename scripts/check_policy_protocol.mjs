@@ -1,0 +1,7 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join,basename} from 'node:path';
+import {defaultConfig,Vault,ingest,parseIntake,rebuildDashboard,readPolicies} from '../vendor/context-hub/packages/core/dist/index.js';
+const [file,fixture,out]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,request=parseIntake(path,raw,8000),root=await mkdtemp(join(tmpdir(),'hub-scoped-protocol-'));
+try{const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();const {files}=JSON.parse(await readFile(fixture,'utf8'));for(const[p,text]of Object.entries(files))await vault.write(p,text);await vault.create(path,raw);await utimes(await vault.path(path),new Date(0),new Date(0));assert.equal((await ingest(config)).accepted,1);assert.equal((await ingest(config)).deduped,1);await rebuildDashboard(config);await readPolicies(config,'example');const snapshot={};for(const dir of ['00_inbox','10_projects','20_ideas','30_knowledge','90_system','Input'])for(const p of await vault.files(dir))snapshot[p]=await vault.read(p);snapshot['POLICY.md']=await vault.read('POLICY.md');await writeFile(out,JSON.stringify(snapshot));console.log(`Dartの${request.operation}を本体が受理・重複排除しました`);}finally{await rm(root,{recursive:true,force:true});}

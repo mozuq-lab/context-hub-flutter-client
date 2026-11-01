@@ -1,0 +1,10 @@
+{
+  "name": "context-hub-flutter-protocol-check",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {"node": ">=24"},
+  "workspaces": ["vendor/context-hub/packages/core"],
+  "scripts": {"build:protocol": "npm run build --workspace=@context-hub/core"},
+  "devDependencies": {"@types/node": "^24.0.0", "typescript": "7.0.2"}
+}
