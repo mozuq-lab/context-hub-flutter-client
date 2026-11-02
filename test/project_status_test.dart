@@ -109,6 +109,43 @@ void main() {
       expect(item.title, '状態変更依頼: AI Context Hub → 休止');
       expect(item.detail, '状態の変更をMiniが反映しました。');
       expect(synced.orderedProjects.last.id, 'context-hub');
+      // 再開すると定義は元のhashへ戻る。古い休止依頼を未反映と扱わず、再び状態を変えられる。
+      final paused = synced.projects['context-hub']!;
+      final resumed = await CaptureService(access, location).saveProjectStatus(
+        '31111111-2222-4333-8444-555555555555',
+        paused,
+        'active',
+      );
+      final out2 = File('${access.directory.path}/snapshot2.json');
+      final second = await Process.run('node', [
+        'scripts/check_project_status_protocol.mjs',
+        access.request(location, resumed.requestId).path,
+        out.path,
+        out2.path,
+      ]);
+      expect(second.exitCode, 0, reason: '${second.stdout}\n${second.stderr}');
+      final back = HubRepository(
+        fixture(
+          Map<String, String>.from(
+            jsonDecode(await out2.readAsString()) as Map,
+          ),
+        ),
+      );
+      expect(back.warnings, isEmpty);
+      expect(
+        back.projects['context-hub']!.definitionHash,
+        project.definitionHash,
+      );
+      expect(back.projectStatusRequestIdFor('context-hub'), isNull);
+      expect(
+        back.intake.firstWhere((i) => i.id == saved.requestId).detail,
+        '状態の変更をMiniが反映しました（その後に別の変更があります）。',
+      );
+      expect(
+        back.intake.firstWhere((i) => i.id == resumed.requestId).detail,
+        '状態の変更をMiniが反映しました。',
+      );
+      expect(back.latestStatusChangeId('context-hub'), isNotNull);
     } finally {
       await access.directory.delete(recursive: true);
     }
@@ -186,6 +223,20 @@ void main() {
     expect(meta['operation'], 'project-status');
     expect(meta['status'], 'paused');
     expect(meta['project_id'], 'context-hub');
+    // Inputへの保存が同期されると依頼済みと表示し、重ねて依頼できない。
+    access.current = VaultSnapshot({
+      ...fixture().files,
+      'Input/${meta['request_id']}.md': access.requests.values.single,
+    });
+    await c.reload();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('状態の変更を依頼済みです'), findsOneWidget);
+    expect(
+      tester
+          .widget<OutlinedButton>(find.byKey(const Key('project-status')))
+          .onPressed,
+      isNull,
+    );
     expect(tester.takeException(), isNull);
   });
 }

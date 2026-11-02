@@ -14,6 +14,8 @@ class HubRepository {
   final List<IntakeStatus> intake = [];
   final Map<String, HubRecord> _inputs = {};
   final Map<String, Map<String, dynamic>> _receipts = {};
+  final Map<String, Map<String, dynamic>> _statusChanges = {};
+  final Map<String, String> _outstandingStatus = {};
 
   /// 本体が生成する直近の期間のふりかえり（REVIEW.md）。未生成ならnull。
   HubDigest? digestDocument;
@@ -221,6 +223,7 @@ class HubRepository {
       }
     }
     _corrections();
+    _readStatusChanges();
     _readIntake();
     _readDigest();
   }
@@ -244,30 +247,44 @@ class HubRepository {
     }
   }
 
-  /// 現在の定義hashに結び付いた、このプロジェクトの未反映の状態変更依頼。
-  String? projectStatusRequestIdFor(String projectId) {
-    final project = projects[projectId];
-    if (project == null) return null;
-    for (final e in snapshot.files.entries.where(
-      (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
-    )) {
+  /// まだ反映されていない、このプロジェクトの状態変更依頼。
+  /// 未受領で現在の定義hashに結び付くもの、または受領済みで定義の同期を待っているものを返す。
+  String? projectStatusRequestIdFor(String projectId) =>
+      _outstandingStatus[projectId];
+
+  /// 本体が記録した、このプロジェクトの最新の状態変更ID。
+  String? latestStatusChangeId(String projectId) {
+    final ids =
+        _statusChanges.values
+            .where((c) => c['project_id'] == projectId)
+            .map((c) => c['id'] as String)
+            .toList()
+          ..sort();
+    return ids.lastOrNull;
+  }
+
+  void _readStatusChanges() {
+    final pattern = RegExp(
+      r'^90_system/project-status/(PST-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in snapshot.files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
       try {
-        final m = parseMarkdown(e.value).meta, id = m['request_id'];
-        if (m['operation'] == 'project-status' &&
-            m['project_id'] == projectId &&
-            m['project_hash'] == project.definitionHash &&
-            m['confirmed'] == true &&
-            id is String &&
-            requestIdPattern.hasMatch(id) &&
-            e.key == 'Input/$id.md' &&
-            !snapshot.files.containsKey(
-              '90_system/intake-errors/${digest(e.key)}.json',
-            )) {
-          return id;
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['project_id'] is! String ||
+            !projectLifecycles.contains(j['to']) ||
+            j['before_hash'] is! String ||
+            j['after_hash'] is! String) {
+          throw const FormatException();
         }
-      } catch (_) {}
+        _statusChanges[j['id'] as String] = j;
+      } catch (_) {
+        _problem(e.key);
+      }
     }
-    return null;
   }
 
   void _problem(String path) =>
@@ -592,6 +609,7 @@ class HubRepository {
           throw const FormatException();
         }
         final statusChange = m['operation'] == 'project-status';
+        String? changeId;
         if (statusChange &&
             (doc.body.trim().isNotEmpty ||
                 m['confirmed'] != true ||
@@ -692,9 +710,7 @@ class HubRepository {
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
-              item.detail = projects[m['project_id']]?.status == m['status']
-                  ? '状態の変更をMiniが反映しました。'
-                  : 'Mini受領済み。プロジェクト定義の同期を待っています。';
+              changeId = r['changeId'] as String;
             }
             if (decision) {
               final result = ack['result'] as Map,
@@ -741,6 +757,7 @@ class HubRepository {
             item.detail = clip('${error['code'] ?? '受付失敗'}', 300);
           }
         }
+        if (statusChange) _statusRequest(item, m, changeId);
         intake.add(item);
       } catch (_) {
         _problem(e.key);
@@ -754,6 +771,39 @@ class HubRepository {
     ...projects.values.where((p) => p.lifecycle == 'active'),
     ...projects.values.where((p) => p.lifecycle != 'active'),
   ];
+
+  /// 状態変更依頼の反映状況を、本体の変更記録と現在の定義hashから判断する。
+  /// 同じ定義へ戻る変更（休止→再開）でも、古い依頼を未反映と扱わない。
+  void _statusRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String? changeId,
+  ) {
+    final projectId = m['project_id'] as String,
+        current = projects[projectId]?.definitionHash;
+    var outstanding = false;
+    if (item.state == 'accepted') {
+      final record = _statusChanges[changeId];
+      if (record == null) {
+        outstanding = current == m['project_hash'];
+        item.detail = outstanding
+            ? 'Mini受領済み。プロジェクト定義の同期を待っています。'
+            : 'Mini受領済み。変更記録の同期を待っています。';
+      } else if (current == record['before_hash'] &&
+          latestStatusChangeId(projectId) == changeId) {
+        outstanding = true;
+        item.detail = 'Mini受領済み。プロジェクト定義の同期を待っています。';
+      } else {
+        item.detail = current == record['after_hash']
+            ? '状態の変更をMiniが反映しました。'
+            : '状態の変更をMiniが反映しました（その後に別の変更があります）。';
+      }
+    } else if (item.state == 'waiting') {
+      outstanding = current == m['project_hash'];
+    }
+    if (outstanding) _outstandingStatus[projectId] = item.id;
+  }
+
   List<HubRecord> get _ordered =>
       records.values.toList()
         ..sort((a, b) => (b.at ?? DateTime(0)).compareTo(a.at ?? DateTime(0)));

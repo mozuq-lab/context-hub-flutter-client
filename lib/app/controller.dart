@@ -359,14 +359,23 @@ class HubController extends ChangeNotifier {
       if (parsed.projectStatusRequestIdFor(projectId) != null) {
         throw StateError('このプロジェクトの状態変更は依頼済みです。受付状況を確認してください。');
       }
+      if (pending.isNotEmpty) {
+        throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
+      }
+      // 状態を含めないことで、保存結果が不明なまま別の状態を依頼する二重送信を防ぐ。
+      // 最新の変更記録を含め、同じ定義へ戻った後の依頼が過去の操作と混ざらないようにする。
+      final key =
+          '${target.identity}/project-status/$projectId/$expectedHash/${parsed.latestStatusChangeId(projectId) ?? '-'}';
       final operation = _reviewOperations.putIfAbsent(
-        '${target.identity}/project-status/$projectId/$expectedHash/$status',
+        key,
         () => const Uuid().v4(),
       );
-      return await CaptureService(
+      final result = await CaptureService(
         access,
         target,
       ).saveProjectStatus(operation, project, status);
+      if (result.saved) _reviewOperations.remove(key);
+      return result;
     } finally {
       saving = false;
       if (!_disposed) await reload();
