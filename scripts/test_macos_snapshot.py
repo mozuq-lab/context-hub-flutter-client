@@ -7,7 +7,7 @@ import tempfile
 
 source = Path('macos/Runner/VaultBridge.swift').read_text()
 members = []
-for prefix in ['  private let fm ', '  private let folders ',
+for prefix in ['  private let fm ', '  private let folders ', '  private let rootFiles ',
                '  private let maxFile ', '  private enum Failure:']:
     members.append(next(line for line in source.splitlines() if line.startswith(prefix)))
 for name in ['physical', 'identity', 'directory', 'read', 'syncDirectory', 'snapshot']:
@@ -69,6 +69,11 @@ let policy = try root("policy")
 try "架空の共通方針".write(to: policy.appendingPathComponent("POLICY.md"), atomically: false, encoding: .utf8)
 let policyResult = try SnapshotUnderTest().run(policy)
 check((policyResult["files"] as! [String:String])["POLICY.md"] == "架空の共通方針", "Vault直下の方針を同じ上限で取得")
+try "架空のふりかえり".write(to: policy.appendingPathComponent("REVIEW.md"), atomically: false, encoding: .utf8)
+try "読まない直下ファイル".write(to: policy.appendingPathComponent("HOME.md"), atomically: false, encoding: .utf8)
+let reviewResult = try SnapshotUnderTest().run(policy)
+check((reviewResult["files"] as! [String:String])["REVIEW.md"] == "架空のふりかえり", "Vault直下のふりかえりを同じ上限で取得")
+check((reviewResult["files"] as! [String:String])["HOME.md"] == nil, "対象外の直下ファイルは読まない")
 let original = try root("identity-original")
 let moved = base.appendingPathComponent("identity-moved")
 let beforeIdentity = try SnapshotUnderTest().identifier(original)

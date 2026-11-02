@@ -53,9 +53,19 @@ class NowEntry {
   NowEntry(this.text);
 }
 
+/// 本体のproject-statusと同じ状態。旧版の自由記述は進行中として扱う。
+const projectLifecycles = ['active', 'paused', 'done'];
+const projectLifecycleLabels = {'active': '進行中', 'paused': '休止', 'done': '完了'};
+
+/// 本体のretrieve.staleDaysの既定値。HOMEの停滞表示と同じ日数で判断する。
+const projectStaleDays = 14;
+
 class HubProject {
   final String id, title, status;
   final List<String> aliases, keywords;
+
+  /// 本人が確認したproject.mdのhash。状態変更の依頼に結び付ける。
+  final String? definitionHash;
   String? nowRecordId;
   DateTime? generatedAt, lastEvidenceAt;
   String notes = '';
@@ -72,7 +82,32 @@ class HubProject {
     this.status = 'active',
     this.aliases = const [],
     this.keywords = const [],
+    this.definitionHash,
   });
+  String get lifecycle =>
+      status == 'paused' || status == 'done' ? status : 'active';
+  String get lifecycleLabel => projectLifecycleLabels[lifecycle]!;
+
+  /// 最終根拠からの経過日数。NOWが未生成なら不明。
+  int? daysSinceEvidence(DateTime now) {
+    final at = lastEvidenceAt;
+    if (at == null) return null;
+    final days = now.difference(at).inDays;
+    return days < 0 ? 0 : days;
+  }
+
+  bool stale(DateTime now) =>
+      lifecycle == 'active' &&
+      lastEvidenceAt != null &&
+      now.difference(lastEvidenceAt!) > const Duration(days: projectStaleDays);
+}
+
+class HubDigest {
+  HubDigest({required this.body, this.generatedAt, this.periodDays});
+  final String body;
+  final DateTime? generatedAt;
+  final int? periodDays;
+  final List<String> warnings = ['集計は本体の記録から作られ、要約はAI生成・未検証です。'];
 }
 
 class IntakeStatus {

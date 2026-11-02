@@ -7,6 +7,8 @@ final class VaultBridge {
   private let queue = DispatchQueue(label: "context-hub.vault")
   private var channel: FlutterMethodChannel!
   private let folders = ["00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system"]
+  /// Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
+  private let rootFiles = ["POLICY.md", "REVIEW.md"]
   private let maxFile = 1_048_576
   private enum Failure: Error { case invalid, io }
 
@@ -82,7 +84,7 @@ final class VaultBridge {
   }
   private func validRelative(_ path: String) -> Bool {
     let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-    return path == "POLICY.md" || parts.count > 1 && parts.count <= 13 && folders.contains(String(parts[0])) &&
+    return rootFiles.contains(path) || parts.count > 1 && parts.count <= 13 && folders.contains(String(parts[0])) &&
       !path.contains("\\") && parts.allSatisfy { !$0.isEmpty && !$0.hasPrefix(".") && $0 != ".." }
   }
   private func directory(_ url: URL, create: Bool = false) throws -> URL {
@@ -178,16 +180,17 @@ final class VaultBridge {
       }
       catch { warnings.append("フォルダーの読取を中断: " + name); if count > 5000 || total > 64 * 1_048_576 { break } }
     }
-    let policy = root.appendingPathComponent("POLICY.md")
-    if fm.fileExists(atPath: policy.path) {
+    for name in rootFiles {
+      let file = root.appendingPathComponent(name)
+      if !fm.fileExists(atPath: file.path) { continue }
       count += 1
       do {
         guard count <= 5000 else { throw Failure.invalid }
-        let raw = try read(policy)
+        let raw = try read(file)
         total += raw.utf8.count
         guard total <= 64 * 1_048_576 else { throw Failure.invalid }
-        files["POLICY.md"] = raw
-      } catch { warnings.append("読取できないファイル: POLICY.md") }
+        files[name] = raw
+      } catch { warnings.append("読取できないファイル: " + name) }
     }
     return ["files": files, "warnings": warnings, "recognized": recognized]
   }

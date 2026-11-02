@@ -192,6 +192,29 @@ class CaptureService {
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
+  Future<CaptureResult> saveProjectStatus(
+    String operationId,
+    HubProject project,
+    String status,
+  ) => _serial(() async {
+    final hash = project.definitionHash;
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(project.id) ||
+        hash == null ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(hash) ||
+        !projectLifecycles.contains(status) ||
+        status == project.lifecycle) {
+      throw const FormatException('プロジェクトと新しい状態を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'project-status',
+      'project_id': project.id,
+      'project_hash': hash,
+      'status': status,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
   Future<CaptureResult> _saveRequest(
     String operationId,
     String fingerprint,

@@ -81,6 +81,7 @@ class _HubShellState extends State<HubShell> {
             children: [
               for (final item in [
                 ('home', 'ホーム', Icons.space_dashboard_outlined),
+                ('digest', 'ふりかえり', Icons.event_note_outlined),
                 ('recent', '最近のメモ', Icons.notes_outlined),
                 ('ideas', 'アイデア', Icons.lightbulb_outline),
                 ('review', '確認待ち', Icons.fact_check_outlined),
@@ -111,15 +112,25 @@ class _HubShellState extends State<HubShell> {
                 ),
               ),
               for (final project
-                  in c.repository?.projects.values ?? const <HubProject>[])
+                  in c.repository?.orderedProjects ?? const <HubProject>[])
                 ListTile(
                   key: Key('project-${project.id}'),
-                  leading: const Icon(Icons.folder_outlined, size: 20),
+                  leading: Icon(
+                    project.lifecycle == 'active'
+                        ? Icons.folder_outlined
+                        : Icons.folder_off_outlined,
+                    size: 20,
+                  ),
                   title: Text(
                     project.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  subtitle: project.lifecycle != 'active'
+                      ? Text(project.lifecycleLabel)
+                      : project.stale(DateTime.now())
+                      ? const Text('停滞')
+                      : null,
                   selected: page == 'project:${project.id}',
                   onTap: () {
                     setState(() => page = 'project:${project.id}');
@@ -172,6 +183,7 @@ class _HubShellState extends State<HubShell> {
           title: Text(
             has
                 ? switch (page) {
+                    'digest' => 'ふりかえり',
                     'recent' => '最近のメモ',
                     'ideas' => 'アイデア',
                     'review' => '確認待ち',

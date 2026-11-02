@@ -13,6 +13,15 @@
 - Androidエミュレーターの実SAF選択で、永続URI権限・Input保存・rename/readback・再確認・未対応provider拒否を確認。
 - Mac release `.app` とAndroid release APKのビルド・通常起動・署名検証を確認。Macはarm64/macOS 12以降、ad-hoc署名でTeamIdentifierなし。Androidはcheckout専用の検証鍵によるAPK v2署名。
 
+## ふりかえりとプロジェクト状態（0.3.0以降の追加）
+
+- Linux上のFlutter 3.41.5で、静的解析の指摘なし、共通73テスト成功。
+- Dartが保存したプロジェクト状態変更REQを固定参照の本体へ渡し、受理・定義への反映・重複排除・反映後の同期で依頼済み表示が外れることを確認。
+- サンプルのREVIEW.mdの読取、停滞表示、状態変更ダイアログからの依頼保存をwidgetテストで確認。
+- 休止→再開で定義が元のhashへ戻る場合も、古い依頼を未反映と扱わないことを、本体での連続した2回の変更で確認。
+- 「サンプルで試す」の架空Vaultは初回だけ作成されるため、以前の版でサンプルを開いた端末ではREVIEW.mdが表示されません（アプリのデータを消さずに確認する方法は未整備です）。
+- Vault直下のREVIEW.mdを読むSwift・Kotlinの変更は、MacのSwift snapshot検査（追加2項目）・両OSのビルド・実アプリでは未確認です。
+
 ## 制限・追加確認
 
 - MacのNSOpenPanelによるフォルダー選択、bookmarkの別プロセス再起動復元・再選択は未完了です。サンプルの実bridge検査とは区別します。

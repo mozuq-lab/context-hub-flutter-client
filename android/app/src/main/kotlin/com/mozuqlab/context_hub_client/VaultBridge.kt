@@ -21,6 +21,8 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
     private val resolver = activity.contentResolver
     private val executor = Executors.newSingleThreadExecutor()
     private val folders = setOf("00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system")
+    // Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
+    private val rootFiles = listOf("POLICY.md", "REVIEW.md")
     private val data = File(activity.filesDir, "context-hub").canonicalFile.apply { mkdirs() }
     private val state = File(data, "state").apply { mkdirs() }
     private val sample = File(data, "sample-vault")
@@ -187,17 +189,18 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                 try { require(dir.isDirectory); recognized = true; local(dir, name, 1) }
                 catch (_: Exception) { warnings.add("フォルダーの読取を中断: $name"); if (count > 5000 || total > 64L * 1_048_576) break }
             }
-            val policy = File(sample, "POLICY.md")
-            if (policy.exists()) {
-                if (++count > 5000) warnings.add("件数上限によりPOLICY.mdを読取できません")
-                else add("POLICY.md") { text(safe(policy).inputStream()) }
+            for (name in rootFiles) {
+                val file = File(sample, name)
+                if (!file.exists()) continue
+                if (++count > 5000) warnings.add("件数上限により${name}を読取できません")
+                else add(name) { text(safe(file).inputStream()) }
             }
         } else {
             for (e in children(tree(handle))) {
-                if (e.name == "POLICY.md") {
-                    if (++count > 5000) warnings.add("件数上限によりPOLICY.mdを読取できません")
-                    else if (e.dir) warnings.add("POLICY.mdが通常ファイルではありません")
-                    else add("POLICY.md") { text(resolver.openInputStream(e.uri) ?: error("読取不可")) }
+                if (e.name in rootFiles) {
+                    if (++count > 5000) warnings.add("件数上限により${e.name}を読取できません")
+                    else if (e.dir) warnings.add("${e.name}が通常ファイルではありません")
+                    else add(e.name) { text(resolver.openInputStream(e.uri) ?: error("読取不可")) }
                     continue
                 }
                 if (e.name !in folders) continue
@@ -219,7 +222,7 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                     folders.forEach { require(File(staging, it).mkdir()) }
                     files.forEach { (key, value) ->
                         val path = key as String; val raw = value as String; val parts = path.split('/')
-                        if (path != "POLICY.md" && (parts.size < 2 || parts.size > 13 || parts[0] !in folders)) return@forEach
+                        if (path !in rootFiles && (parts.size < 2 || parts.size > 13 || parts[0] !in folders)) return@forEach
                         require(parts.all { it.isNotEmpty() && !it.startsWith('.') && !it.contains('\\') })
                         val file = safe(File(staging, path)); require(raw.toByteArray().size <= 1_048_576)
                         file.parentFile!!.mkdirs(); writeFile(file, raw, true)

@@ -14,6 +14,11 @@ class HubRepository {
   final List<IntakeStatus> intake = [];
   final Map<String, HubRecord> _inputs = {};
   final Map<String, Map<String, dynamic>> _receipts = {};
+  final Map<String, Map<String, dynamic>> _statusChanges = {};
+  final Map<String, String> _outstandingStatus = {};
+
+  /// 本体が生成する直近の期間のふりかえり（REVIEW.md）。未生成ならnull。
+  HubDigest? digestDocument;
   HubRepository(this.snapshot) {
     if (!snapshot.recognized) {
       throw const FormatException('ContextHubのVaultフォルダーを選んでください。');
@@ -173,6 +178,7 @@ class HubRepository {
             status: m['status'],
             aliases: List<String>.from(m['aliases']),
             keywords: List<String>.from(m['keywords']),
+            definitionHash: digest(entry.value),
           );
           projects[id] = project;
           _readNow(project);
@@ -217,8 +223,70 @@ class HubRepository {
       }
     }
     _corrections();
+    _readStatusChanges();
     _readIntake();
+    _readDigest();
   }
+  void _readDigest() {
+    final raw = snapshot.files['REVIEW.md'];
+    if (raw == null) return;
+    try {
+      final doc = parseMarkdown(raw), m = doc.meta;
+      if (m['schema_version'] != 1) throw const FormatException();
+      final result = HubDigest(
+        body: doc.body,
+        generatedAt: timestamp(m['generated_at']),
+        periodDays: m['period_days'] is int ? m['period_days'] : null,
+      );
+      if (!generatedIntact(raw, m)) {
+        result.warnings.add('ふりかえりの整合性を確認できません。手動変更や同期の途中の可能性があります。');
+      }
+      digestDocument = result;
+    } catch (_) {
+      _problem('REVIEW.md');
+    }
+  }
+
+  /// まだ反映されていない、このプロジェクトの状態変更依頼。
+  /// 未受領で現在の定義hashに結び付くもの、または受領済みで定義の同期を待っているものを返す。
+  String? projectStatusRequestIdFor(String projectId) =>
+      _outstandingStatus[projectId];
+
+  /// 本体が記録した、このプロジェクトの最新の状態変更ID。
+  String? latestStatusChangeId(String projectId) {
+    final ids =
+        _statusChanges.values
+            .where((c) => c['project_id'] == projectId)
+            .map((c) => c['id'] as String)
+            .toList()
+          ..sort();
+    return ids.lastOrNull;
+  }
+
+  void _readStatusChanges() {
+    final pattern = RegExp(
+      r'^90_system/project-status/(PST-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in snapshot.files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['project_id'] is! String ||
+            !projectLifecycles.contains(j['to']) ||
+            j['before_hash'] is! String ||
+            j['after_hash'] is! String) {
+          throw const FormatException();
+        }
+        _statusChanges[j['id'] as String] = j;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+  }
+
   void _problem(String path) =>
       warnings.add('$path: 形式・参照・整合性を確認できません。同期後に再読込してください。');
 
@@ -404,7 +472,8 @@ class HubRepository {
                     'title': p.title,
                     'aliases': [...p.aliases]..sort(),
                     'keywords': [...p.keywords]..sort(),
-                    'status': p.status,
+                    // 本体と同じく、休止・完了は登録簿hashでは進行中として扱う。
+                    'status': p.lifecycle == 'active' ? p.status : 'active',
                   },
                 )
                 .toList(),
@@ -534,8 +603,21 @@ class HubRepository {
               'knowledge-approve',
               'knowledge-reject',
               'knowledge-retire',
+              'project-status',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
+          throw const FormatException();
+        }
+        final statusChange = m['operation'] == 'project-status';
+        String? changeId;
+        if (statusChange &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['project_hash'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
+                !projectLifecycles.contains(m['status']))) {
           throw const FormatException();
         }
         final decision = [
@@ -586,7 +668,9 @@ class HubRepository {
         final item = IntakeStatus(
           id: id,
           path: e.key,
-          title: retiring
+          title: statusChange
+              ? '状態変更依頼: ${projects[m['project_id']]?.title ?? m['project_id']} → ${projectLifecycleLabels[m['status']]}'
+              : retiring
               ? '適用停止依頼: ${m['target_id']}'
               : decision
               ? '${(m['operation'] as String).endsWith('approve') ? '採用' : '却下'}依頼: ${m['candidate_id']}'
@@ -614,6 +698,19 @@ class HubRepository {
                 throw const FormatException();
               }
               item.detail = '適用停止をMiniが受領しました。本文と採用履歴は保持されます。';
+            }
+            if (statusChange) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['status'] != m['status'] ||
+                  r['changeId'] is! String ||
+                  !RegExp(
+                    r'^PST-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['changeId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              changeId = r['changeId'] as String;
             }
             if (decision) {
               final result = ack['result'] as Map,
@@ -660,12 +757,51 @@ class HubRepository {
             item.detail = clip('${error['code'] ?? '受付失敗'}', 300);
           }
         }
+        if (statusChange) _statusRequest(item, m, changeId);
         intake.add(item);
       } catch (_) {
         _problem(e.key);
       }
     }
     intake.sort((a, b) => b.at?.compareTo(a.at ?? DateTime(0)) ?? 0);
+  }
+
+  /// 進行中を先に、休止・完了を後ろに並べたプロジェクト。
+  List<HubProject> get orderedProjects => [
+    ...projects.values.where((p) => p.lifecycle == 'active'),
+    ...projects.values.where((p) => p.lifecycle != 'active'),
+  ];
+
+  /// 状態変更依頼の反映状況を、本体の変更記録と現在の定義hashから判断する。
+  /// 同じ定義へ戻る変更（休止→再開）でも、古い依頼を未反映と扱わない。
+  void _statusRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String? changeId,
+  ) {
+    final projectId = m['project_id'] as String,
+        current = projects[projectId]?.definitionHash;
+    var outstanding = false;
+    if (item.state == 'accepted') {
+      final record = _statusChanges[changeId];
+      if (record == null) {
+        outstanding = current == m['project_hash'];
+        item.detail = outstanding
+            ? 'Mini受領済み。プロジェクト定義の同期を待っています。'
+            : 'Mini受領済み。変更記録の同期を待っています。';
+      } else if (current == record['before_hash'] &&
+          latestStatusChangeId(projectId) == changeId) {
+        outstanding = true;
+        item.detail = 'Mini受領済み。プロジェクト定義の同期を待っています。';
+      } else {
+        item.detail = current == record['after_hash']
+            ? '状態の変更をMiniが反映しました。'
+            : '状態の変更をMiniが反映しました（その後に別の変更があります）。';
+      }
+    } else if (item.state == 'waiting') {
+      outstanding = current == m['project_hash'];
+    }
+    if (outstanding) _outstandingStatus[projectId] = item.id;
   }
 
   List<HubRecord> get _ordered =>
