@@ -7,7 +7,7 @@
 - 対象はMac（Apple Silicon）とAndroid。iPad/iOSは対象外。Flutter/Dartで共通画面を作る。
 - 日本語で報告・文書・コメントを書く。識別子は英語。既存Markdownが正本で、SQLiteは追加しない。
 - 本体の固定公開版をvendor/context-hubへ置く。個人運用repo・実Vault・秘密・端末IDをコピーしない。
-- 原文と生成物は編集しない。書込は本人操作に対応したInputの新しいcapture要求と、候補を明示確認した採用・却下・適用停止要求だけ。model/Gateway/Syncthing設定・サービス管理を追加しない。
+- 原文と生成物は編集しない。書込は本人操作に対応したInputの新しいcapture要求と、候補を明示確認した採用・却下・適用停止要求、定義hashに結び付けたプロジェクト状態変更要求だけ。model/Gateway/Syncthing設定・サービス管理を追加しない。
 - Androidは選択したローカルフォルダーへのSAF権限を利用。全ストレージ権限を要求しない。Macは選択したVaultの通常ファイルのみを扱い、symlinkとパス逸脱を拒否する。
 - 読取は1ファイル1MiB、合計64MiB、5000エントリー、深さ12。部分読取の注意、出典、未検証、訂正、競合、受付と整理の状態を保持する。
 - 保存は操作IDとfingerprintを先にアプリ専用領域へ耐久記録。同じ操作を再作成しない。結果不明は確認のみ。壊れた確認情報は新規保存を止め、閲覧は継続する。
@@ -49,7 +49,7 @@ scripts/verify.sh
 3. `flutter pub get`、`flutter analyze --no-pub`、`flutter test --no-pub` を実行する。
 4. Macでは `scripts/test_macos_snapshot.py` でSwiftのsnapshot検査を行う。
 
-`flutter test` のprotocolテストは、Dartが保存したcapture・採用・却下・適用停止のREQを固定参照の本体（Node）へ渡し、受理・本文/出典一致・重複排除・方針と履歴の再同期を確認します。実モデルは使いません。
+`flutter test` のprotocolテストは、Dartが保存したcapture・採用・却下・適用停止・プロジェクト状態変更のREQを固定参照の本体（Node）へ渡し、受理・本文/出典一致・重複排除・方針と履歴の再同期を確認します。実モデルは使いません。
 
 ## 本体（submodule）とfixture
 

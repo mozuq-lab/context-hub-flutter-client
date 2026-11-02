@@ -127,6 +127,8 @@ class _HubViewState extends State<HubView> {
       } else {
         children.addAll(projectView(project));
       }
+    } else if (page == 'digest') {
+      children.addAll(digestView());
     } else if (page == 'home') {
       children.add(
         title(
@@ -152,10 +154,35 @@ class _HubViewState extends State<HubView> {
           ),
         ),
       );
+      final now = DateTime.now(),
+          stale = repo.projects.values.where((p) => p.stale(now)).length;
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Card(
+            child: ListTile(
+              key: const Key('home-digest'),
+              leading: const Icon(Icons.event_note_outlined),
+              title: Text(
+                repo.digestDocument == null
+                    ? 'ふりかえり（未生成）'
+                    : '直近${repo.digestDocument!.periodDays ?? 7}日のふりかえり',
+              ),
+              subtitle: Text(
+                stale == 0
+                    ? '動いたプロジェクトと現在地の変化を確認'
+                    : '停滞しているプロジェクト $stale件 · 再開か休止・完了かを判断',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => widget.onNavigate('digest'),
+            ),
+          ),
+        ),
+      );
       if (repo.projects.isEmpty) {
         children.add(const Text('プロジェクトはまだありません。メモはproject未指定でも追加できます。'));
       }
-      for (final project in repo.projects.values) {
+      for (final project in repo.orderedProjects) {
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -172,11 +199,22 @@ class _HubViewState extends State<HubView> {
                 ),
                 subtitle: Padding(
                   padding: const EdgeInsets.only(top: 10),
-                  child: Text(
-                    project.sections['next']?.firstOrNull?.text ??
-                        '次の一手はまだ整理されていません。',
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        project.sections['next']?.firstOrNull?.text ??
+                            '次の一手はまだ整理されていません。',
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        projectStatusLine(project, now),
+                        key: Key('project-status-${project.id}'),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
                   ),
                 ),
                 trailing: const Icon(Icons.arrow_forward),
@@ -343,130 +381,235 @@ class _HubViewState extends State<HubView> {
     );
   }
 
-  List<Widget> projectView(HubProject project) => [
-    title(
-      'PROJECT / ${project.status.toUpperCase()}',
-      project.title,
-      '要約の生成: ${timeLabel(project.generatedAt)}\n最新の根拠: ${timeLabel(project.lastEvidenceAt)}',
-    ),
-    for (final warning in project.warnings)
-      Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: NoticeBox(warning),
+  /// 状態と最終根拠からの日数を1行で示す。
+  String projectStatusLine(HubProject project, DateTime now) {
+    final days = project.daysSinceEvidence(now);
+    return [
+      project.lifecycleLabel +
+          (project.lifecycle == project.status ? '' : '（${project.status}）'),
+      days == null ? '最終根拠なし' : '最終根拠から$days日',
+      if (project.stale(now)) '停滞（$projectStaleDays日超）',
+    ].join(' · ');
+  }
+
+  List<Widget> digestView() {
+    final digest = repo.digestDocument;
+    if (digest == null) {
+      return [
+        title(
+          'REVIEW',
+          'ふりかえり',
+          '本体のcycleまたはdigestがVaultのREVIEW.mdを生成すると、ここに表示されます。',
+        ),
+        const Text('ふりかえりはまだ生成されていません。'),
+      ];
+    }
+    return [
+      title(
+        'REVIEW',
+        '直近${digest.periodDays ?? 7}日のふりかえり',
+        '生成: ${timeLabel(digest.generatedAt)}\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
-    const SizedBox(height: 12),
-    Align(
-      alignment: Alignment.centerLeft,
-      child: OutlinedButton.icon(
-        key: const Key('copy-context'),
-        onPressed: c.loading
-            ? null
-            : () async {
-                try {
-                  final text = await c.context(project.id);
-                  await Clipboard.setData(ClipboardData(text: text));
-                  if (mounted) {
-                    notice(context, '出典付きcontextをコピーしました');
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    notice(context, HubController.message(e));
-                  }
-                }
-              },
-        icon: const Icon(Icons.copy, size: 18),
-        label: const Text('出典付きcontextをコピー'),
-      ),
-    ),
-    const SizedBox(height: 28),
-    for (final section in [
-      ('current', '現在地'),
-      ('next', '次の一手'),
-      ('open', '未解決'),
-      ('proposals', '提案'),
-    ]) ...[
-      Text(
-        section.$2,
-        style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
-      ),
+      for (final warning in digest.warnings)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: NoticeBox(warning),
+        ),
       const SizedBox(height: 12),
       Card(
         child: Padding(
           padding: const EdgeInsets.all(22),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (project.sections[section.$1]!.isEmpty)
-                const Text('まだ整理されていません。'),
-              for (final entry in project.sections[section.$1]!)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SafeMarkdown(
-                        text: entry.text,
-                        sourcePath:
-                            repo.records[project.nowRecordId]?.path ?? '',
-                        controller: c,
-                        onRecord: open,
-                      ),
-                      for (final warning in entry.warnings)
-                        Text(
-                          warning,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                        ),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          for (final id in entry.references)
-                            TextButton.icon(
-                              key: const Key('source-record'),
-                              onPressed: () => open(id),
-                              icon: const Icon(
-                                Icons.article_outlined,
-                                size: 15,
-                              ),
-                              label: Text(
-                                repo.records[id]?.title ?? '出典を確認',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+          child: SafeMarkdown(
+            key: const Key('digest-body'),
+            text: digest.body,
+            sourcePath: 'REVIEW.md',
+            controller: c,
+            onRecord: open,
           ),
         ),
       ),
-      const SizedBox(height: 28),
-    ],
-    if (project.notes.trim().isNotEmpty) ...[
-      const Text(
-        '手動メモ',
-        style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+    ];
+  }
+
+  Future<void> changeStatus(HubProject project) async {
+    final hash = project.definitionHash;
+    if (hash == null) return;
+    final status = await showDialog<String>(
+      context: context,
+      builder: (_) => ProjectStatusDialog(project: project),
+    );
+    if (status == null || !mounted) return;
+    try {
+      final result = await c.requestProjectStatus(project.id, hash, status);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '状態の変更を依頼しました。Miniで受け付けられると反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  List<Widget> projectView(HubProject project) {
+    final now = DateTime.now(),
+        requested = repo.projectStatusRequestIdFor(project.id) != null;
+    return [
+      title(
+        'PROJECT / ${project.lifecycleLabel}',
+        project.title,
+        '要約の生成: ${timeLabel(project.generatedAt)}\n最新の根拠: ${timeLabel(project.lastEvidenceAt)}\n${projectStatusLine(project, now)}',
       ),
+      if (project.stale(now))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: NoticeBox(
+            '最終根拠から$projectStaleDays日を超えて新しい入力がありません。再開するか、休止・完了にするかを判断してください。',
+          ),
+        ),
+      if (requested)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 10),
+          child: NoticeBox('状態の変更を依頼済みです。Miniで受け付けられ、同期されると反映されます。'),
+        ),
+      for (final warning in project.warnings)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: NoticeBox(warning),
+        ),
       const SizedBox(height: 12),
-      SafeMarkdown(
-        text: project.notes,
-        sourcePath: repo.records[project.nowRecordId]?.path ?? '',
-        controller: c,
-        onRecord: open,
+      Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          OutlinedButton.icon(
+            key: const Key('project-status'),
+            onPressed:
+                c.loading ||
+                    c.saving ||
+                    requested ||
+                    c.captureWarning != null ||
+                    project.definitionHash == null
+                ? null
+                : () => changeStatus(project),
+            icon: const Icon(Icons.flag_outlined, size: 18),
+            label: const Text('状態を変更'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('copy-context'),
+            onPressed: c.loading
+                ? null
+                : () async {
+                    try {
+                      final text = await c.context(project.id);
+                      await Clipboard.setData(ClipboardData(text: text));
+                      if (mounted) {
+                        notice(context, '出典付きcontextをコピーしました');
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        notice(context, HubController.message(e));
+                      }
+                    }
+                  },
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('出典付きcontextをコピー'),
+          ),
+        ],
       ),
-      const SizedBox(height: 24),
-    ],
-    if (project.nowRecordId != null)
-      TextButton(
-        onPressed: () => open(project.nowRecordId!),
-        child: const Text('NOW本文と出典・日時を開く'),
-      ),
-  ];
+      const SizedBox(height: 28),
+      for (final section in [
+        ('current', '現在地'),
+        ('next', '次の一手'),
+        ('open', '未解決'),
+        ('proposals', '提案'),
+      ]) ...[
+        Text(
+          section.$2,
+          style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (project.sections[section.$1]!.isEmpty)
+                  const Text('まだ整理されていません。'),
+                for (final entry in project.sections[section.$1]!)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SafeMarkdown(
+                          text: entry.text,
+                          sourcePath:
+                              repo.records[project.nowRecordId]?.path ?? '',
+                          controller: c,
+                          onRecord: open,
+                        ),
+                        for (final warning in entry.warnings)
+                          Text(
+                            warning,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            for (final id in entry.references)
+                              TextButton.icon(
+                                key: const Key('source-record'),
+                                onPressed: () => open(id),
+                                icon: const Icon(
+                                  Icons.article_outlined,
+                                  size: 15,
+                                ),
+                                label: Text(
+                                  repo.records[id]?.title ?? '出典を確認',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 28),
+      ],
+      if (project.notes.trim().isNotEmpty) ...[
+        const Text(
+          '手動メモ',
+          style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        SafeMarkdown(
+          text: project.notes,
+          sourcePath: repo.records[project.nowRecordId]?.path ?? '',
+          controller: c,
+          onRecord: open,
+        ),
+        const SizedBox(height: 24),
+      ],
+      if (project.nowRecordId != null)
+        TextButton(
+          onPressed: () => open(project.nowRecordId!),
+          child: const Text('NOW本文と出典・日時を開く'),
+        ),
+    ];
+  }
 }
 
 class RecordView extends StatelessWidget {
@@ -760,5 +903,61 @@ class _CaptureDialogState extends State<CaptureDialog> {
           ),
       ],
     ),
+  );
+}
+
+class ProjectStatusDialog extends StatefulWidget {
+  const ProjectStatusDialog({super.key, required this.project});
+  final HubProject project;
+  @override
+  State<ProjectStatusDialog> createState() => _ProjectStatusDialogState();
+}
+
+class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
+  String? selected;
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text('${widget.project.title}の状態'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('現在: ${widget.project.lifecycleLabel}'),
+          const SizedBox(height: 12),
+          for (final status in projectLifecycles)
+            if (status != widget.project.lifecycle)
+              ListTile(
+                key: Key('project-status-$status'),
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  selected == status
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text(projectLifecycleLabels[status]!),
+                onTap: () => setState(() => selected = status),
+              ),
+          const SizedBox(height: 8),
+          const Text(
+            '休止・完了にすると、ホームの後ろにまとめて表示し、AIの帰属候補から外します。メモで明示したプロジェクトは引き続き使えます。依頼はInputへ保存され、Miniで受け付けられると反映されます。',
+            style: TextStyle(fontSize: 12, height: 1.6),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('キャンセル'),
+      ),
+      FilledButton(
+        key: const Key('project-status-submit'),
+        onPressed: selected == null
+            ? null
+            : () => Navigator.pop(context, selected),
+        child: const Text('変更を依頼'),
+      ),
+    ],
   );
 }

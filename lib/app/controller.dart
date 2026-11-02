@@ -329,6 +329,51 @@ class HubController extends ChangeNotifier {
     }
   }
 
+  /// 表示中の定義hashに結び付けて、プロジェクトの状態変更をInputへ依頼する。
+  Future<CaptureResult> requestProjectStatus(
+    String projectId,
+    String expectedHash,
+    String status,
+  ) async {
+    final target = location, epoch = _epoch;
+    if (target == null ||
+        repository == null ||
+        loading ||
+        saving ||
+        error != null ||
+        captureWarning != null) {
+      throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    saving = true;
+    _changed();
+    try {
+      final fresh = await access.readSnapshot(target);
+      if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+      final parsed = HubRepository(fresh);
+      repository = parsed;
+      _changed();
+      final project = parsed.projects[projectId];
+      if (project == null || project.definitionHash != expectedHash) {
+        throw StateError('プロジェクト定義が変更されています。表示を確認してから操作してください。');
+      }
+      if (parsed.projectStatusRequestIdFor(projectId) != null) {
+        throw StateError('このプロジェクトの状態変更は依頼済みです。受付状況を確認してください。');
+      }
+      final operation = _reviewOperations.putIfAbsent(
+        '${target.identity}/project-status/$projectId/$expectedHash/$status',
+        () => const Uuid().v4(),
+      );
+      return await CaptureService(
+        access,
+        target,
+      ).saveProjectStatus(operation, project, status);
+    } finally {
+      saving = false;
+      if (!_disposed) await reload();
+      _changed();
+    }
+  }
+
   String? resolveLink(String sourcePath, String href) {
     try {
       final uri = Uri.parse(href);
