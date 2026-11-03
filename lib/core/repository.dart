@@ -17,6 +17,7 @@ class HubRepository {
   final Map<String, Map<String, dynamic>> _statusChanges = {};
   final Map<String, String> _outstandingStatus = {};
   final Map<String, DateTime> _resolutionTimes = {};
+  final Map<String, String> _latestResolutions = {};
   final Map<String, String> _outstandingItems = {};
   final Map<String, String> _outstandingDrafts = {};
   final Map<String, GitDraft> gitDrafts = {};
@@ -248,10 +249,16 @@ class HubRepository {
         if (j['schema_version'] != 1 ||
             j['id'] != match.group(1) ||
             !['resolve', 'reopen'].contains(j['action']) ||
+            j['item_key'] is! String ||
             at == null) {
           throw const FormatException();
         }
-        _resolutionTimes[j['id'] as String] = at;
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _resolutionTimes[id] = at;
+        final last = _latestResolutions[key];
+        if (last == null || id.compareTo(last) > 0) {
+          _latestResolutions[key] = id;
+        }
       } catch (_) {
         _problem(e.key);
       }
@@ -267,7 +274,7 @@ class HubRepository {
             j['items'] is! List) {
           throw const FormatException();
         }
-        project.nowItemsGeneratedAt = timestamp(j['generated_at']);
+        final items = <NowItemRef>[];
         for (final raw in j['items'] as List) {
           final i = raw as Map<String, dynamic>, r = i['resolution'];
           if (i['key'] is! String ||
@@ -285,7 +292,7 @@ class HubRepository {
                       ).hasMatch(r['id'])))) {
             throw const FormatException();
           }
-          project.nowItems.add(
+          items.add(
             NowItemRef(
               key: i['key'],
               section: i['section'],
@@ -297,18 +304,19 @@ class HubRepository {
             ),
           );
         }
-        // NOWの行は「ラベル+本文 出典」の形。出典と本文が一致する未解決の項目だけに結び付ける。
+        project.nowItems.addAll(items);
+        project.nowItemsGeneratedAt = timestamp(j['generated_at']);
+        // NOWの行は「ラベル+本文 [入力ID](出典)…」の形。生の行が表示文と入力IDの組で始まる未解決の項目だけに結び付ける。
         for (final section in ['next', 'open']) {
           for (final entry in project.sections[section]!) {
-            final match = project.nowItems.where(
+            final match = items.where(
               (i) =>
                   !i.resolved &&
                   i.section == section &&
                   entry.references.contains(_inputs[i.inputId]?.id) &&
-                  (entry.text == i.display ||
-                      entry.text.startsWith('${i.display} ')),
+                  entry.raw.startsWith('${i.display} [${i.inputId}]('),
             );
-            entry.itemKey = match.firstOrNull?.key;
+            entry.itemKey = match.length == 1 ? match.single.key : null;
           }
         }
       } catch (_) {
@@ -374,6 +382,9 @@ class HubRepository {
 
   /// 反映を待っている、この項目への完了・解決（または再開）の報告。
   String? itemRequestIdFor(String itemKey) => _outstandingItems[itemKey];
+
+  /// この項目の最新の解決・再開記録のID。記録がなければnull。
+  String? latestResolutionIdFor(String itemKey) => _latestResolutions[itemKey];
 
   /// 反映を待っている、この下書きの見送り・入力化の依頼。
   String? draftRequestIdFor(String draftId) => _outstandingDrafts[draftId];
@@ -478,6 +489,7 @@ class HubRepository {
           if (section == null || line.trim().isEmpty) continue;
           final item = NowEntry(
             line.replaceFirst(RegExp(r'^[-*]\s+'), '').trim(),
+            raw: line.startsWith('- ') ? line.substring(2) : line,
           );
           item.text = item.text.replaceAllMapped(
             RegExp(

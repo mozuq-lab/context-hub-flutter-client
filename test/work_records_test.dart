@@ -66,6 +66,110 @@ void main() {
     expect(old.sections['next']!.single.itemKey, isNull);
   });
 
+  test('本文が前方一致する別の項目を取り違えない', () {
+    final files = fixtureFiles(),
+        itemsPath = '90_system/now-items/$projectId.json',
+        items = jsonDecode(files[itemsPath]!) as Map<String, dynamic>,
+        list = items['items'] as List,
+        a = list[1] as Map<String, dynamic>;
+    list.add({...a, 'key': 'f' * 64, 'text': '${a['text']} 追記<!--x'});
+    final line = files[nowPath]!
+        .split('\n')
+        .firstWhere((l) => l.startsWith('- 未解決: Discord'));
+    final extra = line.replaceFirst(' [IN-', ' 追記&lt;!--x [IN-');
+    final repo = HubRepository(
+      fixture({
+        ...files,
+        itemsPath: jsonEncode(items),
+        nowPath: files[nowPath]!.replaceFirst(line, '$line\n$extra'),
+      }),
+    );
+    final open = repo.projects[projectId]!.sections['open']!;
+    expect(open.map((e) => e.itemKey), [a['key'], 'f' * 64, list[2]['key']]);
+  });
+
+  test('既読の記録は容量内に収め、古いVaultと消えたプロジェクトを削る', () async {
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = fixtureFiles();
+    access.current = VaultSnapshot(files);
+    final big = [
+      for (var i = 0; i < 300; i++)
+        {'s': 'open', 'h': i.toRadixString(16).padLeft(16, '0'), 't': 'あ' * 60},
+    ];
+    access.states['settings.json'] = jsonEncode({
+      'seen': {
+        for (var v = 0; v < 3; v++)
+          'old-vault-$v': {
+            for (var p = 0; p < 3; p++)
+              'p$p': {'at': '2026-10-0${v + 1}T00:00:00Z', 'items': big},
+          },
+      },
+    });
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    expect(c.error, isNull);
+    final raw = access.states['settings.json']!;
+    expect(utf8.encode(raw).length, lessThanOrEqualTo(48 * 1024));
+    final seen = (jsonDecode(raw) as Map)['seen'] as Map;
+    expect(seen[c.location!.identity], contains(projectId));
+    // 新しいVaultの記録から残す。
+    expect(
+      seen.keys.where((k) => k.startsWith('old-vault-')),
+      isNot(contains('old-vault-0')),
+    );
+    // 出典のない定型文は既読の比較に含めない。
+    final project = c.repository!.projects[projectId]!;
+    expect(
+      HubController.seenItemsOf(project).length,
+      project.sections.entries
+          .where((e) => ['current', 'next', 'open'].contains(e.key))
+          .expand((e) => e.value)
+          .where((e) => e.references.isNotEmpty)
+          .length,
+    );
+  });
+
+  test('下書きからの入力はプロジェクトとhashが一致し、確認待ちがないときだけ保存する', () async {
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = {...fixtureFiles(), draftPath: draftJson()};
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    final draft = c.repository!.gitDrafts[draftId]!;
+    for (final bad in [
+      CaptureDraft(
+        operationId: '81111111-2222-4333-8444-555555555555',
+        text: draft.text,
+        gitDraftId: draftId,
+        gitDraftHash: draft.hash,
+      ),
+      CaptureDraft(
+        operationId: '81111111-2222-4333-8444-555555555555',
+        text: draft.text,
+        project: projectId,
+        gitDraftId: draftId,
+        gitDraftHash: 'a' * 64,
+      ),
+    ]) {
+      await expectLater(c.save(bad), throwsStateError);
+    }
+    expect(access.requests, isEmpty);
+    final ok = await c.save(
+      CaptureDraft(
+        operationId: '91111111-2222-4333-8444-555555555555',
+        text: draft.text,
+        project: projectId,
+        gitDraftId: draftId,
+        gitDraftHash: draft.hash,
+      ),
+    );
+    expect(ok.saved, isTrue);
+  });
+
   test('Dartの完了報告を本体が受理し、同期後は解決済みへ移って再開もできる', () async {
     final access = TempAccess();
     await access.init();

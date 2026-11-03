@@ -53,7 +53,10 @@ class NowEntry {
 
   /// 本体のNOW項目一覧（90_system/now-items）と照合できた項目のキー。完了・解決の報告に使う。
   String? itemKey;
-  NowEntry(this.text);
+
+  /// 出典を外す前の行（先頭の「- 」だけを除く）。項目一覧との照合に使う。
+  final String raw;
+  NowEntry(this.text, {this.raw = ''});
 }
 
 /// 本体がNOWと同時に書く項目一覧の1件。解決済みならresolutionIdを持つ。
@@ -71,7 +74,10 @@ class NowItemRef {
   final String? resolutionId;
   final DateTime? resolvedAt;
   bool get resolved => resolutionId != null;
-  String get display => '$label$text'.replaceAll(RegExp(r'[\r\n]+'), ' ');
+
+  /// 本体のNOWの行と同じ表示文（views.tsのplainと同じ置換）。
+  String get display =>
+      '$label${text.replaceAll(RegExp(r'[\r\n]+'), ' ').replaceAll('<!--', '&lt;!--')}';
 }
 
 /// 本人が設定したリポジトリのコミット履歴から本体が作った、作業記録の下書き。

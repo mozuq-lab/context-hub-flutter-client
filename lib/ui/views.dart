@@ -4,7 +4,6 @@ import 'package:uuid/uuid.dart';
 import '../app/controller.dart';
 import '../core/models.dart';
 import '../core/repository.dart';
-import '../core/parser.dart' show clip;
 import '../storage/capture_service.dart';
 import 'markdown_view.dart';
 import 'review_view.dart';
@@ -646,7 +645,7 @@ class _HubViewState extends State<HubView> {
             [
               '前回見てから: 新しい項目${changes.added.length}件・外れた項目${changes.removed.length}件',
               for (final item in changes.removed.take(5))
-                '外れた（${sectionLabels[item.section] ?? item.section}）: ${item.text}',
+                '外れた（${sectionLabels[item.section] ?? item.section}）: ${item.text.isEmpty ? '（本文は記録していません）' : item.text}',
               if (changes.removed.length > 5)
                 'ほか${changes.removed.length - 5}件',
             ].join('\n'),
@@ -719,9 +718,7 @@ class _HubViewState extends State<HubView> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (added.contains(
-                          SeenItem(section.$1, clip(entry.text, 500)).id,
-                        ))
+                        if (added.contains(SeenItem.of(section.$1, entry)?.id))
                           Text(
                             'NEW',
                             key: const Key('new-entry'),
@@ -1066,7 +1063,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
     final draft = widget.draft;
     if (draft != null) {
       text.text = draft.text;
-      project = widget.controller.repository?.projects[draft.projectId]?.id;
+      project = draft.projectId;
     }
   }
 
@@ -1168,7 +1165,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
                       child: Text(p.title, overflow: TextOverflow.ellipsis),
                     ),
                 ],
-                onChanged: locked
+                // 下書きは同じプロジェクトの入力でだけ使用済みになるため、プロジェクトを固定する。
+                onChanged: locked || widget.draft != null
                     ? null
                     : (v) => setState(() => project = v == '' ? null : v),
               ),

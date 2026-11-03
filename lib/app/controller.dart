@@ -26,11 +26,26 @@ class ReviewConfirmation {
   final bool retiring;
 }
 
-/// 既読判定に使うNOWの1行。
+/// 既読判定に使うNOWの1行。hashは欄と本文（出典・訂正の注記を除く）から作る。
+/// textは外れた項目の表示用で、記録の容量を抑えるため短く切り、容量を超えると空にする。
 class SeenItem {
-  const SeenItem(this.section, this.text);
-  final String section, text;
-  String get id => '$section\u001f$text';
+  const SeenItem(this.section, this.hash, this.text);
+  final String section, hash, text;
+  String get id => '$section/$hash';
+
+  static final _link = RegExp(r' ?\[IN-[0-9A-HJKMNP-TV-Z]{26}\]\(');
+
+  /// 出典のない行（「不明」「残っている次の一手はありません」などの定型文）はnull。
+  static SeenItem? of(String section, NowEntry entry) {
+    final match = _link.firstMatch(entry.raw);
+    if (match == null || entry.references.isEmpty) return null;
+    final body = entry.raw.substring(0, match.start).trim();
+    return SeenItem(
+      section,
+      digest('$section\u001f$body').substring(0, 16),
+      clip(body, 60),
+    );
+  }
 }
 
 class ProjectChanges {
@@ -166,7 +181,13 @@ class HubController extends ChangeNotifier {
         return;
       }
       repository = HubRepository(data);
-      if (_initializeSeen()) await _writeSettings();
+      if (_initializeSeen()) {
+        try {
+          await _writeSettings();
+        } catch (_) {
+          // 既読の記録に失敗しても閲覧は続ける。
+        }
+      }
       await _pending(target, epoch);
     } catch (e) {
       if (epoch == _epoch) {
@@ -217,6 +238,20 @@ class HubController extends ChangeNotifier {
         captureWarning != null ||
         saving) {
       throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    final draftId = draft.gitDraftId;
+    if (draftId != null) {
+      // 保存確認待ちの操作がある間は、同じ下書きから二重に入力を作らない。
+      if (pending.isNotEmpty) {
+        throw StateError('保存確認待ちの操作があります。受付状況で確認してから保存してください。');
+      }
+      final found = repository!.gitDrafts[draftId];
+      if (found == null ||
+          found.hash != draft.gitDraftHash ||
+          found.projectId != draft.project ||
+          repository!.draftRequestIdFor(draftId) != null) {
+        throw StateError('下書きが更新されたか、操作済みです。表示を確認してください。');
+      }
     }
     saving = true;
     _changed();
@@ -470,8 +505,8 @@ class HubController extends ChangeNotifier {
           throw StateError('この項目は報告済みです。受付状況を確認してください。');
         }
         item = found;
-        // 直前の解決記録を含め、解決→再開→解決のように同じ操作を繰り返しても過去の操作と混ざらないようにする。
-        return 'item/$projectId/$itemKey/$action/${found.resolutionId ?? '-'}';
+        // 最新の解決・再開記録を含め、解決→再開→解決のように同じ操作を繰り返しても過去の操作と混ざらないようにする。
+        return 'item/$projectId/$itemKey/$action/${parsed.latestResolutionIdFor(itemKey) ?? '-'}';
       },
       (service, parsed, operation) =>
           service.saveItemResolution(operation, projectId, item, action),
@@ -503,6 +538,8 @@ class HubController extends ChangeNotifier {
 
   // ---- 前回見てからの変化（端末ごと・Vaultごと。Vaultには書かない） ----
   // settings.jsonの`seen`に、Vaultのidentityごと・プロジェクトごとの最後に見たNOWの項目を保存する。
+  // 状態ファイルは64KiBまでなので、保存先の設定と合わせて[_settingsBudget]以内に収める。
+  static const _settingsBudget = 48 * 1024;
   Map<String, dynamic> _seen = {};
   bool _seenLoaded = false;
   final Map<String, List<SeenItem>?> _visits = {};
@@ -521,19 +558,66 @@ class HubController extends ChangeNotifier {
     _seenLoaded = true;
   }
 
+  /// 保存先の設定を書く。既読の記録は容量内に収め、書けなくても保存先の設定は残す。
   Future<void> _writeSettings() async {
     final target = location;
     if (target == null) return;
-    await access.writeState(
-      'settings.json',
-      jsonEncode({...target.toJson(), 'seen': _seen}),
-    );
+    String encoded;
+    try {
+      encoded = _encodeSettings(target);
+    } catch (_) {
+      _seen = {};
+      encoded = jsonEncode(target.toJson());
+    }
+    await access.writeState('settings.json', encoded);
+  }
+
+  /// 既読の記録を容量内に収めて設定を作る。古いVault→本文→古いプロジェクトの順に削る。
+  String _encodeSettings(VaultLocation target) {
+    String encode() => jsonEncode({...target.toJson(), 'seen': _seen});
+    bool fits(String v) => utf8.encode(v).length <= _settingsBudget;
+    final current = _seen[target.identity];
+    final projects = repository?.projects;
+    if (current is Map && projects != null) {
+      current.removeWhere((id, _) => !projects.containsKey(id));
+    }
+    String at(Object? v) => v is Map && v['at'] is String ? v['at'] : '';
+    String vaultAt(Object? v) => v is Map
+        ? v.values.map(at).fold('', (a, b) => a.compareTo(b) >= 0 ? a : b)
+        : '';
+    var value = encode();
+    while (!fits(value)) {
+      final others = _seen.keys.where((k) => k != target.identity).toList()
+        ..sort((a, b) => vaultAt(_seen[a]).compareTo(vaultAt(_seen[b])));
+      if (others.isEmpty) break;
+      _seen.remove(others.first);
+      value = encode();
+    }
+    if (current is! Map) return value;
+    final order = current.keys.toList()
+      ..sort((a, b) => at(current[a]).compareTo(at(current[b])));
+    for (final id in order) {
+      if (fits(value)) break;
+      final items = (current[id] as Map?)?['items'];
+      if (items is List) {
+        for (final i in items) {
+          if (i is Map) i.remove('t');
+        }
+      }
+      value = encode();
+    }
+    for (final id in order) {
+      if (fits(value)) break;
+      current.remove(id);
+      value = encode();
+    }
+    return value;
   }
 
   static List<SeenItem> seenItemsOf(HubProject project) => [
     for (final section in ['current', 'next', 'open'])
       for (final entry in project.sections[section]!)
-        SeenItem(section, clip(entry.text, 500)),
+        ?SeenItem.of(section, entry),
   ];
 
   Map<String, dynamic> get _seenForVault {
@@ -548,10 +632,18 @@ class HubController extends ChangeNotifier {
   List<SeenItem>? _stored(String projectId) {
     final value = (_seen[location?.identity ?? ''] as Map?)?[projectId];
     if (value is! Map || value['items'] is! List) return null;
+    // 旧形式（hashのない記録）は記録なしとして扱い、今の内容で記録し直す。
+    if ((value['items'] as List).any((i) => i is! Map || i['h'] is! String)) {
+      return null;
+    }
     return [
       for (final i in value['items'] as List)
-        if (i is Map && i['s'] is String && i['t'] is String)
-          SeenItem(i['s'] as String, i['t'] as String),
+        if (i is Map && i['s'] is String && i['h'] is String)
+          SeenItem(
+            i['s'] as String,
+            i['h'] as String,
+            i['t'] is String ? i['t'] as String : '',
+          ),
     ];
   }
 
@@ -560,7 +652,7 @@ class HubController extends ChangeNotifier {
       'at': DateTime.now().toUtc().toIso8601String(),
       'items': [
         for (final i in seenItemsOf(project).take(300))
-          {'s': i.section, 't': i.text},
+          {'s': i.section, 'h': i.hash, 't': i.text},
       ],
     };
   }
@@ -589,10 +681,7 @@ class HubController extends ChangeNotifier {
         after = now.map((i) => i.id).toSet();
     return ProjectChanges(
       added: now.where((i) => !before.contains(i.id)).toList(),
-      removed: base
-          .where((i) => !after.contains(i.id))
-          .map((i) => SeenItem(i.section, i.text))
-          .toList(),
+      removed: base.where((i) => !after.contains(i.id)).toList(),
     );
   }
 
