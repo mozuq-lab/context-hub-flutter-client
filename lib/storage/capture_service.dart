@@ -11,11 +11,19 @@ class CaptureDraft {
     required this.text,
     this.kind = 'memo',
     this.project,
+    this.gitDraftId,
+    this.gitDraftHash,
   });
   final String operationId;
   final String text;
   final String kind;
   final String? project;
+
+  /// 作業記録の下書きから作った入力なら、その下書きID。本体は使用済みとして扱う。
+  final String? gitDraftId;
+
+  /// 本人が確認した下書きのhash。本体は一致するときだけ下書きを使用済みにする。
+  final String? gitDraftHash;
 }
 
 class CaptureResult {
@@ -113,17 +121,37 @@ class CaptureService {
         draft.text.length > 8000 ||
         utf8.encode(draft.text).length > 32000 ||
         !['memo', 'work-summary'].contains(draft.kind) ||
-        (draft.project != null && !projectIdPattern.hasMatch(draft.project!))) {
+        (draft.project != null && !projectIdPattern.hasMatch(draft.project!)) ||
+        (draft.gitDraftId != null &&
+            !RegExp(
+              r'^GDR-[0-9A-HJKMNP-TV-Z]{26}$',
+            ).hasMatch(draft.gitDraftId!)) ||
+        (draft.gitDraftId != null) != (draft.gitDraftHash != null) ||
+        (draft.gitDraftHash != null &&
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(draft.gitDraftHash!))) {
       throw const FormatException('本文は1〜8000文字、種別とprojectは有効な値を指定してください。');
     }
     return _saveRequest(
       draft.operationId,
-      digest(jsonEncode([draft.text, draft.kind, draft.project])),
+      digest(
+        jsonEncode([
+          draft.text,
+          draft.kind,
+          draft.project,
+          if (draft.gitDraftId != null) draft.gitDraftId,
+          if (draft.gitDraftHash != null) draft.gitDraftHash,
+        ]),
+      ),
       {
         'operation': 'capture',
         'kind': draft.kind,
         if (draft.project != null) 'project': draft.project,
         'tool': 'context-hub-flutter',
+        if (draft.gitDraftId != null)
+          'meta': {
+            'git_draft': draft.gitDraftId,
+            'git_draft_hash': draft.gitDraftHash,
+          },
       },
       draft.text,
     );
@@ -211,6 +239,49 @@ class CaptureService {
       'project_id': project.id,
       'project_hash': hash,
       'status': status,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// NOWの項目を完了・解決（resolve）または未解決へ戻す（reopen）報告。
+  Future<CaptureResult> saveItemResolution(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    String action,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(projectId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        !['resolve', 'reopen'].contains(action) ||
+        (action == 'resolve') == item.resolved) {
+      throw const FormatException('項目と操作を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-resolution',
+      'project_id': projectId,
+      'item_key': item.key,
+      'action': action,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 作業記録の下書きを見送る依頼。
+  Future<CaptureResult> saveGitDraftDismiss(
+    String operationId,
+    GitDraft draft,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !RegExp(r'^GDR-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(draft.id) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(draft.hash)) {
+      throw const FormatException('下書きを確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'git-draft-dismiss',
+      'draft_id': draft.id,
+      'draft_hash': draft.hash,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

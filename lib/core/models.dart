@@ -50,7 +50,44 @@ class HubRecord {
 class NowEntry {
   String text;
   final List<String> references = [], warnings = [];
+
+  /// 本体のNOW項目一覧（90_system/now-items）と照合できた項目のキー。完了・解決の報告に使う。
+  String? itemKey;
   NowEntry(this.text);
+}
+
+/// 本体がNOWと同時に書く項目一覧の1件。解決済みならresolutionIdを持つ。
+class NowItemRef {
+  NowItemRef({
+    required this.key,
+    required this.section,
+    required this.label,
+    required this.text,
+    required this.inputId,
+    this.resolutionId,
+    this.resolvedAt,
+  });
+  final String key, section, label, text, inputId;
+  final String? resolutionId;
+  final DateTime? resolvedAt;
+  bool get resolved => resolutionId != null;
+  String get display => '$label$text'.replaceAll(RegExp(r'[\r\n]+'), ' ');
+}
+
+/// 本人が設定したリポジトリのコミット履歴から本体が作った、作業記録の下書き。
+class GitDraft {
+  GitDraft({
+    required this.id,
+    required this.projectId,
+    required this.repo,
+    required this.text,
+    required this.hash,
+    required this.commitCount,
+    this.createdAt,
+  });
+  final String id, projectId, repo, text, hash;
+  final int commitCount;
+  final DateTime? createdAt;
 }
 
 /// 本体のproject-statusと同じ状態。旧版の自由記述は進行中として扱う。
@@ -76,6 +113,14 @@ class HubProject {
     'proposals': [],
   };
   final List<String> warnings = ['AIによる整理・自己報告を含む、未検証の要約です。'], references = [];
+
+  /// 本体のNOW項目一覧。古い本体では空。
+  final List<NowItemRef> nowItems = [];
+  DateTime? nowItemsGeneratedAt;
+  Iterable<NowItemRef> get resolvedItems => nowItems.where((i) => i.resolved);
+
+  /// 確認待ちの作業記録の下書き。
+  final List<GitDraft> drafts = [];
   HubProject({
     required this.id,
     required this.title,
