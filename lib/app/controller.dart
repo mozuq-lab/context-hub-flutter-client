@@ -7,6 +7,8 @@ import '../storage/capture_service.dart';
 import '../core/repository.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
+import '../core/models.dart';
+import '../core/parser.dart' show clip;
 
 class ReviewConfirmation {
   ReviewConfirmation(
@@ -22,6 +24,34 @@ class ReviewConfirmation {
   final int epoch;
   final AdoptionTarget? target;
   final bool retiring;
+}
+
+/// 既読判定に使うNOWの1行。hashは欄と本文（出典・訂正の注記を除く）から作る。
+/// textは外れた項目の表示用で、記録の容量を抑えるため短く切り、容量を超えると空にする。
+class SeenItem {
+  const SeenItem(this.section, this.hash, this.text);
+  final String section, hash, text;
+  String get id => '$section/$hash';
+
+  static final _link = RegExp(r' ?\[IN-[0-9A-HJKMNP-TV-Z]{26}\]\(');
+
+  /// 出典のない行（「不明」「残っている次の一手はありません」などの定型文）はnull。
+  static SeenItem? of(String section, NowEntry entry) {
+    final match = _link.firstMatch(entry.raw);
+    if (match == null || entry.references.isEmpty) return null;
+    final body = entry.raw.substring(0, match.start).trim();
+    return SeenItem(
+      section,
+      digest('$section\u001f$body').substring(0, 16),
+      clip(body, 60),
+    );
+  }
+}
+
+class ProjectChanges {
+  const ProjectChanges({required this.added, required this.removed});
+  final List<SeenItem> added, removed;
+  bool get isEmpty => added.isEmpty && removed.isEmpty;
 }
 
 class HubController extends ChangeNotifier {
@@ -119,7 +149,10 @@ class HubController extends ChangeNotifier {
         return;
       }
       repository = HubRepository(data);
-      await access.writeState('settings.json', jsonEncode(target.toJson()));
+      _visits.clear();
+      await _loadSeen();
+      _initializeSeen();
+      await _writeSettings();
       await _pending(target, epoch);
     } catch (e) {
       if (epoch == _epoch) {
@@ -148,6 +181,13 @@ class HubController extends ChangeNotifier {
         return;
       }
       repository = HubRepository(data);
+      if (_initializeSeen()) {
+        try {
+          await _writeSettings();
+        } catch (_) {
+          // 既読の記録に失敗しても閲覧は続ける。
+        }
+      }
       await _pending(target, epoch);
     } catch (e) {
       if (epoch == _epoch) {
@@ -198,6 +238,20 @@ class HubController extends ChangeNotifier {
         captureWarning != null ||
         saving) {
       throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    final draftId = draft.gitDraftId;
+    if (draftId != null) {
+      // 保存確認待ちの操作がある間は、同じ下書きから二重に入力を作らない。
+      if (pending.isNotEmpty) {
+        throw StateError('保存確認待ちの操作があります。受付状況で確認してから保存してください。');
+      }
+      final found = repository!.gitDrafts[draftId];
+      if (found == null ||
+          found.hash != draft.gitDraftHash ||
+          found.projectId != draft.project ||
+          repository!.draftRequestIdFor(draftId) != null) {
+        throw StateError('下書きが更新されたか、操作済みです。表示を確認してください。');
+      }
     }
     saving = true;
     _changed();
@@ -381,6 +435,280 @@ class HubController extends ChangeNotifier {
       if (!_disposed) await reload();
       _changed();
     }
+  }
+
+  /// 最新のVaultを読み直して確認し、同じ確認内容には同じ操作IDを使って依頼を保存する。
+  Future<CaptureResult> _confirmedRequest(
+    String Function(HubRepository parsed) keyFor,
+    Future<CaptureResult> Function(
+      CaptureService service,
+      HubRepository parsed,
+      String operation,
+    )
+    save,
+  ) async {
+    final target = location, epoch = _epoch;
+    if (target == null ||
+        repository == null ||
+        loading ||
+        saving ||
+        error != null ||
+        captureWarning != null) {
+      throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    saving = true;
+    _changed();
+    try {
+      final fresh = await access.readSnapshot(target);
+      if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+      final parsed = HubRepository(fresh);
+      repository = parsed;
+      _changed();
+      final key = '${target.identity}/${keyFor(parsed)}';
+      if (pending.isNotEmpty) {
+        throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
+      }
+      final operation = _reviewOperations.putIfAbsent(
+        key,
+        () => const Uuid().v4(),
+      );
+      final result = await save(
+        CaptureService(access, target),
+        parsed,
+        operation,
+      );
+      if (result.saved) _reviewOperations.remove(key);
+      return result;
+    } finally {
+      saving = false;
+      if (!_disposed) await reload();
+      _changed();
+    }
+  }
+
+  /// NOWの項目を完了・解決（resolve）または未解決へ戻す（reopen）報告を保存する。
+  Future<CaptureResult> requestItemResolution(
+    String projectId,
+    String itemKey,
+    String action,
+  ) {
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId]?.nowItems
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null || (action == 'resolve') == found.resolved) {
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目は報告済みです。受付状況を確認してください。');
+        }
+        item = found;
+        // 最新の解決・再開記録を含め、解決→再開→解決のように同じ操作を繰り返しても過去の操作と混ざらないようにする。
+        return 'item/$projectId/$itemKey/$action/${parsed.latestResolutionIdFor(itemKey) ?? '-'}';
+      },
+      (service, parsed, operation) =>
+          service.saveItemResolution(operation, projectId, item, action),
+    );
+  }
+
+  /// 作業記録の下書きを見送る依頼を保存する。
+  Future<CaptureResult> requestGitDraftDismiss(
+    String draftId,
+    String expectedHash,
+  ) {
+    late GitDraft draft;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.gitDrafts[draftId];
+        if (found == null || found.hash != expectedHash) {
+          throw StateError('下書きが更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.draftRequestIdFor(draftId) != null) {
+          throw StateError('この下書きは操作済みです。受付状況を確認してください。');
+        }
+        draft = found;
+        return 'git-draft-dismiss/$draftId/$expectedHash';
+      },
+      (service, parsed, operation) =>
+          service.saveGitDraftDismiss(operation, draft),
+    );
+  }
+
+  // ---- 前回見てからの変化（端末ごと・Vaultごと。Vaultには書かない） ----
+  // settings.jsonの`seen`に、Vaultのidentityごと・プロジェクトごとの最後に見たNOWの項目を保存する。
+  // 状態ファイルは64KiBまでなので、保存先の設定と合わせて[_settingsBudget]以内に収める。
+  static const _settingsBudget = 48 * 1024;
+  Map<String, dynamic> _seen = {};
+  bool _seenLoaded = false;
+  final Map<String, List<SeenItem>?> _visits = {};
+
+  Future<void> _loadSeen() async {
+    if (_seenLoaded) return;
+    try {
+      final raw = await access.readState('settings.json');
+      final value = raw == null ? null : jsonDecode(raw);
+      if (value is Map && value['seen'] is Map) {
+        _seen = Map<String, dynamic>.from(value['seen'] as Map);
+      }
+    } catch (_) {
+      // 読めない記録は空として扱う。保存先の設定はrestoreで別に扱う。
+    }
+    _seenLoaded = true;
+  }
+
+  /// 保存先の設定を書く。既読の記録は容量内に収め、書けなくても保存先の設定は残す。
+  Future<void> _writeSettings() async {
+    final target = location;
+    if (target == null) return;
+    String encoded;
+    try {
+      encoded = _encodeSettings(target);
+    } catch (_) {
+      _seen = {};
+      encoded = jsonEncode(target.toJson());
+    }
+    await access.writeState('settings.json', encoded);
+  }
+
+  /// 既読の記録を容量内に収めて設定を作る。古いVault→本文→古いプロジェクトの順に削る。
+  String _encodeSettings(VaultLocation target) {
+    String encode() => jsonEncode({...target.toJson(), 'seen': _seen});
+    bool fits(String v) => utf8.encode(v).length <= _settingsBudget;
+    final current = _seen[target.identity];
+    final projects = repository?.projects;
+    if (current is Map && projects != null) {
+      current.removeWhere((id, _) => !projects.containsKey(id));
+    }
+    String at(Object? v) => v is Map && v['at'] is String ? v['at'] : '';
+    String vaultAt(Object? v) => v is Map
+        ? v.values.map(at).fold('', (a, b) => a.compareTo(b) >= 0 ? a : b)
+        : '';
+    var value = encode();
+    while (!fits(value)) {
+      final others = _seen.keys.where((k) => k != target.identity).toList()
+        ..sort((a, b) => vaultAt(_seen[a]).compareTo(vaultAt(_seen[b])));
+      if (others.isEmpty) break;
+      _seen.remove(others.first);
+      value = encode();
+    }
+    if (current is! Map) return value;
+    final order = current.keys.toList()
+      ..sort((a, b) => at(current[a]).compareTo(at(current[b])));
+    for (final id in order) {
+      if (fits(value)) break;
+      final items = (current[id] as Map?)?['items'];
+      if (items is List) {
+        for (final i in items) {
+          if (i is Map) i.remove('t');
+        }
+      }
+      value = encode();
+    }
+    for (final id in order) {
+      if (fits(value)) break;
+      current.remove(id);
+      value = encode();
+    }
+    return value;
+  }
+
+  static List<SeenItem> seenItemsOf(HubProject project) => [
+    for (final section in ['current', 'next', 'open'])
+      for (final entry in project.sections[section]!)
+        ?SeenItem.of(section, entry),
+  ];
+
+  Map<String, dynamic> get _seenForVault {
+    final identity = location?.identity ?? '';
+    final value = _seen[identity];
+    if (value is Map<String, dynamic>) return value;
+    final created = <String, dynamic>{};
+    _seen[identity] = created;
+    return created;
+  }
+
+  List<SeenItem>? _stored(String projectId) {
+    final value = (_seen[location?.identity ?? ''] as Map?)?[projectId];
+    if (value is! Map || value['items'] is! List) return null;
+    // 旧形式（hashのない記録）は記録なしとして扱い、今の内容で記録し直す。
+    if ((value['items'] as List).any((i) => i is! Map || i['h'] is! String)) {
+      return null;
+    }
+    return [
+      for (final i in value['items'] as List)
+        if (i is Map && i['s'] is String && i['h'] is String)
+          SeenItem(
+            i['s'] as String,
+            i['h'] as String,
+            i['t'] is String ? i['t'] as String : '',
+          ),
+    ];
+  }
+
+  void _store(HubProject project) {
+    _seenForVault[project.id] = {
+      'at': DateTime.now().toUtc().toIso8601String(),
+      'items': [
+        for (final i in seenItemsOf(project).take(300))
+          {'s': i.section, 'h': i.hash, 't': i.text},
+      ],
+    };
+  }
+
+  /// まだ記録のないプロジェクトは、今の内容を既読として記録する（初回にすべてを新着にしない）。
+  bool _initializeSeen() {
+    final repo = repository;
+    if (repo == null) return false;
+    var changed = false;
+    for (final project in repo.projects.values) {
+      if (project.nowRecordId == null || _stored(project.id) != null) continue;
+      _store(project);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// 前回見たときから増えた項目と外れた項目。記録がなければnull。
+  ProjectChanges? changesSince(HubProject project, {bool visit = false}) {
+    final base = visit && _visits.containsKey(project.id)
+        ? _visits[project.id]
+        : _stored(project.id);
+    if (base == null) return null;
+    final now = seenItemsOf(project),
+        before = base.map((i) => i.id).toSet(),
+        after = now.map((i) => i.id).toSet();
+    return ProjectChanges(
+      added: now.where((i) => !before.contains(i.id)).toList(),
+      removed: base.where((i) => !after.contains(i.id)).toList(),
+    );
+  }
+
+  /// プロジェクトを開いたとき、表示中の比較の基準を固定してから今の内容を既読にする。
+  Future<void> beginVisit(String projectId) async {
+    final project = repository?.projects[projectId];
+    if (project == null || project.nowRecordId == null) return;
+    _visits[projectId] = _stored(projectId);
+    _store(project);
+    try {
+      await _writeSettings();
+    } catch (_) {
+      // 既読の記録に失敗しても閲覧は続ける。
+    }
+    _changed();
+  }
+
+  /// すべてのプロジェクトを既読にする。
+  Future<void> markAllSeen() async {
+    final repo = repository;
+    if (repo == null) return;
+    for (final project in repo.projects.values) {
+      if (project.nowRecordId != null) _store(project);
+    }
+    _visits.clear();
+    await _writeSettings();
+    _changed();
   }
 
   String? resolveLink(String sourcePath, String href) {

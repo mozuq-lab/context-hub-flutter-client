@@ -16,6 +16,11 @@ class HubRepository {
   final Map<String, Map<String, dynamic>> _receipts = {};
   final Map<String, Map<String, dynamic>> _statusChanges = {};
   final Map<String, String> _outstandingStatus = {};
+  final Map<String, DateTime> _resolutionTimes = {};
+  final Map<String, String> _latestResolutions = {};
+  final Map<String, String> _outstandingItems = {};
+  final Map<String, String> _outstandingDrafts = {};
+  final Map<String, GitDraft> gitDrafts = {};
 
   /// 本体が生成する直近の期間のふりかえり（REVIEW.md）。未生成ならnull。
   HubDigest? digestDocument;
@@ -224,9 +229,165 @@ class HubRepository {
     }
     _corrections();
     _readStatusChanges();
+    _readNowItems();
+    _readGitDrafts();
     _readIntake();
     _readDigest();
   }
+
+  /// 本体がNOWと同時に書く項目一覧を読み、NOWの各行に項目キーを結び付ける。
+  void _readNowItems() {
+    final resolution = RegExp(
+      r'^90_system/item-resolutions/(RES-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in snapshot.files.entries) {
+      final match = resolution.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']);
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            !['resolve', 'reopen'].contains(j['action']) ||
+            j['item_key'] is! String ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _resolutionTimes[id] = at;
+        final last = _latestResolutions[key];
+        if (last == null || id.compareTo(last) > 0) {
+          _latestResolutions[key] = id;
+        }
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    for (final project in projects.values) {
+      final path = '90_system/now-items/${project.id}.json',
+          raw = snapshot.files[path];
+      if (raw == null) continue;
+      try {
+        final j = jsonDecode(raw) as Map<String, dynamic>;
+        if (j['schema_version'] != 1 ||
+            j['project'] != project.id ||
+            j['items'] is! List) {
+          throw const FormatException();
+        }
+        final items = <NowItemRef>[];
+        for (final raw in j['items'] as List) {
+          final i = raw as Map<String, dynamic>, r = i['resolution'];
+          if (i['key'] is! String ||
+              !RegExp(r'^[a-f0-9]{64}$').hasMatch(i['key']) ||
+              !['next', 'open'].contains(i['section']) ||
+              i['label'] is! String ||
+              i['text'] is! String ||
+              i['input_id'] is! String ||
+              !inputIdPattern.hasMatch(i['input_id']) ||
+              (r != null &&
+                  (r is! Map ||
+                      r['id'] is! String ||
+                      !RegExp(
+                        r'^RES-[0-9A-HJKMNP-TV-Z]{26}$',
+                      ).hasMatch(r['id'])))) {
+            throw const FormatException();
+          }
+          items.add(
+            NowItemRef(
+              key: i['key'],
+              section: i['section'],
+              label: i['label'],
+              text: i['text'],
+              inputId: i['input_id'],
+              resolutionId: r is Map ? r['id'] as String : null,
+              resolvedAt: r is Map ? timestamp(r['at']) : null,
+            ),
+          );
+        }
+        project.nowItems.addAll(items);
+        project.nowItemsGeneratedAt = timestamp(j['generated_at']);
+        // NOWの行は「ラベル+本文 [入力ID](出典)…」の形。生の行が表示文と入力IDの組で始まる未解決の項目だけに結び付ける。
+        for (final section in ['next', 'open']) {
+          for (final entry in project.sections[section]!) {
+            final match = items.where(
+              (i) =>
+                  !i.resolved &&
+                  i.section == section &&
+                  entry.references.contains(_inputs[i.inputId]?.id) &&
+                  entry.raw.startsWith('${i.display} [${i.inputId}]('),
+            );
+            entry.itemKey = match.length == 1 ? match.single.key : null;
+          }
+        }
+      } catch (_) {
+        project.nowItems.clear();
+        _problem(path);
+      }
+    }
+  }
+
+  /// 確認待ちの作業記録の下書き。入力にしたもの・見送ったものは除く。
+  void _readGitDrafts() {
+    final pattern = RegExp(
+      r'^90_system/git-drafts/(GDR-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    // 本体と同じく、同じプロジェクトで下書きIDとhashが一致する入力だけを使用済みとする。
+    final used = _inputs.values
+        .where((i) => i.metadata['meta'] is Map)
+        .map(
+          (i) =>
+              '${(i.metadata['meta'] as Map)['git_draft']}/${(i.metadata['meta'] as Map)['git_draft_hash']}/${i.metadata['project']}',
+        )
+        .toSet();
+    for (final e in snapshot.files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>, id = j['id'];
+        if (j['schema_version'] != 1 ||
+            id != match.group(1) ||
+            j['project_id'] is! String ||
+            j['repo'] is! String ||
+            j['text'] is! String ||
+            (j['text'] as String).isEmpty ||
+            j['commits'] is! List ||
+            (j['commits'] as List).isEmpty) {
+          throw const FormatException();
+        }
+        if (used.contains('$id/${digest(e.value)}/${j['project_id']}') ||
+            snapshot.files.containsKey(
+              '90_system/git-drafts/dismissed/$id.json',
+            )) {
+          continue;
+        }
+        final draft = GitDraft(
+          id: id as String,
+          projectId: j['project_id'],
+          repo: j['repo'],
+          text: j['text'],
+          hash: digest(e.value),
+          commitCount: (j['commits'] as List).length,
+          createdAt: timestamp(j['created_at']),
+        );
+        gitDrafts[draft.id] = draft;
+        projects[draft.projectId]?.drafts.add(draft);
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    for (final p in projects.values) {
+      p.drafts.sort((a, b) => a.id.compareTo(b.id));
+    }
+  }
+
+  /// 反映を待っている、この項目への完了・解決（または再開）の報告。
+  String? itemRequestIdFor(String itemKey) => _outstandingItems[itemKey];
+
+  /// この項目の最新の解決・再開記録のID。記録がなければnull。
+  String? latestResolutionIdFor(String itemKey) => _latestResolutions[itemKey];
+
+  /// 反映を待っている、この下書きの見送り・入力化の依頼。
+  String? draftRequestIdFor(String draftId) => _outstandingDrafts[draftId];
   void _readDigest() {
     final raw = snapshot.files['REVIEW.md'];
     if (raw == null) return;
@@ -328,6 +489,7 @@ class HubRepository {
           if (section == null || line.trim().isEmpty) continue;
           final item = NowEntry(
             line.replaceFirst(RegExp(r'^[-*]\s+'), '').trim(),
+            raw: line.startsWith('- ') ? line.substring(2) : line,
           );
           item.text = item.text.replaceAllMapped(
             RegExp(
@@ -604,6 +766,8 @@ class HubRepository {
               'knowledge-reject',
               'knowledge-retire',
               'project-status',
+              'item-resolution',
+              'git-draft-dismiss',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
           throw const FormatException();
@@ -620,6 +784,34 @@ class HubRepository {
                 !projectLifecycles.contains(m['status']))) {
           throw const FormatException();
         }
+        final itemReport = m['operation'] == 'item-resolution',
+            draftDismiss = m['operation'] == 'git-draft-dismiss';
+        if (itemReport &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !['resolve', 'reopen'].contains(m['action']))) {
+          throw const FormatException();
+        }
+        if (draftDismiss &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['draft_id'] is! String ||
+                !RegExp(
+                  r'^GDR-[0-9A-HJKMNP-TV-Z]{26}$',
+                ).hasMatch(m['draft_id']) ||
+                m['draft_hash'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['draft_hash']))) {
+          throw const FormatException();
+        }
+        // 下書きから作った入力は、本体に届くまで下書きを使用中として扱う。
+        final usedDraft = m['operation'] == 'capture' && m['meta'] is Map
+            ? (m['meta'] as Map)['git_draft']
+            : null;
+        String? resolutionId;
         final decision = [
           'project-approve',
           'project-reject',
@@ -670,6 +862,10 @@ class HubRepository {
           path: e.key,
           title: statusChange
               ? '状態変更依頼: ${projects[m['project_id']]?.title ?? m['project_id']} → ${projectLifecycleLabels[m['status']]}'
+              : itemReport
+              ? '${m['action'] == 'resolve' ? '完了・解決' : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : draftDismiss
+              ? '下書きの見送り: ${gitDrafts[m['draft_id']]?.repo ?? m['draft_id']}'
               : retiring
               ? '適用停止依頼: ${m['target_id']}'
               : decision
@@ -711,6 +907,29 @@ class HubRepository {
                 throw const FormatException();
               }
               changeId = r['changeId'] as String;
+            }
+            if (itemReport) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['action'] != m['action'] ||
+                  r['resolutionId'] is! String ||
+                  !RegExp(
+                    r'^RES-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['resolutionId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              resolutionId = r['resolutionId'] as String;
+            }
+            if (draftDismiss) {
+              final r = ack['result'] as Map;
+              if (r['draftId'] != m['draft_id'] ||
+                  r['dismissed'] != true ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              item.detail = 'Miniが見送りを受領しました。';
             }
             if (decision) {
               final result = ack['result'] as Map,
@@ -758,12 +977,53 @@ class HubRepository {
           }
         }
         if (statusChange) _statusRequest(item, m, changeId);
+        if (itemReport) _itemRequest(item, m, resolutionId);
+        if (draftDismiss &&
+            ['waiting', 'accepted'].contains(item.state) &&
+            gitDrafts.containsKey(m['draft_id'])) {
+          _outstandingDrafts[m['draft_id'] as String] = item.id;
+        }
+        if (usedDraft is String &&
+            ['waiting', 'accepted'].contains(item.state) &&
+            gitDrafts.containsKey(usedDraft)) {
+          _outstandingDrafts[usedDraft] = item.id;
+        }
         intake.add(item);
       } catch (_) {
         _problem(e.key);
       }
     }
     intake.sort((a, b) => b.at?.compareTo(a.at ?? DateTime(0)) ?? 0);
+  }
+
+  String _itemTitle(String projectId, String key) {
+    final item = projects[projectId]?.nowItems
+        .where((i) => i.key == key)
+        .firstOrNull;
+    return clip(item?.display ?? key.substring(0, 12), 80);
+  }
+
+  /// 完了・解決の報告の反映状況。記録の作成後にNOWが再生成され、同期されていれば反映済みとする。
+  void _itemRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String? resolutionId,
+  ) {
+    final key = m['item_key'] as String, project = projects[m['project_id']];
+    var outstanding = false;
+    if (item.state == 'accepted') {
+      final at = _resolutionTimes[resolutionId],
+          generated = project?.nowItemsGeneratedAt;
+      if (at == null || generated == null || generated.isBefore(at)) {
+        outstanding = true;
+        item.detail = 'Mini受領済み。NOWの同期を待っています。';
+      } else {
+        item.detail = '報告をMiniが反映しました。';
+      }
+    } else if (item.state == 'waiting') {
+      outstanding = true;
+    }
+    if (outstanding) _outstandingItems[key] = item.id;
   }
 
   /// 進行中を先に、休止・完了を後ろに並べたプロジェクト。
