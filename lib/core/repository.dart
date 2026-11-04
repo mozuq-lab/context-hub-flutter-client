@@ -1027,6 +1027,16 @@ class HubRepository {
   }
 
   /// 進行中を先に、休止・完了を後ろに並べたプロジェクト。
+  /// 進行中のプロジェクトを、最新の根拠が新しい順に並べる。根拠のないものは後ろへ置き、同じ日時ならID順。
+  List<HubProject> get actionableProjects =>
+      projects.values.where((p) => p.lifecycle == 'active').toList()
+        ..sort((a, b) {
+          final x = a.lastEvidenceAt, y = b.lastEvidenceAt;
+          if (x != null && y != null && x != y) return y.compareTo(x);
+          if ((x == null) != (y == null)) return x == null ? 1 : -1;
+          return a.id.compareTo(b.id);
+        });
+
   List<HubProject> get orderedProjects => [
     ...projects.values.where((p) => p.lifecycle == 'active'),
     ...projects.values.where((p) => p.lifecycle != 'active'),
