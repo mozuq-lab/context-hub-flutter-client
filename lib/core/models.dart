@@ -125,6 +125,10 @@ class HubProject {
   DateTime? nowItemsGeneratedAt;
   Iterable<NowItemRef> get resolvedItems => nowItems.where((i) => i.resolved);
 
+  /// 出典の付いた行だけ。本体が空の欄に書く定型文（「不明（…）」「残っている次の一手はありません（…）」）を除く。
+  List<NowEntry> entriesWithSource(String section) =>
+      sections[section]!.where((e) => e.references.isNotEmpty).toList();
+
   /// 確認待ちの作業記録の下書き。
   final List<GitDraft> drafts = [];
   HubProject({

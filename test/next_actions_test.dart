@@ -177,4 +177,48 @@ void main() {
     expect(find.text('進行中のプロジェクトはありません。'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('本体が空の欄に書く定型文と、NOWのないプロジェクトは数えない', (tester) async {
+    tester.view.physicalSize = const Size(1280, 2400);
+    tester.view.devicePixelRatio = 1;
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = multiProjectFiles();
+    final sideNow = '10_projects/side-app/NOW.md';
+    files[sideNow] = files[sideNow]!.replaceFirst(
+      RegExp(r'- 設定画面を作る。[^\n]*'),
+      '- 残っている次の一手はありません（完了報告済み）',
+    );
+    expect(files[sideNow], contains('残っている次の一手はありません'));
+    files['10_projects/no-now/project.md'] =
+        files['10_projects/context-hub/project.md']!
+            .replaceFirst('id: context-hub', 'id: no-now')
+            .replaceFirst('title: AI Context Hub', 'title: まだ整理前');
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(() async {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    expect(find.text('次の一手 1件'), findsOneWidget);
+    expect(find.text('進行中の1プロジェクトから · 終わったらその場で完了を報告'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('home-next')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('next-project-context-hub')), findsOneWidget);
+    expect(find.byKey(const Key('next-project-side-app')), findsNothing);
+    expect(find.byKey(const Key('next-project-no-now')), findsNothing);
+    expect(find.textContaining('残っている次の一手はありません'), findsNothing);
+    expect(find.text('次の一手がないプロジェクト: 別のアプリ、まだ整理前'), findsOneWidget);
+    // 未解決は両方のプロジェクトにある。
+    await tester.tap(find.text('未解決 4件'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('next-project-side-app')), findsOneWidget);
+    expect(find.text('未解決がないプロジェクト: まだ整理前'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

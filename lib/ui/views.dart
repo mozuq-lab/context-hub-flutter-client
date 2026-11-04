@@ -167,10 +167,10 @@ class _HubViewState extends State<HubView> {
       final actionable = repo.actionableProjects,
           nextCount = actionable.fold<int>(
             0,
-            (n, p) => n + p.sections['next']!.length,
+            (n, p) => n + p.entriesWithSource('next').length,
           ),
           nextProjects = actionable
-              .where((p) => p.sections['next']!.isNotEmpty)
+              .where((p) => p.entriesWithSource('next').isNotEmpty)
               .length;
       children.add(
         Padding(
@@ -722,9 +722,21 @@ class _HubViewState extends State<HubView> {
         section = nextSection,
         count = {
           for (final s in ['next', 'open'])
-            s: projects.fold<int>(0, (n, p) => n + p.sections[s]!.length),
+            s: projects.fold<int>(
+              0,
+              (n, p) => n + p.entriesWithSource(s).length,
+            ),
         },
-        empty = projects.where((p) => p.sections[section]!.isEmpty).toList();
+        empty = projects
+            .where((p) => p.entriesWithSource(section).isEmpty)
+            .toList();
+    // 前回見てから増えた行。この画面では既読にしない。
+    final added = {
+      for (final p in projects)
+        p.id:
+            c.changesSince(p)?.added.map((i) => i.id).toSet() ??
+            const <String>{},
+    };
     return [
       title(
         'NEXT ACTIONS',
@@ -754,7 +766,8 @@ class _HubViewState extends State<HubView> {
               : '進行中のプロジェクトに未解決はありません。',
         ),
       for (final project in projects)
-        if (project.sections[section]!.isNotEmpty) ...[
+        if (project.entriesWithSource(section) case final entries
+            when entries.isNotEmpty) ...[
           InkWell(
             key: Key('next-project-${project.id}'),
             onTap: () => widget.onNavigate('project:${project.id}'),
@@ -793,14 +806,8 @@ class _HubViewState extends State<HubView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final entry in project.sections[section]!)
-                    nowEntry(
-                      project,
-                      section,
-                      entry,
-                      c.changesSince(project)?.added.map((i) => i.id).toSet() ??
-                          const <String>{},
-                    ),
+                  for (final entry in entries)
+                    nowEntry(project, section, entry, added[project.id]!),
                 ],
               ),
             ),
@@ -809,7 +816,7 @@ class _HubViewState extends State<HubView> {
         ],
       if (empty.isNotEmpty && count[section] != 0)
         Text(
-          '${sectionLabels[section]}が整理されていないプロジェクト: ${empty.map((p) => p.title).join('、')}',
+          '${sectionLabels[section]}がないプロジェクト: ${empty.map((p) => p.title).join('、')}',
           key: const Key('next-empty-projects'),
           style: const TextStyle(fontSize: 12),
         ),

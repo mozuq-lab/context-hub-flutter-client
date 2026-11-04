@@ -1026,7 +1026,6 @@ class HubRepository {
     if (outstanding) _outstandingItems[key] = item.id;
   }
 
-  /// 進行中を先に、休止・完了を後ろに並べたプロジェクト。
   /// 進行中のプロジェクトを、最新の根拠が新しい順に並べる。根拠のないものは後ろへ置き、同じ日時ならID順。
   List<HubProject> get actionableProjects =>
       projects.values.where((p) => p.lifecycle == 'active').toList()
@@ -1037,6 +1036,7 @@ class HubRepository {
           return a.id.compareTo(b.id);
         });
 
+  /// 進行中を先に、休止・完了を後ろに並べたプロジェクト。
   List<HubProject> get orderedProjects => [
     ...projects.values.where((p) => p.lifecycle == 'active'),
     ...projects.values.where((p) => p.lifecycle != 'active'),
