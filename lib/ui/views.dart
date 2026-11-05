@@ -49,6 +49,9 @@ class HubView extends StatefulWidget {
 
 class _HubViewState extends State<HubView> {
   String query = '';
+
+  /// 「次の一手」画面で表示する欄（next または open）。
+  String nextSection = 'next';
   HubController get c => widget.controller;
   HubRepository get repo => c.repository!;
 
@@ -151,12 +154,41 @@ class _HubViewState extends State<HubView> {
       }
     } else if (page == 'digest') {
       children.addAll(digestView());
+    } else if (page == 'next') {
+      children.addAll(nextView());
     } else if (page == 'home') {
       children.add(
         title(
           'YOUR CONTEXT',
           '今日、どこから始める？',
           '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        ),
+      );
+      final actionable = repo.actionableProjects,
+          nextCount = actionable.fold<int>(
+            0,
+            (n, p) => n + p.entriesWithSource('next').length,
+          ),
+          nextProjects = actionable
+              .where((p) => p.entriesWithSource('next').isNotEmpty)
+              .length;
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Card(
+            child: ListTile(
+              key: const Key('home-next'),
+              leading: const Icon(Icons.checklist_outlined),
+              title: Text('次の一手 $nextCount件'),
+              subtitle: Text(
+                nextCount == 0
+                    ? '進行中のプロジェクトに次の一手はありません'
+                    : '進行中の$nextProjectsプロジェクトから · 終わったらその場で完了を報告',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => widget.onNavigate('next'),
+            ),
+          ),
         ),
       );
       children.add(
@@ -610,6 +642,187 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// NOWの1行。プロジェクト画面と「次の一手」画面で共通に使う。
+  Widget nowEntry(
+    HubProject project,
+    String section,
+    NowEntry entry,
+    Set<String> added,
+  ) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (added.contains(SeenItem.of(section, entry)?.id))
+          Text(
+            'NEW',
+            key: const Key('new-entry'),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        SafeMarkdown(
+          text: entry.text,
+          sourcePath: repo.records[project.nowRecordId]?.path ?? '',
+          controller: c,
+          onRecord: open,
+        ),
+        for (final warning in entry.warnings)
+          Text(
+            warning,
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.error,
+            ),
+          ),
+        Wrap(
+          spacing: 8,
+          children: [
+            if (entry.itemKey case final key?)
+              repo.itemRequestIdFor(key) != null
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
+                    )
+                  : TextButton.icon(
+                      key: Key('resolve-${key.substring(0, 12)}'),
+                      onPressed: busy
+                          ? null
+                          : () => reportItem(
+                              project,
+                              project.nowItems.firstWhere((i) => i.key == key),
+                              'resolve',
+                            ),
+                      icon: const Icon(Icons.check_circle_outline, size: 15),
+                      label: Text(section == 'next' ? '完了にする' : '解決にする'),
+                    ),
+            for (final id in entry.references)
+              TextButton.icon(
+                key: const Key('source-record'),
+                onPressed: () => open(id),
+                icon: const Icon(Icons.article_outlined, size: 15),
+                label: Text(
+                  repo.records[id]?.title ?? '出典を確認',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+        ),
+      ],
+    ),
+  );
+
+  /// 進行中のプロジェクトの「次の一手」（または未解決）を、最新の根拠が新しい順にまとめる。
+  List<Widget> nextView() {
+    final now = DateTime.now(),
+        projects = repo.actionableProjects,
+        section = nextSection,
+        count = {
+          for (final s in ['next', 'open'])
+            s: projects.fold<int>(
+              0,
+              (n, p) => n + p.entriesWithSource(s).length,
+            ),
+        },
+        empty = projects
+            .where((p) => p.entriesWithSource(section).isEmpty)
+            .toList();
+    // 前回見てから増えた行。この画面では既読にしない。
+    final added = {
+      for (final p in projects)
+        p.id:
+            c.changesSince(p)?.added.map((i) => i.id).toSet() ??
+            const <String>{},
+    };
+    return [
+      title(
+        'NEXT ACTIONS',
+        '次の一手',
+        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+      ),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: SegmentedButton<String>(
+          key: const Key('next-section'),
+          showSelectedIcon: false,
+          segments: [
+            ButtonSegment(value: 'next', label: Text('次の一手 ${count['next']}件')),
+            ButtonSegment(value: 'open', label: Text('未解決 ${count['open']}件')),
+          ],
+          selected: {section},
+          onSelectionChanged: (v) => setState(() => nextSection = v.single),
+        ),
+      ),
+      const SizedBox(height: 20),
+      if (projects.isEmpty)
+        const Text('進行中のプロジェクトはありません。')
+      else if (count[section] == 0)
+        Text(
+          section == 'next'
+              ? '進行中のプロジェクトに次の一手はありません。'
+              : '進行中のプロジェクトに未解決はありません。',
+        ),
+      for (final project in projects)
+        if (project.entriesWithSource(section) case final entries
+            when entries.isNotEmpty) ...[
+          InkWell(
+            key: Key('next-project-${project.id}'),
+            onTap: () => widget.onNavigate('project:${project.id}'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          project.title,
+                          style: const TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          projectStatusLine(project, now),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.arrow_forward, size: 18),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final entry in entries)
+                    nowEntry(project, section, entry, added[project.id]!),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
+      if (empty.isNotEmpty && count[section] != 0)
+        Text(
+          '${sectionLabels[section]}がないプロジェクト: ${empty.map((p) => p.title).join('、')}',
+          key: const Key('next-empty-projects'),
+          style: const TextStyle(fontSize: 12),
+        ),
+    ];
+  }
+
   List<Widget> projectView(HubProject project) {
     final now = DateTime.now(),
         requested = repo.projectStatusRequestIdFor(project.id) != null,
@@ -713,92 +926,7 @@ class _HubViewState extends State<HubView> {
                 if (project.sections[section.$1]!.isEmpty)
                   const Text('まだ整理されていません。'),
                 for (final entry in project.sections[section.$1]!)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (added.contains(SeenItem.of(section.$1, entry)?.id))
-                          Text(
-                            'NEW',
-                            key: const Key('new-entry'),
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        SafeMarkdown(
-                          text: entry.text,
-                          sourcePath:
-                              repo.records[project.nowRecordId]?.path ?? '',
-                          controller: c,
-                          onRecord: open,
-                        ),
-                        for (final warning in entry.warnings)
-                          Text(
-                            warning,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context).colorScheme.error,
-                            ),
-                          ),
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            if (entry.itemKey case final key?)
-                              repo.itemRequestIdFor(key) != null
-                                  ? const Padding(
-                                      padding: EdgeInsets.symmetric(
-                                        vertical: 10,
-                                      ),
-                                      child: Text(
-                                        '報告済み（反映待ち）',
-                                        style: TextStyle(fontSize: 12),
-                                      ),
-                                    )
-                                  : TextButton.icon(
-                                      key: Key(
-                                        'resolve-${key.substring(0, 12)}',
-                                      ),
-                                      onPressed: busy
-                                          ? null
-                                          : () => reportItem(
-                                              project,
-                                              project.nowItems.firstWhere(
-                                                (i) => i.key == key,
-                                              ),
-                                              'resolve',
-                                            ),
-                                      icon: const Icon(
-                                        Icons.check_circle_outline,
-                                        size: 15,
-                                      ),
-                                      label: Text(
-                                        section.$1 == 'next'
-                                            ? '完了にする'
-                                            : '解決にする',
-                                      ),
-                                    ),
-                            for (final id in entry.references)
-                              TextButton.icon(
-                                key: const Key('source-record'),
-                                onPressed: () => open(id),
-                                icon: const Icon(
-                                  Icons.article_outlined,
-                                  size: 15,
-                                ),
-                                label: Text(
-                                  repo.records[id]?.title ?? '出典を確認',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
+                  nowEntry(project, section.$1, entry, added),
               ],
             ),
           ),

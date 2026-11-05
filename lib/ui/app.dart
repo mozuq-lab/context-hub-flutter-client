@@ -81,6 +81,7 @@ class _HubShellState extends State<HubShell> {
             children: [
               for (final item in [
                 ('home', 'ホーム', Icons.space_dashboard_outlined),
+                ('next', '次の一手', Icons.checklist_outlined),
                 ('digest', 'ふりかえり', Icons.event_note_outlined),
                 ('recent', '最近のメモ', Icons.notes_outlined),
                 ('ideas', 'アイデア', Icons.lightbulb_outline),
@@ -183,6 +184,7 @@ class _HubShellState extends State<HubShell> {
           title: Text(
             has
                 ? switch (page) {
+                    'next' => '次の一手',
                     'digest' => 'ふりかえり',
                     'recent' => '最近のメモ',
                     'ideas' => 'アイデア',
