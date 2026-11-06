@@ -264,6 +264,61 @@ class HubController extends ChangeNotifier {
     }
   }
 
+  /// 表示中の記録の訂正チェーンを最新のVaultで確かめ、最新の入力（expectedLatestId）への訂正を保存する。
+  /// 操作IDは入力フォームが持ち、保存結果が不明なときは同じ操作IDで確認する。
+  Future<CaptureResult> requestCorrection(
+    String operationId,
+    String recordId,
+    String expectedLatestId,
+    String text,
+  ) async {
+    final target = location, epoch = _epoch;
+    if (target == null ||
+        repository == null ||
+        loading ||
+        saving ||
+        error != null ||
+        captureWarning != null) {
+      throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    saving = true;
+    _changed();
+    try {
+      // 結果不明の依頼が残っていると、同じチェーンへの訂正が届いているかを判断できない。
+      if (pending.isNotEmpty) {
+        throw StateError('保存確認待ちの操作があります。受付状況で確認してから訂正してください。');
+      }
+      final fresh = await access.readSnapshot(target);
+      if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+      final parsed = HubRepository(fresh);
+      repository = parsed;
+      _changed();
+      final chain = parsed.correctionChainOf(recordId);
+      if (chain == null || chain.last.sourceId != expectedLatestId) {
+        throw StateError('このメモに新しい訂正が届いています。表示を確認してから訂正してください。');
+      }
+      if (parsed.correctionRequestIdFor(recordId) != null) {
+        throw StateError('このメモの訂正は反映待ちです。受付状況を確認してください。');
+      }
+      if (text.trim() == chain.last.body.trim()) {
+        throw StateError('訂正前と同じ本文です。直したい箇所を書き換えてください。');
+      }
+      // 本体は訂正を32件まで、元のメモと訂正の合計を32000文字までに制限する。
+      if (chain.length > 32 ||
+          chain.fold<int>(text.length, (n, r) => n + r.body.length) > 32000) {
+        throw StateError('このメモは訂正の上限に達しています。新しいメモとして追加してください。');
+      }
+      return await CaptureService(
+        access,
+        target,
+      ).saveCorrection(operationId, expectedLatestId, text);
+    } finally {
+      saving = false;
+      if (!_disposed) await reload();
+      _changed();
+    }
+  }
+
   Future<CaptureResult> confirm(String operation) async {
     if (location == null || saving) {
       throw StateError('保存先を確認してください。');
