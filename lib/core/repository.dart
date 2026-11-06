@@ -5,6 +5,14 @@ import 'package:unorm_dart/unorm_dart.dart' as unicode;
 import 'models.dart';
 import 'parser.dart';
 
+/// 元の入力と訂正のチェーン、有効な処理記録、関連するプロジェクト。
+typedef _Unit = ({
+  HubRecord root,
+  List<HubRecord> chain,
+  Map<String, dynamic>? receipt,
+  Set<String> related,
+});
+
 class HubRepository {
   late final review = ReviewRepository(snapshot, records.values);
   final VaultSnapshot snapshot;
@@ -556,15 +564,7 @@ class HubRepository {
     }
   }
 
-  final List<
-    ({
-      HubRecord root,
-      List<HubRecord> chain,
-      Map<String, dynamic>? receipt,
-      Set<String> related,
-    })
-  >
-  _units = [];
+  final List<_Unit> _units = [];
   void _corrections() {
     const pendingNotice = '訂正未反映です。旧要約の可能性があるため、訂正原文を確認してください。';
     const unconfirmedNotice = '訂正整理済みですが、表示への反映未確認です。訂正原文も確認してください。';
@@ -811,6 +811,7 @@ class HubRepository {
           throw const FormatException();
         }
         final correction = m['operation'] == 'correct';
+        var correctionSynced = false;
         if (correction &&
             (doc.body.trim().isEmpty ||
                 m['target_id'] is! String ||
@@ -966,6 +967,13 @@ class HubRepository {
                   : 'Mini受領済み。判断・反映結果を再同期してください。';
             }
             final input = _inputs[(ack['result'] as Map)['inputId']];
+            // 本体は同じ対象・同じ本文の既存の訂正を重複として返すことがあるため、出典ではなく受領結果の入力で判断する。
+            if (correction &&
+                input != null &&
+                input.kind == 'correction' &&
+                input.metadata['corrects_input_id'] == m['target_id']) {
+              correctionSynced = true;
+            }
             if (input?.status == 'organized') item.state = 'organized';
             if (input?.status == 'failed') item.state = 'failed';
           }
@@ -991,13 +999,7 @@ class HubRepository {
         // 訂正は、本体が受け付けて訂正原文が同期されるまで反映待ちとする。
         if (correction &&
             (item.state == 'waiting' ||
-                (item.state == 'accepted' &&
-                    !_inputs.values.any(
-                      (r) =>
-                          r.kind == 'correction' &&
-                          r.metadata['corrects_input_id'] == m['target_id'] &&
-                          r.metadata['source'] == m['source'],
-                    )))) {
+                (item.state == 'accepted' && !correctionSynced))) {
           _outstandingCorrections[m['target_id'] as String] = item.id;
           if (item.state == 'accepted') {
             item.detail = 'Mini受領済み。訂正原文の同期を待っています。';
@@ -1039,10 +1041,12 @@ class HubRepository {
 
   /// 原文の記録（メモ・作業要約・訂正）が属する訂正チェーン。元の記録が先頭、最新の訂正が末尾。原文でなければnull。
   List<HubRecord>? correctionChainOf(String recordId) {
-    for (final unit in _units) {
-      if (unit.chain.any((r) => r.id == recordId)) return unit.chain;
+    final record = records[recordId];
+    if (record == null ||
+        !const ['memo', 'work-summary', 'correction'].contains(record.kind)) {
+      return null;
     }
-    return null;
+    return _unitBySource[record.sourceId]?.chain;
   }
 
   /// このチェーンへの訂正で、まだ反映されていない依頼のREQ ID。
@@ -1163,16 +1167,28 @@ class HubRepository {
           : null;
     }
     final ids = record.kind == 'idea'
-        ? record.references.map((id) => records[id]?.sourceId).toSet()
-        : {record.sourceId};
+        ? record.references.map((id) => records[id]?.sourceId)
+        : [record.sourceId];
     String? relation;
-    for (final unit in _units) {
-      if (!unit.chain.any((r) => ids.contains(r.sourceId))) continue;
+    for (final id in ids) {
+      final unit = _unitBySource[id];
+      if (unit == null) continue;
       if (unit.root.metadata['project'] == projectId) return 'owned';
       if (unit.related.contains(projectId)) relation = 'estimated';
     }
     return relation;
   }
+
+  /// 原文の入力ID → その入力を含む訂正チェーン。検索の帰属判定と訂正で引く。
+  late final Map<String, _Unit> _unitBySource = {
+    for (final unit in _units)
+      for (final r in unit.chain) r.sourceId: unit,
+  };
+
+  /// 検索の期間と新しい順に使う日時。NOWは最終根拠（再生成の時刻ではない）、ほかは発生日時か生成日時。
+  DateTime? searchTimeOf(HubRecord r) => r.kind == 'project'
+      ? projects[r.sourceId]?.lastEvidenceAt ?? r.at
+      : r.at ?? r.generatedAt;
 
   /// 検索。検索語がなくても絞り込み条件があれば、条件に合う記録を新しい順に返す。件数は打ち切らない。
   List<HubRecord> search(
@@ -1183,12 +1199,21 @@ class HubRepository {
     if (query.length > 500 || (tokens.isEmpty && !filter.active)) return [];
     final project = filter.project;
     final hits = <({HubRecord record, int score, int order})>[];
-    for (final r in _ordered) {
-      if (filter.kinds.isNotEmpty && !filter.kinds.contains(searchKindOf(r))) {
+    final ordered = records.values.toList()
+      ..sort(
+        (a, b) => (searchTimeOf(b) ?? DateTime(0)).compareTo(
+          searchTimeOf(a) ?? DateTime(0),
+        ),
+      );
+    for (final r in ordered) {
+      if (filter.kinds.isNotEmpty &&
+          (!filter.kinds.contains(searchKindOf(r)) ||
+              r.metadata['retracted'] == true)) {
+        // 分類を取り消したアイデアは、種類での絞り込みではアイデアとして数えない（本体と同じ）。
         continue;
       }
       if (project != null && projectRelation(r, project) == null) continue;
-      final at = r.at ?? r.generatedAt;
+      final at = searchTimeOf(r);
       if (filter.since != null && (at == null || at.isBefore(filter.since!))) {
         continue;
       }
@@ -1204,7 +1229,7 @@ class HubRepository {
       }
       if (score > 0) hits.add((record: r, score: score, order: hits.length));
     }
-    // _orderedは新しい順。同じ一致数の中は新しい順のまま残す。
+    // orderedは新しい順。同じ一致数の中は新しい順のまま残す。
     if (tokens.isNotEmpty && filter.sort == 'relevance') {
       hits.sort(
         (a, b) => b.score != a.score

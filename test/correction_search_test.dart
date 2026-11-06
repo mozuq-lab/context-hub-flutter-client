@@ -220,7 +220,7 @@ void main() {
         final record = input(c.repository!, questionInput);
         await expectLater(
           c.requestCorrection(op1, record.id, ideaInput, '訂正'),
-          throwsA(isA<StateError>()),
+          throwsA(isA<CorrectionTargetChanged>()),
         );
         await expectLater(
           c.requestCorrection(
@@ -342,5 +342,76 @@ void main() {
       access.requests.values.single,
       contains('"target_id":"$questionInput"'),
     );
+  });
+
+  test('本体が既存の訂正を重複として返した場合も、反映待ちを解く', () {
+    final files = fixtureFiles();
+    const existing = 'IN-01M2DSFVSNCJSF7XKRPW29TM7N';
+    files['00_inbox/2026-09-15_$existing.md'] = encodePacket({
+      'schema_version': 1,
+      'id': existing,
+      'kind': 'correction',
+      'source': 'cli-correction',
+      'source_event_id': 'earlier',
+      'corrects_input_id': questionInput,
+      'occurred_at': '2026-09-15T00:00:00Z',
+      'received_at': '2026-09-15T00:00:00Z',
+      'project': 'context-hub',
+      'origin': 'user-note',
+    }, '訂正後の本文');
+    final requestId = 'REQ-${op1.replaceAll('-', '')}';
+    final raw = encodePacket({
+      'schema_version': 1,
+      'request_id': requestId,
+      'source': 'flutter-client/$op1',
+      'occurred_at': '2026-10-01T00:00:00.000Z',
+      'operation': 'correct',
+      'target_id': questionInput,
+    }, '訂正後の本文');
+    files['Input/$requestId.md'] = raw;
+    files['90_system/intake/$requestId.json'] = jsonEncode({
+      'schema_version': 1,
+      'request_id': requestId,
+      'request_hash': digest(raw),
+      'path': 'Input/$requestId.md',
+      'operation': 'correct',
+      'status': 'accepted',
+      'received_at': '2026-10-01T00:00:01.000Z',
+      'result': {'inputId': existing, 'deduped': true},
+    });
+    final repo = HubRepository(fixture(files));
+    final record = input(repo, questionInput);
+    expect(repo.correctionChainOf(record.id), hasLength(2));
+    expect(repo.correctionRequestIdFor(record.id), isNull);
+  });
+
+  test('抜粋はNFKCで一致箇所を探し、長い語を優先して強調する', () {
+    final snippet = searchSnippet(
+      '${'前置き' * 30}ＡＩの同期について',
+      HubRepository.searchTokens('ai 同期'),
+    );
+    expect(snippet, startsWith('…'));
+    expect(snippet, contains('AIの同期'));
+    final spans = highlightSpans('abc ab', ['a', 'ab'], Colors.yellow);
+    expect(spans.first.text, 'ab');
+    // 大文字・小文字で長さが変わる文字があっても範囲外にならない。
+    expect(searchSnippet('İ' * 300 + 'x', ['x']), contains('x'));
+  });
+
+  test('NOWは最終根拠の日時で期間を判断し、取り消したアイデアは種類の絞り込みに含めない', () {
+    final files = fixtureFiles();
+    final ideaPath = files.keys.firstWhere((p) => p.startsWith('20_ideas/'));
+    var repo = HubRepository(fixture(files));
+    final evidence = repo.projects['context-hub']!.lastEvidenceAt!;
+    expect(
+      repo.search('', SearchFilter(kinds: const {'now'}, until: evidence)),
+      hasLength(1),
+    );
+    files[ideaPath] = files[ideaPath]!.replaceFirst(
+      'category: idea',
+      'category: idea\nretracted: true',
+    );
+    repo = HubRepository(fixture(files));
+    expect(repo.search('', const SearchFilter(kinds: {'idea'})), isEmpty);
   });
 }

@@ -295,7 +295,7 @@ class HubController extends ChangeNotifier {
       _changed();
       final chain = parsed.correctionChainOf(recordId);
       if (chain == null || chain.last.sourceId != expectedLatestId) {
-        throw StateError('このメモに新しい訂正が届いています。表示を確認してから訂正してください。');
+        throw CorrectionTargetChanged();
       }
       if (parsed.correctionRequestIdFor(recordId) != null) {
         throw StateError('このメモの訂正は反映待ちです。受付状況を確認してください。');
@@ -786,4 +786,10 @@ class HubController extends ChangeNotifier {
       return null;
     }
   }
+}
+
+/// 訂正を書いている間に、同じメモへ新しい訂正が届いた。フォームを開き直して最新の本文から書き直す。
+class CorrectionTargetChanged extends StateError {
+  CorrectionTargetChanged()
+    : super('このメモに新しい訂正が届いています。フォームを閉じ、最新の本文を確認してから訂正し直してください。');
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:unorm_dart/unorm_dart.dart' as unicode;
 import 'package:uuid/uuid.dart';
 import '../app/controller.dart';
 import '../core/models.dart';
@@ -47,6 +48,55 @@ class HubView extends StatefulWidget {
   State<HubView> createState() => _HubViewState();
 }
 
+/// 一致箇所の前後を抜き出す。最初に見つかった語の少し前から始める。
+/// 本文は検索と同じくNFKCで正規化してから探す（全角・半角の違いでも一致箇所を示す）。
+String searchSnippet(String body, List<String> words) {
+  final text = unicode.nfkc(body).replaceAll(RegExp(r'\s+'), ' ').trim();
+  var start = 0;
+  for (final w in words) {
+    final m = RegExp(RegExp.escape(w), caseSensitive: false).firstMatch(text);
+    if (m != null) {
+      start = m.start > 40 ? m.start - 40 : 0;
+      break;
+    }
+  }
+  if (start > text.length) start = text.length;
+  var end = start + 160 < text.length ? start + 160 : text.length;
+  // サロゲートペアの途中で切らない。
+  bool low(int i) =>
+      i > 0 && i < text.length && (text.codeUnitAt(i) & 0xFC00) == 0xDC00;
+  if (low(start)) start--;
+  if (low(end)) end--;
+  return '${start > 0 ? '…' : ''}${text.substring(start, end)}${end < text.length ? '…' : ''}';
+}
+
+/// 抜粋の中の検索語を強調する。大文字・小文字は区別しない。
+List<TextSpan> highlightSpans(String text, List<String> words, Color color) {
+  // 長い語を先に試し、「a|ab」のように一部だけ強調しない。
+  final pattern =
+      (words.where((w) => w.isNotEmpty).toList()
+            ..sort((a, b) => b.length.compareTo(a.length)))
+          .map(RegExp.escape)
+          .join('|');
+  if (pattern.isEmpty) return [TextSpan(text: text)];
+  final spans = <TextSpan>[];
+  var last = 0;
+  for (final m in RegExp(pattern, caseSensitive: false).allMatches(text)) {
+    if (m.start > last) {
+      spans.add(TextSpan(text: text.substring(last, m.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: m.group(0),
+        style: TextStyle(fontWeight: FontWeight.bold, backgroundColor: color),
+      ),
+    );
+    last = m.end;
+  }
+  if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+  return spans;
+}
+
 class _HubViewState extends State<HubView> {
   String query = '';
   final queryController = TextEditingController();
@@ -60,6 +110,8 @@ class _HubViewState extends State<HubView> {
   /// 一覧・検索結果は[pageSize]件ずつ表示し、「さらに読み込む」で古い記録へさかのぼる。
   static const pageSize = 50;
   int shown = pageSize;
+  Object? _searchKey;
+  List<HubRecord> _searchResults = const [];
 
   /// 「次の一手」画面で表示する欄（next または open）。
   String nextSection = 'next';
@@ -118,56 +170,6 @@ class _HubViewState extends State<HubView> {
             ),
           ),
         );
-
-  /// 一致箇所の前後を抜き出す。最初に見つかった語の少し前から始める。
-  static String snippetOf(String body, List<String> words) {
-    final text = body.replaceAll(RegExp(r'\s+'), ' ').trim(),
-        lower = text.toLowerCase();
-    var start = 0;
-    for (final w in words) {
-      final i = lower.indexOf(w.toLowerCase());
-      if (i >= 0) {
-        start = i > 40 ? i - 40 : 0;
-        break;
-      }
-    }
-    var end = start + 160 < text.length ? start + 160 : text.length;
-    // サロゲートペアの途中で切らない。
-    bool low(int i) =>
-        i > 0 && i < text.length && (text.codeUnitAt(i) & 0xFC00) == 0xDC00;
-    if (low(start)) start--;
-    if (low(end)) end--;
-    return '${start > 0 ? '…' : ''}${text.substring(start, end)}${end < text.length ? '…' : ''}';
-  }
-
-  /// 抜粋の中の検索語を強調する。大文字・小文字は区別しない。
-  static List<TextSpan> highlight(
-    String text,
-    List<String> words,
-    Color color,
-  ) {
-    final pattern = words
-        .where((w) => w.isNotEmpty)
-        .map(RegExp.escape)
-        .join('|');
-    if (pattern.isEmpty) return [TextSpan(text: text)];
-    final spans = <TextSpan>[];
-    var last = 0;
-    for (final m in RegExp(pattern, caseSensitive: false).allMatches(text)) {
-      if (m.start > last) {
-        spans.add(TextSpan(text: text.substring(last, m.start)));
-      }
-      spans.add(
-        TextSpan(
-          text: m.group(0),
-          style: TextStyle(fontWeight: FontWeight.bold, backgroundColor: color),
-        ),
-      );
-      last = m.end;
-    }
-    if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
-    return spans;
-  }
 
   /// プロジェクトを開いたら、前回見たときとの比較を固定してから既読にする。
   void _visit() {
@@ -252,8 +254,8 @@ class _HubViewState extends State<HubView> {
                 child: Text.rich(
                   key: const Key('search-snippet'),
                   TextSpan(
-                    children: highlight(
-                      snippetOf(r.body, words),
+                    children: highlightSpans(
+                      searchSnippet(r.body, words),
                       words,
                       Theme.of(context).colorScheme.primaryContainer,
                     ),
@@ -609,11 +611,11 @@ class _HubViewState extends State<HubView> {
 
   /// 検索画面。検索語と、プロジェクト・種類・期間・並び順の絞り込み。
   List<Widget> searchView() {
-    final words = query
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((w) => w.isNotEmpty)
-        .toList();
+    // 同期で消えたプロジェクトが選ばれたままにならないようにする。
+    if (searchProject != null && !repo.projects.containsKey(searchProject)) {
+      searchProject = null;
+    }
+    final words = HubRepository.searchTokens(query);
     final filter = searchFilter;
     final out = <Widget>[
       title(
@@ -717,7 +719,20 @@ class _HubViewState extends State<HubView> {
       out.add(const Text('語を入力するか、条件で絞り込んでください。'));
       return out;
     }
-    final results = repo.search(query, filter);
+    // 画面の再構築（入力・続きの読み込み・保存中の通知）ごとに全件を検索し直さない。
+    final key = (
+      repo,
+      query,
+      searchProject,
+      (selectedKinds.toList()..sort()).join(','),
+      searchDays,
+      searchSort,
+    );
+    if (_searchKey != key) {
+      _searchKey = key;
+      _searchResults = repo.search(query, filter);
+    }
+    final results = _searchResults;
     out.add(Text('${results.length}件', key: const Key('search-count')));
     out.add(const SizedBox(height: 12));
     for (final r in results.take(shown)) {
@@ -1536,6 +1551,9 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
   String? error;
   CaptureResult? result;
   bool busy = false;
+
+  /// 新しい訂正が届いて、この下書きの訂正対象が古くなった。保存は出さず、閉じて開き直してもらう。
+  bool targetChanged = false;
   @override
   void dispose() {
     text.dispose();
@@ -1561,7 +1579,12 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
       if (mounted) setState(() => result = r);
     } catch (e) {
       // 保存前に止まった場合は、本文を直してもう一度保存できる。
-      if (mounted) setState(() => error = HubController.message(e));
+      if (mounted) {
+        setState(() {
+          error = HubController.message(e);
+          targetChanged = e is CorrectionTargetChanged;
+        });
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -1643,7 +1666,7 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
             onPressed: busy ? null : () => Navigator.pop(context),
             child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
           ),
-          if (!locked)
+          if (!locked && !targetChanged)
             FilledButton(
               key: const Key('save-correction'),
               onPressed: busy ? null : submit,
