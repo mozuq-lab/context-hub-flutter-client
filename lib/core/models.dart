@@ -312,7 +312,7 @@ class NewProjectRequest {
   static List<String> splitNames(String value) {
     final seen = <String>{};
     return [
-      for (final name in value.split(RegExp(r'[,、，\n]')).map((s) => s.trim()))
+      for (final name in value.split(RegExp(r'[,、，\r\n]')).map((s) => s.trim()))
         if (name.isNotEmpty && seen.add(name)) name,
     ];
   }
@@ -320,7 +320,10 @@ class NewProjectRequest {
   /// 本体の受付形式に合わない内容の理由。問題なければnull。
   String? get formatError {
     bool bad(String s, int max) =>
-        s.isEmpty || s.length > max || s.trim() != s || s.contains('\n');
+        s.isEmpty ||
+        s.length > max ||
+        s.trim() != s ||
+        s.contains(RegExp(r'[\r\n]'));
     if (!newProjectIdPattern.hasMatch(projectId)) return 'プロジェクトIDが不正です。';
     if (bad(title, 200)) return '名前は1〜200文字で入力してください。';
     if (aliases.length > 50 || aliases.any((a) => bad(a, 100))) {
@@ -332,10 +335,33 @@ class NewProjectRequest {
     if (firstMemo.length > 8000 || utf8.encode(firstMemo).length > 32000) {
       return '最初のメモは8000文字までで入力してください。';
     }
+    // 本体が読む受付ファイルの上限（本文の上限×4+8192バイト）。受付ID・出典・日時の分を見込んで判定する。
+    final header = {
+      'schema_version': 1,
+      'request_id': 'REQ-${'0' * 32}',
+      'source': 'flutter-client/${'0' * 36}',
+      'occurred_at': '0000-00-00T00:00:00.000000Z',
+      ...fields,
+    };
+    if (utf8.encode('---\n${jsonEncode(header)}\n---\n$firstMemo').length >
+        40192) {
+      return '名前・別名・キーワードと最初のメモを合わせた量が多すぎます。減らしてください。';
+    }
     return null;
   }
 
-  /// 名前・別名が、既存のプロジェクトや作成依頼中のプロジェクトと重なる場合の理由。本体と同じ判定。
+  /// 受付ファイルの項目。本文は最初のメモ。
+  Map<String, dynamic> get fields => {
+    'operation': 'project-create',
+    'project_id': projectId,
+    'title': title,
+    'aliases': aliases,
+    'keywords': keywords,
+    'confirmed': true,
+  };
+
+  /// 名前・別名が、既存のプロジェクトや作成依頼中のプロジェクトと重なる場合の理由。
+  /// 既存プロジェクトとの判定は本体（NFKC・小文字化）に合わせ、作成依頼中のものは名前だけを見る。
   String? overlapError(
     Iterable<HubProject> projects,
     Iterable<PendingProjectCreation> pending,

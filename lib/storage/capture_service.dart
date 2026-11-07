@@ -276,14 +276,7 @@ class CaptureService {
         if (!_uuid.hasMatch(request.operationId) || problem != null) {
           throw FormatException(problem ?? '操作IDが不正です。');
         }
-        final fields = <String, dynamic>{
-          'operation': 'project-create',
-          'project_id': request.projectId,
-          'title': request.title,
-          'aliases': request.aliases,
-          'keywords': request.keywords,
-          'confirmed': true,
-        };
+        final fields = request.fields;
         return _saveRequest(
           request.operationId,
           digest(jsonEncode([fields, request.firstMemo])),

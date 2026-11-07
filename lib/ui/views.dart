@@ -2110,6 +2110,7 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
   );
 
   Future<void> submit() async {
+    if (busy) return;
     final r = request, repo = widget.controller.repository;
     final problem =
         r.formatError ??
@@ -2135,8 +2136,12 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
       if (mounted) {
         setState(() {
           error = HubController.message(e);
-          // 保存前に止まった場合（重なり・形式）は直して送り直せるようにする。
-          if (result == null) locked = false;
+          // 依頼の記録（journal）を作る前に止まった場合（重なり・形式・状態）だけ、直して送り直せるようにする。
+          // 記録後に結果が不明になった場合は、同じ内容・同じ操作IDで確認する。
+          final journaled = widget.controller.pending.any(
+            (p) => p.operationId == operation,
+          );
+          if (result == null && !journaled) locked = false;
         });
       }
     } finally {

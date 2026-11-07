@@ -885,6 +885,7 @@ class HubRepository {
           throw const FormatException();
         }
         String? conflictProject;
+        var acceptedMemo = false;
         if (conflictResolve) {
           final target = m['target'];
           conflictProject = target is String
@@ -1060,6 +1061,7 @@ class HubRepository {
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
+              acceptedMemo = r['memoInputId'] is String;
             }
             if (draftDismiss) {
               final r = ack['result'] as Map;
@@ -1150,11 +1152,14 @@ class HubRepository {
               conflict?.nowHash == m['target_hash']) {
             _outstandingConflicts[conflictProject] = item.id;
           } else if (item.state == 'accepted') {
-            if (conflict != null) {
+            // 確認したNOWのままなら同期待ち。片付け後に新しく止まったNOWは、別の競合として扱う。
+            if (conflict != null && conflict.nowHash == m['target_hash']) {
               _outstandingConflicts[conflictProject] = item.id;
               item.detail = 'Mini受領済み。NOWの同期を待っています。';
             } else {
-              item.detail = 'NOWを生成版に戻しました。手で変えた行はメモとして残っています。';
+              item.detail = acceptedMemo
+                  ? 'NOWを生成版に戻しました。手で変えた行はメモとして残っています。'
+                  : 'NOWを生成版に戻しました。';
             }
           }
         }

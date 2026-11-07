@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -57,7 +58,11 @@ void main() {
     final id = newProjectId(DateTime.utc(2026, 11, 7), Random(1));
     expect(newProjectIdPattern.hasMatch(id), isTrue, reason: id);
     expect(id, startsWith('project-01'));
-    expect(NewProjectRequest.splitNames(' 菜園, 畑、 菜園\n野菜 ,'), ['菜園', '畑', '野菜']);
+    expect(NewProjectRequest.splitNames(' 菜園, 畑、 菜園\r\n野菜 ,'), [
+      '菜園',
+      '畑',
+      '野菜',
+    ]);
     final repo = HubRepository(fixture());
     NewProjectRequest req(String title, [List<String> aliases = const []]) =>
         NewProjectRequest(
@@ -71,6 +76,18 @@ void main() {
     expect(req(' 前後 ').formatError, isNotNull);
     expect(req('a' * 201).formatError, isNotNull);
     expect(req('家庭菜園', List.generate(51, (i) => 'a$i')).formatError, isNotNull);
+    expect(req('家庭\r菜園').formatError, isNotNull);
+    expect(req('家庭菜園', ['菜\r園']).formatError, isNotNull);
+    // 各項目が上限内でも、受付ファイル全体が本体の読込上限を超える依頼は保存しない。
+    final big = NewProjectRequest(
+      operationId: createOp,
+      projectId: id,
+      title: '家庭菜園',
+      aliases: List.generate(50, (i) => '別$i${'名' * 90}'),
+      keywords: List.generate(50, (i) => '語$i${'語' * 90}'),
+      firstMemo: 'メ' * 8000,
+    );
+    expect(big.formatError, contains('多すぎます'));
     expect(req('家庭菜園').overlapError(repo.projects.values, const []), isNull);
     // 全角・大文字の違いは同じ名前として扱う（本体と同じNFKC・小文字化）。
     expect(
@@ -202,15 +219,12 @@ void main() {
         ).conflictRequestIdFor('context-hub'),
         saved.requestId,
       );
-      final synced = HubRepository(
-        fixture(
-          await runNode([
-            'ingest',
-            access.request(location, saved.requestId).path,
-            (await writeFixture(access.directory, 'conflict', files)).path,
-          ], access.directory),
-        ),
-      );
+      final syncedFiles = await runNode([
+        'ingest',
+        access.request(location, saved.requestId).path,
+        (await writeFixture(access.directory, 'conflict', files)).path,
+      ], access.directory);
+      final synced = HubRepository(fixture(syncedFiles));
       expect(synced.warnings, isEmpty);
       final restored = synced.projects['context-hub']!;
       expect(restored.nowConflict, isNull);
@@ -227,6 +241,20 @@ void main() {
       );
       expect(memo, hasLength(1));
       expect(memo.single.metadata['project'], 'context-hub');
+      // 片付け後に手で書き換えて新しく止まったNOWは、受理済みの依頼とは別の競合として戻す操作を出す。
+      final again = HubRepository(
+        fixture({
+          ...syncedFiles,
+          nowPath: syncedFiles[nowPath]!.replaceFirst(
+            '- サンプルの検索を確認する。',
+            '- また手で直した。',
+          ),
+          '90_system/conflicts/NOW.context-hub.01JZ0000000000000000000000.md':
+              syncedFiles[nowPath]!,
+        }),
+      );
+      expect(again.projects['context-hub']!.nowConflict, isNotNull);
+      expect(again.conflictRequestIdFor('context-hub'), isNull);
     } finally {
       await access.directory.delete(recursive: true);
     }
@@ -336,5 +364,27 @@ void main() {
     final id = create.meta['project_id'] as String;
     expect(find.byKey(Key('pending-project-$id')), findsOneWidget);
     expect(find.text('作成依頼中'), findsOneWidget);
+
+    // 別の操作の保存確認が残っている間は、新しい作成依頼を保存しない。
+    final before = access.requests.length;
+    c.pending = [const CaptureResult('other-op', 'REQ-other', 'unknown')];
+    Object? failure;
+    unawaited(
+      c
+          .requestProjectCreate(
+            NewProjectRequest(
+              operationId: createOp,
+              projectId: newProjectId(),
+              title: '別の新規',
+            ),
+          )
+          .then<void>((_) {}, onError: (Object e) => failure = e),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      failure,
+      isA<StateError>().having((e) => e.message, 'message', contains('保存確認待ち')),
+    );
+    expect(access.requests.length, before);
   });
 }

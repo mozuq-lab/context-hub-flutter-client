@@ -590,11 +590,17 @@ class HubController extends ChangeNotifier {
       final parsed = HubRepository(fresh);
       repository = parsed;
       _changed();
-      final overlap = request.overlapError(
-        parsed.projects.values,
-        parsed.pendingProjectCreations,
-      );
-      if (overlap != null) throw StateError(overlap);
+      if (pending.any((p) => p.operationId != request.operationId)) {
+        throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
+      }
+      // 保存結果が不明だった同じ依頼の確認では、自分自身を作成依頼中として重なりに数えない。
+      if (!pending.any((p) => p.operationId == request.operationId)) {
+        final overlap = request.overlapError(
+          parsed.projects.values,
+          parsed.pendingProjectCreations,
+        );
+        if (overlap != null) throw StateError(overlap);
+      }
       return await CaptureService(access, target).saveProjectCreate(request);
     } finally {
       saving = false;
