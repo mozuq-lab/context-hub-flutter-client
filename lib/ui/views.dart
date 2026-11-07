@@ -138,6 +138,18 @@ class _HubViewState extends State<HubView> {
   Widget build(BuildContext context) {
     if (widget.page == 'review') return ReviewView(controller: c);
     final children = <Widget>[];
+    if (repo.snapshot.limitReached) {
+      children.add(
+        const Padding(
+          key: Key('snapshot-limit'),
+          padding: EdgeInsets.only(bottom: 12),
+          child: NoticeBox(
+            'Vaultの記録が多く、アプリが一度に読める上限に達しました。一部の記録を読めていないため、整理済みのメモが「未整理」に見えたり、確認待ちの候補や方針が欠けたりすることがあります。文脈のコピーは止まります。Vaultの記録そのものは失われていません。',
+            error: true,
+          ),
+        ),
+      );
+    }
     for (final warning in repo.warnings) {
       children.add(
         Padding(

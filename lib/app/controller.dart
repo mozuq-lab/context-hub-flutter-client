@@ -173,11 +173,15 @@ class HubController extends ChangeNotifier {
       return;
     }
     final epoch = _epoch;
+    final previous = repository?.snapshot;
     loading = true;
     error = null;
     _changed();
     try {
-      final data = await access.readSnapshot(target);
+      // 表示の更新では、変わっていないファイルを読み直さない。
+      final data = previous == null
+          ? await access.readSnapshot(target)
+          : await access.refreshSnapshot(target, previous);
       if (epoch != _epoch) {
         return;
       }
