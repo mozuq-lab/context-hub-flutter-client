@@ -22,6 +22,8 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
         // 読む.md/.jsonの件数、走査する項目（フォルダー・対象外のファイルを含む）の件数、合計バイト数の上限。
         const val MAX_FILES = 20_000
         const val MAX_ENTRIES = 100_000
+        /** 更新時刻の粒度（FAT32は2秒）を見込んで、これより新しいファイルは差分読取で再利用しない。 */
+        const val RACY_MS = 3_000L
         const val MAX_TOTAL = 64L * 1_048_576
     }
     private val resolver = activity.contentResolver
@@ -93,6 +95,8 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
             return Entry(uri, c.getString(0), c.getString(1) == Docs.Document.MIME_TYPE_DIR)
         }
     }
+    /** フォルダーの項目数が読取の上限を超えた。 */
+    private class EntryLimit : Exception()
     private fun children(uri: Uri, limit: Int = MAX_ENTRIES): List<Entry> {
         val list = ArrayList<Entry>()
         resolver.query(Docs.buildChildDocumentsUriUsingTree(uri, Docs.getDocumentId(uri)),
@@ -100,7 +104,7 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                 Docs.Document.COLUMN_LAST_MODIFIED, Docs.Document.COLUMN_SIZE), null, null, null).use { c ->
             require(c != null)
             while (c.moveToNext()) {
-                require(list.size < limit)
+                if (list.size >= limit) throw EntryLimit()
                 val name = c.getString(1)
                 require(name.isNotEmpty() && !name.contains('/') && !name.contains('\\'))
                 val modified = if (c.isNull(3)) 0L else c.getLong(3)
@@ -164,11 +168,14 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
     /**
      * Vaultを読む。skipに挙げたパス（フォルダーまたはファイル）は数えず読まない。
      * knownに前回のstamp（更新時刻と大きさ）が一致するファイルは本文を読まずunchangedに返す。stampは読む前に取る。
+     * 更新時刻が読取開始の直前（RACY_MS以内）のファイルはstampを返さない。時刻の粒度が粗い保存先では、
+     * 同じ時刻のうちに同じ大きさで書き換えられても区別できないため、次回も本文を読み直す。
      */
     private fun snapshot(handle: String, skip: Set<String> = emptySet(), known: Map<String, String> = emptyMap()): Map<String, Any> {
         val files = linkedMapOf<String, String>(); val warnings = arrayListOf<String>()
         val unchanged = arrayListOf<String>(); val stamps = linkedMapOf<String, String>()
         var entries = 0; var count = 0; var total = 0L; var recognized = false
+        val started = System.currentTimeMillis()
         val limitWarning = "読取の上限（ファイル${MAX_FILES}件・合計64MB）に達したため、"
         fun over() = entries > MAX_ENTRIES || count > MAX_FILES || total > MAX_TOTAL
         fun add(path: String, stamp: String?, size: Long?, read: () -> String) {
@@ -182,7 +189,8 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                 val raw = read(); total += raw.toByteArray(Charsets.UTF_8).size
                 require(total <= MAX_TOTAL)
                 files[path] = raw
-                if (stamp != null) stamps[path] = stamp
+                val modified = stamp?.substringBefore(':')?.toLongOrNull()
+                if (stamp != null && modified != null && modified < started - RACY_MS) stamps[path] = stamp
             } catch (_: Exception) { warnings.add("読取できないファイル: $path") }
             require(total <= MAX_TOTAL)
         }
@@ -203,7 +211,9 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
         }
         fun visit(dir: Uri, prefix: String, depth: Int) {
             if (depth > 12) { warnings.add("深さの上限に達しました。"); return }
-            for (e in children(dir, MAX_ENTRIES - entries)) {
+            // 1つのフォルダーの項目数が上限を超えた場合も、読取の上限として扱う。
+            val list = try { children(dir, MAX_ENTRIES - entries) } catch (e: EntryLimit) { entries = MAX_ENTRIES + 1; throw e }
+            for (e in list) {
                 require(++entries <= MAX_ENTRIES)
                 if (e.name.startsWith('.') || e.name.endsWith(".tmp")) continue
                 val path = "$prefix/${e.name}"
@@ -233,17 +243,19 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                 catch (_: Exception) { warnings.add(limitWarning + name + "を読めませんでした。") }
             }
         } else {
-            for (e in children(tree(handle))) {
-                if (e.name in rootFiles) {
-                    if (count + 1 > MAX_FILES) warnings.add(limitWarning + e.name + "を読めませんでした。")
-                    else if (e.dir) warnings.add("${e.name}が通常ファイルではありません")
-                    else try { add(e.name, null, null) { text(resolver.openInputStream(e.uri) ?: error("読取不可")) } }
-                    catch (_: Exception) { warnings.add(limitWarning + e.name + "を読めませんでした。") }
-                    continue
-                }
+            val top = children(tree(handle))
+            for (e in top) {
                 if (e.name !in folders) continue
                 try { require(e.dir); recognized = true; visit(e.uri, e.name, 1) }
                 catch (_: Exception) { if (interrupted(e.name)) break }
+            }
+            // macOSと同じく、フォルダーの読取が上限で止まっても直下の方針・ふりかえりは読む。
+            for (e in top) {
+                if (e.name !in rootFiles) continue
+                if (count + 1 > MAX_FILES) warnings.add(limitWarning + e.name + "を読めませんでした。")
+                else if (e.dir) warnings.add("${e.name}が通常ファイルではありません")
+                else try { add(e.name, null, null) { text(resolver.openInputStream(e.uri) ?: error("読取不可")) } }
+                catch (_: Exception) { warnings.add(limitWarning + e.name + "を読めませんでした。") }
             }
         }
         return mapOf("files" to files, "warnings" to warnings, "recognized" to recognized, "unchanged" to unchanged, "stamps" to stamps)

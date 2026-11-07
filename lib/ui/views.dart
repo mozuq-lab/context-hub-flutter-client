@@ -1250,6 +1250,9 @@ class _CaptureDialogState extends State<CaptureDialog> {
   String? _draftKey;
   bool _ready = false, _keepDrafts = true, _finished = false;
 
+  /// 保存結果が不明な書きかけで、「同じ操作を確認」を一度でも行ったか。行うまでは書きかけを閉じられない。
+  bool _confirmedOnce = false;
+
   /// 戻した書きかけの日時。戻していなければnull。
   DateTime? _restoredAt;
   int _formGeneration = 0;
@@ -1375,6 +1378,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
       result = null;
       error = null;
       _restoredAt = null;
+      _confirmedOnce = false;
       _formGeneration++;
     });
   }
@@ -1448,7 +1452,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
       final r = await widget.controller.confirm(operation);
       await _settled(r);
       if (mounted) {
-        setState(() => result = r);
+        setState(() {
+          result = r;
+          _confirmedOnce = true;
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -1490,16 +1497,19 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             : '前回の書きかけを戻しました（${timeLabel(_restoredAt)}）。',
                         key: const Key('draft-restored'),
                       ),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          key: const Key('draft-discard'),
-                          onPressed: busy ? null : _discard,
-                          child: Text(
-                            locked ? '書きかけを閉じて新しく書く' : '書きかけを破棄して新しく書く',
+                      // 保存結果が不明なまま閉じた書きかけは、同じ操作を確かめてからでないと閉じられない。
+                      // 先に閉じると新しい操作IDで同じ内容を送り直しやすくなるため。
+                      if (!locked || _confirmedOnce)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: const Key('draft-discard'),
+                            onPressed: busy ? null : _discard,
+                            child: Text(
+                              locked ? '書きかけを閉じて新しく書く' : '書きかけを破棄して新しく書く',
+                            ),
                           ),
                         ),
-                      ),
                     ],
                     const SizedBox(height: 16),
                     TextField(

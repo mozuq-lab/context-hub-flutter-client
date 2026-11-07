@@ -9,7 +9,7 @@ source = Path('macos/Runner/VaultBridge.swift').read_text()
 members = []
 for prefix in ['  private let fm ', '  private let folders ', '  private let rootFiles ',
                '  private let maxFile ', '  private let maxFiles ', '  private let maxEntries ',
-               '  private let maxTotal ', '  private enum Failure:']:
+               '  private let maxTotal ', '  private let racyInterval ', '  private enum Failure:']:
     members.append(next(line for line in source.splitlines() if line.startswith(prefix)))
 for name in ['physical', 'identity', 'directory', 'read', 'syncDirectory', 'snapshot']:
     start = source.index('  private func ' + name + '(')
@@ -54,7 +54,14 @@ for count in [20000, 20001] {
 let skipping = try root("skip")
 try fm.createDirectory(at: skipping.appendingPathComponent("90_system/receipts/pending"), withIntermediateDirectories: true)
 try "{}".write(to: skipping.appendingPathComponent("90_system/receipts/pending/IN-A.json"), atomically: false, encoding: .utf8)
-try "{}".write(to: skipping.appendingPathComponent("90_system/receipts/IN-A.json"), atomically: false, encoding: .utf8)
+let receipt = skipping.appendingPathComponent("90_system/receipts/IN-A.json")
+try "{}".write(to: receipt, atomically: false, encoding: .utf8)
+let fresh = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"])
+check((fresh["stamps"] as! [String:String]).isEmpty, "書いた直後のファイルは差分読取で再利用しない")
+func age(_ url: URL, _ seconds: TimeInterval) throws {
+  try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-seconds)], ofItemAtPath: url.path)
+}
+try age(receipt, 60)
 let skippedResult = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"])
 check((skippedResult["files"] as! [String:String]).keys.sorted() == ["90_system/receipts/IN-A.json"], "除外したフォルダーは読まない")
 let stamps = skippedResult["stamps"] as! [String:String]
@@ -62,7 +69,11 @@ check(stamps["90_system/receipts/IN-A.json"] != nil, "読んだファイルの�
 let again = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"], known: stamps)
 check((again["files"] as! [String:String]).isEmpty, "変わっていないファイルは本文を返さない")
 check((again["unchanged"] as! [String]) == ["90_system/receipts/IN-A.json"], "変わっていないファイルを示す")
-try "{\\"changed\\":true}".write(to: skipping.appendingPathComponent("90_system/receipts/IN-A.json"), atomically: false, encoding: .utf8)
+try age(receipt, 30)
+let touched = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"], known: stamps)
+check((touched["files"] as! [String:String])["90_system/receipts/IN-A.json"] == "{}", "大きさが同じでも更新時刻が変わったファイルは読み直す")
+try "{\\"changed\\":true}".write(to: receipt, atomically: false, encoding: .utf8)
+try age(receipt, 10)
 let changed = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"], known: stamps)
 check((changed["files"] as! [String:String])["90_system/receipts/IN-A.json"] == "{\\"changed\\":true}", "変わったファイルは読み直す")
 let capacity = try root("capacity")

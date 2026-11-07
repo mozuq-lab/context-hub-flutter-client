@@ -16,6 +16,8 @@ final class VaultBridge {
   private let maxFiles = 20_000
   private let maxEntries = 100_000
   private let maxTotal = 64 * 1_048_576
+  /// 更新時刻の粒度（HFS+は1秒、FAT32は2秒）を見込んで、これより新しいファイルは差分読取で再利用しない。
+  private let racyInterval: TimeInterval = 3
   private enum Failure: Error { case invalid, io }
 
   init(_ messenger: FlutterBinaryMessenger) {
@@ -156,9 +158,12 @@ final class VaultBridge {
   }
   /// Vaultを読む。skipに挙げたパス（フォルダーまたはファイル）は数えず読まない。
   /// knownに前回の更新時刻と大きさ（stamp）が一致するファイルは本文を読まずunchangedに返す。stampは読む前に取る。
+  /// 更新時刻が読取開始の直前（racyInterval以内）のファイルはstampを返さない。時刻の粒度が粗い保存先では、
+  /// 同じ時刻のうちに同じ大きさで書き換えられても区別できないため、次回も本文を読み直す。
   private func snapshot(_ root: URL, skip: Set<String> = [], known: [String: String] = [:]) throws -> [String: Any] {
     var files = [String: String](); var warnings = [String](); var unchanged = [String](); var stamps = [String: String]()
     var entries = 0; var count = 0; var total = 0; var recognized = false
+    let settled = Date().addingTimeInterval(-racyInterval)
     let limitWarning = "読取の上限（ファイル\(maxFiles)件・合計64MB）に達したため、"
     func over() -> Bool { entries > maxEntries || count > maxFiles || total > maxTotal }
     func visit(_ dir: URL, _ prefix: String, _ depth: Int) throws {
@@ -177,7 +182,7 @@ final class VaultBridge {
         count += 1
         if count > maxFiles { throw Failure.invalid }
         var stamp: String? = nil
-        if let date = values.contentModificationDate, let size = values.fileSize {
+        if let date = values.contentModificationDate, date < settled, let size = values.fileSize {
           stamp = "\(Int64(date.timeIntervalSince1970 * 1000)):\(size)"
         }
         if let stamp = stamp, let size = values.fileSize, known[path] == stamp {

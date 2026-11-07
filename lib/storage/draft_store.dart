@@ -68,14 +68,17 @@ class DraftStore {
   static const budget = 60 * 1024;
 
   Map<String, WritingDraft>? _drafts;
+  Future<void>? _loading;
   bool _enabled = true;
   Future<void> _tail = Future.value();
 
   static String keyFor(String identity, {String? gitDraftId}) =>
       '$identity\u001f${gitDraftId == null ? 'memo' : 'git:$gitDraftId'}';
 
-  Future<void> _load() async {
-    if (_drafts != null) return;
+  /// 読込は1回だけ行い、同時の呼び出しは同じ読込を待つ。
+  Future<void> _load() => _loading ??= _read();
+
+  Future<void> _read() async {
     final drafts = <String, WritingDraft>{};
     try {
       final raw = await access.readState(fileName);
@@ -103,7 +106,8 @@ class DraftStore {
 
   Future<WritingDraft?> read(String key) async {
     await _load();
-    return _enabled ? _drafts![key] : null;
+    final draft = _drafts![key];
+    return _enabled || draft?.operationId != null ? draft : null;
   }
 
   Future<void> write(String key, WritingDraft draft) => _serial(() async {
@@ -121,12 +125,24 @@ class DraftStore {
     _drafts!.remove(key);
   });
 
-  /// 書きかけを残すかどうか。残さない場合は、この端末の書きかけをすべて消す。
+  /// 書きかけを残すかどうか。残さない場合は、この端末の書きかけの本文をすべて消す。
+  /// ただし保存結果が不明な操作は、同じ操作の確認へ戻れるように操作IDだけを残す。
   Future<void> setEnabled(bool value) => _serial(() async {
     await _load();
     _enabled = value;
-    if (!value) _drafts!.clear();
+    if (value) return;
+    _drafts!.removeWhere((_, d) => d.operationId == null);
+    _drafts!.updateAll((_, d) => _withoutText(d));
   });
+
+  static WritingDraft _withoutText(WritingDraft d) => WritingDraft(
+    text: '',
+    kind: d.kind,
+    project: d.project,
+    gitDraftHash: d.gitDraftHash,
+    operationId: d.operationId,
+    updatedAt: d.updatedAt,
+  );
 
   Future<void> _serial(Future<void> Function() change) {
     final next = _tail.then((_) async {
@@ -145,16 +161,33 @@ class DraftStore {
 
   Future<void> _flush() async {
     var raw = _encode();
-    final order = _drafts!.keys.toList()
-      ..sort(
-        (a, b) => _drafts![a]!.updatedAt.compareTo(_drafts![b]!.updatedAt),
-      );
-    // 新しい書きかけを残すため、容量を超える間は古いものから捨てる。
-    while (utf8.encode(raw).length > budget && order.length > 1) {
-      _drafts!.remove(order.removeAt(0));
+    bool over() => utf8.encode(raw).length > budget;
+    List<String> oldest(bool Function(WritingDraft) test) => [
+      for (final e in _drafts!.entries)
+        if (test(e.value)) e.key,
+    ]..sort((a, b) => _drafts![a]!.updatedAt.compareTo(_drafts![b]!.updatedAt));
+    // 容量を超える間は、まず保存を試みていない書きかけを古いものから捨てる（最新の1件は残す）。
+    final plain = oldest((d) => d.operationId == null);
+    final all = oldest((_) => true);
+    final newest = all.isEmpty ? null : all.last;
+    plain.remove(newest);
+    while (over() && plain.isNotEmpty) {
+      _drafts!.remove(plain.removeAt(0));
       raw = _encode();
     }
-    if (utf8.encode(raw).length > budget) return;
+    // 保存結果が不明な書きかけは捨てない。足りなければ本文だけを外し、同じ操作の確認へ戻れるようにする。
+    for (final key in oldest(
+      (d) => d.operationId != null && d.text.isNotEmpty,
+    )) {
+      if (!over()) break;
+      _drafts![key] = _withoutText(_drafts![key]!);
+      raw = _encode();
+    }
+    if (over() && newest != null && _drafts![newest]?.operationId == null) {
+      _drafts!.remove(newest);
+      raw = _encode();
+    }
+    if (over()) return;
     try {
       await access.writeState(fileName, raw);
     } catch (_) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,16 @@ import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'fixtures.dart';
 import 'widget_test.dart' show MemoryUIAccess;
+
+/// Inputへの書き込みを止めておけるアクセス。
+class BlockingAccess extends MemoryUIAccess {
+  Completer<void>? gate;
+  @override
+  Future<void> writeRequest(VaultLocation l, String id, String raw) async {
+    await gate?.future;
+    await super.writeRequest(l, id, raw);
+  }
+}
 
 /// 書き込み後に応答が失われ、確認の読取もできない（保存結果が不明になる）アクセス。
 class LosingAccess extends MemoryUIAccess {
@@ -102,6 +113,65 @@ void main() {
       final again = DraftStore(access);
       expect(await again.read(DraftStore.keyFor('v0')), isNull);
       expect(await again.read(DraftStore.keyFor('v3')), isNotNull);
+    });
+
+    test('容量が足りなくても保存結果が不明な書きかけは捨てず、本文だけを外す', () async {
+      final access = MemoryUIAccess();
+      final store = DraftStore(access);
+      final long = 'あ' * 8000;
+      final base = DateTime.utc(2026, 11, 1);
+      final locked = DraftStore.keyFor('locked');
+      await store.write(locked, draft(long, at: base, op: 'op-1'));
+      await store.write(
+        DraftStore.keyFor('old'),
+        draft(long, at: base.add(const Duration(hours: 1))),
+      );
+      await store.write(
+        DraftStore.keyFor('a'),
+        draft(long, at: base.add(const Duration(hours: 2))),
+      );
+      final again = DraftStore(access);
+      // 保存を試みていない古い書きかけを先に捨て、保存結果が不明な書きかけは本文ごと残る。
+      expect(await again.read(DraftStore.keyFor('old')), isNull);
+      expect((await again.read(locked))!.text.length, 8000);
+      // 保存結果が不明な書きかけが2件と最新の書きかけで容量を超えると、古い方の本文だけを外す。
+      await store.write(
+        DraftStore.keyFor('locked2'),
+        draft(long, at: base.add(const Duration(hours: 3)), op: 'op-2'),
+      );
+      await store.write(
+        DraftStore.keyFor('c'),
+        draft(long, at: base.add(const Duration(hours: 4))),
+      );
+      final last = DraftStore(access);
+      final kept = await last.read(locked);
+      expect(kept!.operationId, 'op-1');
+      expect(kept.text.isEmpty, isTrue);
+      expect(
+        (await last.read(DraftStore.keyFor('locked2')))!.text.length,
+        8000,
+      );
+      expect(await last.read(DraftStore.keyFor('a')), isNull);
+      expect(await last.read(DraftStore.keyFor('c')), isNotNull);
+      expect(
+        utf8.encode(access.states[DraftStore.fileName]!).length,
+        lessThanOrEqualTo(DraftStore.budget),
+      );
+    });
+
+    test('残さない設定でも、保存結果が不明な操作は本文を消して操作IDだけを残す', () async {
+      final access = MemoryUIAccess();
+      final store = DraftStore(access);
+      final key = DraftStore.keyFor('v'), memo = DraftStore.keyFor('w');
+      await store.write(key, draft('送った内容', op: 'op-1'));
+      await store.write(memo, draft('途中'));
+      await store.setEnabled(false);
+      final again = DraftStore(access);
+      expect(await again.read(memo), isNull);
+      final kept = await again.read(key);
+      expect(kept!.operationId, 'op-1');
+      expect(kept.text, isEmpty);
+      expect(access.states[DraftStore.fileName], isNot(contains('送った内容')));
     });
 
     test('残さない設定にすると書きかけを消し、以後も残さない', () async {
@@ -213,6 +283,45 @@ void main() {
     expect(find.text('この端末のInputに保存しました'), findsOneWidget);
     expect(access.writes, 1);
     expect(access.states[DraftStore.fileName], isNot(contains('結果不明のメモ')));
+  });
+
+  testWidgets('保存を始める前に、操作IDを書きかけへ残す', (tester) async {
+    final access = BlockingAccess()..gate = Completer<void>();
+    await openSample(tester, access);
+    await openForm(tester);
+    await tester.enterText(find.byKey(const Key('memo-text')), '保存中のメモ');
+    await tester.tap(find.byKey(const Key('save-memo')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    final raw = jsonDecode(access.states[DraftStore.fileName]!) as Map;
+    final stored = (raw['drafts'] as Map).values.single as Map;
+    expect(stored['t'], '保存中のメモ');
+    expect(stored['o'], isA<String>());
+    access.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+  });
+
+  testWidgets('保存結果が不明な書きかけは、同じ操作を確認するまで閉じられない', (tester) async {
+    final access = LosingAccess()..lose = true;
+    await openSample(tester, access);
+    await openForm(tester);
+    await tester.enterText(find.byKey(const Key('memo-text')), 'まだ不明なメモ');
+    await tester.tap(find.byKey(const Key('save-memo')));
+    await tester.pumpAndSettle();
+    await closeForm(tester);
+
+    await openForm(tester);
+    expect(find.byKey(const Key('draft-restored')), findsOneWidget);
+    expect(find.byKey(const Key('draft-discard')), findsNothing);
+    await tester.tap(find.byKey(const Key('confirm-same')));
+    await tester.pumpAndSettle();
+    // 確認しても結果が分からないときは、書きかけを閉じて新しく書ける。
+    expect(find.byKey(const Key('draft-discard')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('draft-discard')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('save-memo')), findsOneWidget);
+    expect(access.writes, 1);
   });
 
   testWidgets('受付状況で保存が確かめられた書きかけは戻さない', (tester) async {
