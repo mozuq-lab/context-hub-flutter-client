@@ -10,6 +10,7 @@ import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
 import '../core/models.dart';
 import '../core/parser.dart' show clip;
+import '../ai/guided_services.dart';
 
 class ReviewConfirmation {
   ReviewConfirmation(
@@ -56,9 +57,16 @@ class ProjectChanges {
 }
 
 class HubController extends ChangeNotifier {
-  HubController(this.access, {required this.sampleLoader});
+  HubController(
+    this.access, {
+    required this.sampleLoader,
+    GuidedServices? guided,
+  }) : guidedServices = guided ?? GuidedServices.native();
   final VaultAccess access;
   final Future<Map<String, String>> Function() sampleLoader;
+
+  /// 選んで深掘りが使うClaude APIとAPIキーの保管場所。使うときだけ呼ぶ。
+  final GuidedServices guidedServices;
   VaultLocation? location;
   HubRepository? repository;
   ReviewRepository? get review => repository?.review;

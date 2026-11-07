@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 選んで深掘りで、本人が設定したAPIキーを使ってClaude APIへ問いとまとめの作成を依頼するため。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="ContextHub Flutter"
         android:allowBackup="false"

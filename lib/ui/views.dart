@@ -10,6 +10,7 @@ import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
 import 'markdown_view.dart';
 import 'review_view.dart';
+import 'guided_view.dart';
 
 void notice(BuildContext context, String text) =>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -1316,6 +1317,14 @@ class _HubViewState extends State<HubView> {
             onPressed: editable ? () => changeDefinition(project) : null,
             icon: const Icon(Icons.label_outline, size: 18),
             label: const Text('呼び名とキーワード'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('project-guided'),
+            onPressed: c.loading || c.captureWarning != null
+                ? null
+                : () => showGuided(context, c, project: project.id),
+            icon: const Icon(Icons.checklist, size: 18),
+            label: const Text('このプロジェクトで深掘り'),
           ),
           OutlinedButton.icon(
             key: const Key('copy-context'),

@@ -1,6 +1,7 @@
 import Cocoa
 import FlutterMacOS
 import Darwin
+import Security
 
 final class VaultBridge {
   private let fm = FileManager.default
@@ -9,8 +10,10 @@ final class VaultBridge {
   private let folders = ["00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system"]
   /// Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
   private let rootFiles = ["POLICY.md", "REVIEW.md"]
-  /// 操作journal以外の状態ファイル。保存先の設定と、端末に残す書きかけのメモ。
-  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json"]
+  /// 操作journal以外の状態ファイル。保存先の設定、端末に残す書きかけのメモ、選んで深掘りの途中の状態。
+  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json", "guided.json"]
+  /// キーチェーンに置く秘密の名前。選んで深掘りで使うClaudeのAPIキーだけ。
+  private let secretNames: Set<String> = ["anthropic-api-key"]
   private let maxFile = 1_048_576
   /// 読む.md/.jsonの件数、走査する項目（フォルダー・対象外のファイルを含む）の件数、合計バイト数の上限。
   private let maxFiles = 20_000
@@ -228,8 +231,48 @@ final class VaultBridge {
     }
     return ["files": files, "warnings": warnings, "recognized": recognized, "unchanged": unchanged, "stamps": stamps]
   }
+  /// キーチェーン（ログインキーチェーン）の汎用パスワード項目。サービス名はアプリで固定し、名前で区別する。
+  /// 自分でビルドしたアプリでも使えるよう、署名の共有グループが要るデータ保護キーチェーンは使わない。
+  private func secretQuery(_ name: String) throws -> [String: Any] {
+    guard secretNames.contains(name) else { throw Failure.invalid }
+    return [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.mozuqlab.contexthub",
+            kSecAttrAccount as String: name]
+  }
   private func invoke(_ method: String, _ args: [String: Any]) throws -> Any? {
     switch method {
+    case "readSecret":
+      guard let name = args["name"] as? String else { throw Failure.invalid }
+      var query = try secretQuery(name)
+      query[kSecReturnData as String] = true
+      query[kSecMatchLimit as String] = kSecMatchLimitOne
+      var item: CFTypeRef?
+      let status = SecItemCopyMatching(query as CFDictionary, &item)
+      if status == errSecItemNotFound { return nil }
+      guard status == errSecSuccess, let data = item as? Data,
+            let value = String(data: data, encoding: .utf8) else { throw Failure.io }
+      return value
+    case "writeSecret":
+      guard let name = args["name"] as? String, let value = args["value"] as? String,
+            !value.isEmpty, value.utf8.count <= 4096 else { throw Failure.invalid }
+      let query = try secretQuery(name)
+      let data = Data(value.utf8)
+      let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+      if status == errSecItemNotFound {
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrLabel as String] = "ContextHub Flutter: Claude API key"
+        guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw Failure.io }
+      } else if status != errSecSuccess {
+        throw Failure.io
+      }
+      return nil
+    case "deleteSecret":
+      guard let name = args["name"] as? String else { throw Failure.invalid }
+      let query = try secretQuery(name)
+      let status = SecItemDelete(query as CFDictionary)
+      guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.io }
+      return nil
     case "sampleVault":
       guard let files = args["files"] as? [String: String], files.count <= 5000 else { throw Failure.invalid }
       guard files.values.reduce(0, { $0 + $1.utf8.count }) <= 64 * maxFile else { throw Failure.invalid }

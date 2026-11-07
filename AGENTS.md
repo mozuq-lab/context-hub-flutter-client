@@ -15,12 +15,14 @@
 - 生HTML・外部画像を実行/取得しない。内部リンクは取得済みの記録だけ、外部http(s)は明示操作のみ。
 - fixtureはサンプル/一時Vaultのみ。回帰はRED→GREEN。flutter analyze、flutter test、両OSのbuild、実アプリ検証を行い、未検証を明記する。
 - 実Vault書込、モデル課金、環境設定/常駐サービス変更、公開・pushは別途対象と影響を示して承認を得る。可逆な開発とサンプル検証は継続する。
+- ネットワークへ接続するのは選んで深掘りだけで、本人が登録したAPIキーでClaude APIを呼ぶ。呼び出しは`lib/ai/`に閉じ、ほかの機能から使わない。テストは偽の`ModelClient`・`HttpTransport`・`SecretStore`を使い、実APIを呼ばない（実際の呼び出しはモデル課金にあたる）。APIキーをVault・状態ファイル・ログ・エラー表示に出さない。
 - ツールが生成する設計・実装計画・途中レビュー・進捗ログなどの中間成果物は `.agent-work/` などのGit対象外領域へ保存し、コミットしません。`docs/superpowers/`・`docs/reviews/`・作業用の計画/判断ログも公開対象外です。README・利用手順・構成説明・現在の制限・最終的な検証状況は公開資料として整え、途中経過を残しません。
 
 ## コード構成
 
-- `lib/core/`: 上限付きsnapshotのMarkdown/frontmatter・receipt・訂正の読取、検索、context、候補一覧と方針の読取。
-- `lib/storage/`: OSアクセス契約、本文を含まない操作journal、固定REQ IDによる保存確認、候補の採用・却下・適用停止要求の保存。
+- `lib/core/`: 上限付きsnapshotのMarkdown/frontmatter・receipt・訂正の読取、検索、context、候補一覧と方針の読取、選んで深掘りの依頼の組み立てと出力の検証（`guided.dart`）。
+- `lib/ai/`: 選んで深掘りのClaude API呼び出し（HTTPS）と、テストで差し替える外部とのやり取りの束ね（`GuidedServices`）。
+- `lib/storage/`: OSアクセス契約、本文を含まない操作journal、固定REQ IDによる保存確認、候補の採用・却下・適用停止要求の保存、選んで深掘りの途中の状態（`guided.json`）とAPIキーの保管。
 - `lib/app/` / `lib/ui/`: 共通画面、Vault切替の応答管理、安全なMarkdownリンク。
 - `macos/Runner/VaultBridge.swift` / `android/app/src/main/kotlin/.../VaultBridge.kt`: 限定されたネイティブアクセス（MethodChannel）。
 - `vendor/context-hub`: 本体の公開commitをsubmoduleで固定。protocol検査とfixture生成に使う。
