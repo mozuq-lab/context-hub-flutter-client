@@ -26,10 +26,16 @@ NOWの自動領域が手で書き換えられ、本体が新版を`90_system/con
 
 MacはNOFOLLOW・排他公開・file/dir fsyncを使います。保存先識別はbookmarkのバイトと分け、volume UUID（取得不可時はdevice番号）とinodeを使います。フォルダーのコピーは別Vaultです。AndroidのjournalはO_EXCLとfile/dir fsync、SAFのInputは一時ファイル・fsync・rename・本文readbackを使います。
 
+## 選んで深掘り
+
+`lib/core/guided.dart`が、Claude APIへ送る依頼の組み立てと出力の検証、`lib/ai/claude_client.dart`がMessages APIへのHTTPS送信、`lib/app/guided_controller.dart`が進行（開始・回答・戻る・まとめ・保存）を担当します。1回の呼び出しでは、深掘りの間変わらない資料（キャッシュの印付き）と、目的・きっかけ・それまでの問答を1つのメッセージにまとめて送り、会話の履歴は持ちません。プロジェクトの名前とIDは、資料を送るときだけ依頼に入れます。出力はJSON Schemaで形を決め（構造化出力）、選択肢の数・長さ・画面に常にある操作との重なりを検証して、使えない出力は理由を添えて1回だけ作り直します。応答の打ち切り（`refusal`・`max_tokens`）やHTTPの失敗は、APIキーを含まない案内にします。安全上の理由での辞退は、サーバー側の代替（`fallbacks: "default"`）で別のモデルが答えることがあります。
+
+まとめは目的ごとの見出しのMarkdownに書き直し、問答の記録（AIの選択肢から選んだ答えと本人の言葉を区別）はアプリが決まった形で付けます。保存は通常のメモ（`operation: capture`、`kind: memo`）で、`meta`に`capture_mode`・`guided_purpose`・`guided_questions`・`guided_model`・`guided_context`を文字列で付けます（本体の入力形式に合わせる）。操作ID・journal・保存結果が不明なときの確認は、メモの追加と同じです。途中の状態は`guided.json`（深掘り1件・今月の利用・月の上限）に残し、操作journalとしては扱いません。APIキーはネイティブの`readSecret`・`writeSecret`・`deleteSecret`（名前は`anthropic-api-key`だけ）で、Macはキーチェーン、AndroidはAndroid Keystoreの鍵で暗号化したファイルに保管します。キーは深掘りの画面を開いたときに読み、閉じるまで`GuidedController`のメモリに持ちます。読み出せないとき（キーチェーンでの拒否など）は、キーがないときと分けて案内します。別のVaultで保存結果が不明な深掘りが残っている間は、本人が破棄を選ぶまで新しく始めません。
+
 ## OSと運用の範囲
 
 対象はApple SiliconのmacOS 12以降とAndroidです。Macのsecurity-scoped bookmark、AndroidのローカルExternalStorageProviderのSAF権限を利用します。全ストレージ権限・クラウドprovider・SQLite・新規サーバーは利用しません。
 
-同期・モデル・Gateway・常駐サービスをアプリから操作しません。Macのbundle IDは `com.mozuqlab.contexthub.flutter`、Androidは `com.mozuqlab.context_hub_client` です。
+同期・モデル・Gateway・常駐サービスをアプリから操作しません。ネットワークへの接続は、選んで深掘りのClaude APIへの依頼だけです。Macのbundle IDは `com.mozuqlab.contexthub.flutter`、Androidは `com.mozuqlab.context_hub_client` です。
 
 OSフォルダー選択と再起動後の権限保持、実端末・実同期などの確認範囲は[検証状況](verification.md)、データ保全と復旧は[SECURITY.md](../SECURITY.md)を参照してください。

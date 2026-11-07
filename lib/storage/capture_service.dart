@@ -13,11 +13,15 @@ class CaptureDraft {
     this.project,
     this.gitDraftId,
     this.gitDraftHash,
+    this.meta,
   });
   final String operationId;
   final String text;
   final String kind;
   final String? project;
+
+  /// 入力に付ける補足（選んで深掘りの目的・問数など）。作業記録の下書きの入力とは同時に使わない。
+  final Map<String, String>? meta;
 
   /// 作業記録の下書きから作った入力なら、その下書きID。本体は使用済みとして扱う。
   final String? gitDraftId;
@@ -139,7 +143,11 @@ class CaptureService {
   }
 
   /// 操作journalとして扱わない状態ファイル。
-  static const nonJournalStates = {'settings.json', 'drafts.json'};
+  static const nonJournalStates = {
+    'settings.json',
+    'drafts.json',
+    'guided.json',
+  };
   Future<List<String>> _journalNames() async => [
     for (final name in await access.listJournals())
       if (!nonJournalStates.contains(name)) name,
@@ -186,9 +194,17 @@ class CaptureService {
             ).hasMatch(draft.gitDraftId!)) ||
         (draft.gitDraftId != null) != (draft.gitDraftHash != null) ||
         (draft.gitDraftHash != null &&
-            !RegExp(r'^[a-f0-9]{64}$').hasMatch(draft.gitDraftHash!))) {
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(draft.gitDraftHash!)) ||
+        (draft.meta != null && !_validMeta(draft.meta!, draft.gitDraftId))) {
       throw const FormatException('本文は1〜8000文字、種別とprojectは有効な値を指定してください。');
     }
+    // 本体の入力形式と同じく、キーの順を固定して記録とfingerprintを決める。
+    final meta = draft.meta == null
+        ? null
+        : {
+            for (final k in draft.meta!.keys.toList()..sort())
+              k: draft.meta![k]!,
+          };
     return _saveRequest(
       draft.operationId,
       digest(
@@ -198,6 +214,10 @@ class CaptureService {
           draft.project,
           if (draft.gitDraftId != null) draft.gitDraftId,
           if (draft.gitDraftHash != null) draft.gitDraftHash,
+          if (meta != null)
+            [
+              for (final e in meta.entries) [e.key, e.value],
+            ],
         ]),
       ),
       {
@@ -209,11 +229,26 @@ class CaptureService {
           'meta': {
             'git_draft': draft.gitDraftId,
             'git_draft_hash': draft.gitDraftHash,
-          },
+          }
+        else
+          'meta': ?meta,
       },
       draft.text,
     );
   });
+
+  /// metaは本体の入力形式（キー100字・値2000字の文字列）に収め、本体が意味を持つ下書きのキーは使わない。
+  static bool _validMeta(Map<String, String> meta, String? gitDraftId) =>
+      gitDraftId == null &&
+      meta.isNotEmpty &&
+      meta.length <= 20 &&
+      meta.entries.every(
+        (e) =>
+            RegExp(r'^[a-z][a-z0-9_]{0,99}$').hasMatch(e.key) &&
+            !e.key.startsWith('git_draft') &&
+            e.value.isNotEmpty &&
+            e.value.length <= 2000,
+      );
 
   /// 原文を残したまま、訂正チェーンの最新の入力（targetId）を訂正する依頼。本文は訂正後の全文。
   Future<CaptureResult> saveCorrection(

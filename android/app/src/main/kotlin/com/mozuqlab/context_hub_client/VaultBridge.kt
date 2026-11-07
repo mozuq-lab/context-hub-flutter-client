@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract as Docs
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import android.system.Os
 import android.system.OsConstants
 import io.flutter.plugin.common.BinaryMessenger
@@ -13,9 +16,14 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
+import java.security.KeyStore
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
     private companion object {
@@ -25,16 +33,21 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
         /** 更新時刻の粒度（FAT32は2秒）を見込んで、これより新しいファイルは差分読取で再利用しない。 */
         const val RACY_MS = 3_000L
         const val MAX_TOTAL = 64L * 1_048_576
+        /** 秘密の暗号化に使うAndroid Keystoreの鍵の名前。鍵は端末の外へ取り出せない。 */
+        const val SECRET_ALIAS = "context-hub-secrets"
     }
     private val resolver = activity.contentResolver
     private val executor = Executors.newSingleThreadExecutor()
     private val folders = setOf("00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system")
     // Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
     private val rootFiles = listOf("POLICY.md", "REVIEW.md")
-    // 操作journal以外の状態ファイル。保存先の設定と、端末に残す書きかけのメモ。
-    private val nonJournalStates = setOf("settings.json", "drafts.json")
+    // 操作journal以外の状態ファイル。保存先の設定、端末に残す書きかけのメモ、選んで深掘りの途中の状態。
+    private val nonJournalStates = setOf("settings.json", "drafts.json", "guided.json")
+    // 端末に暗号化して置く秘密の名前。選んで深掘りで使うClaudeのAPIキーだけ。
+    private val secretNames = setOf("anthropic-api-key")
     private val data = File(activity.filesDir, "context-hub").canonicalFile.apply { mkdirs() }
     private val state = File(data, "state").apply { mkdirs() }
+    private val secrets = File(data, "secrets").apply { mkdirs() }
     private val sample = File(data, "sample-vault")
     private var picker: MethodChannel.Result? = null
     private val channel = MethodChannel(messenger, "com.mozuqlab.contexthub/vault")
@@ -141,6 +154,24 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
     private fun stateFile(name: String): File {
         require(name in nonJournalStates || name.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json")))
         return safe(File(state, name))
+    }
+    private fun secretFile(name: String): File {
+        require(name in secretNames)
+        return safe(File(secrets, "$name.sealed"))
+    }
+    /** 秘密を暗号化するAES-GCMの鍵。Android Keystoreに置き、初回だけ作る。 */
+    private fun secretKey(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey(SECRET_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(SECRET_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+        )
+        return generator.generateKey()
     }
     private fun syncDir(dir: File) {
         val fd = Os.open(safe(dir).path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
@@ -284,6 +315,34 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                 return mapOf("handle" to "sample", "name" to "架空サンプル")
             }
             "listJournals" -> return (state.list() ?: error("読取不可")).filter { it !in nonJournalStates && !it.startsWith('.') }
+            "readSecret" -> {
+                val file = secretFile(args["name"] as String)
+                if (!file.exists()) return null
+                // 先頭12バイトがGCMのIV、残りが暗号文と認証タグ。
+                val sealed = Base64.decode(text(file.inputStream(), 16384), Base64.NO_WRAP)
+                require(sealed.size > 12)
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, sealed, 0, 12))
+                return String(cipher.doFinal(sealed, 12, sealed.size - 12), Charsets.UTF_8)
+            }
+            "writeSecret" -> {
+                val file = secretFile(args["name"] as String)
+                val value = args["value"] as String
+                require(value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= 4096)
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+                val iv = cipher.iv
+                require(iv.size == 12)
+                val sealed = iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+                writeFile(file, Base64.encodeToString(sealed, Base64.NO_WRAP), false)
+                return null
+            }
+            "deleteSecret" -> {
+                val file = secretFile(args["name"] as String)
+                if (file.exists()) require(file.delete())
+                syncDir(secrets)
+                return null
+            }
             "readState" -> {
                 val file = stateFile(args["name"] as String)
                 return if (file.exists()) text(file.inputStream(), 65536) else null

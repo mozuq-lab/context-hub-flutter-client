@@ -12,6 +12,8 @@ const packet=parseIntake(path,raw,8000);
 assert.equal(packet.text,expected.text);
 assert.equal(packet.source,`flutter-client/${expected.operationId}`);
 assert.equal(packet.project,expected.project);
+// 選んで深掘りのメモはmeta（文字列だけ）を付ける。付けない入力ではmetaがないことも確かめる。
+assert.deepEqual(packet.meta,expected.meta);
 const root=await mkdtemp(join(tmpdir(),'ctx-flutter-protocol-'));
 try {
   const config=defaultConfig(join(root,'vault'),join(root,'state'));
@@ -25,6 +27,7 @@ try {
   const inputs=await readInputs(config);
   assert.equal(inputs.length,1);assert.equal(inputs[0].text,expected.text);
   assert.equal(inputs[0].origin,'user-note');
+  assert.deepEqual(inputs[0].meta,expected.meta);
   assert.equal(await readFile(join(config.vaultPath,path),'utf8'),raw);
   console.log('上流parseIntake/ingest: 原文一致、受領1件、再受付の重複なし');
 } finally {await rm(root,{recursive:true,force:true});}

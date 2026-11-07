@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../app/controller.dart';
 import 'views.dart';
+import 'guided_view.dart';
 import '../core/models.dart';
 import '../app_version.dart';
 
@@ -99,6 +100,17 @@ class _HubShellState extends State<HubShell> {
                     if (drawer) {
                       Navigator.pop(context);
                     }
+                  },
+                ),
+              if (drawer && c.repository != null)
+                ListTile(
+                  key: const Key('nav-guided'),
+                  leading: const Icon(Icons.checklist, size: 20),
+                  title: const Text('選んで深掘り'),
+                  enabled: c.captureWarning == null && !c.loading,
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await showGuided(context, c);
                   },
                 ),
               const Padding(
@@ -245,6 +257,19 @@ class _HubShellState extends State<HubShell> {
                 tooltip: '再読込',
                 onPressed: c.loading ? null : () => run(c.reload),
                 icon: const Icon(Icons.refresh),
+              ),
+            // 狭い画面では題名の幅を残すため、ナビゲーションから開く。
+            if (has && wide)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: FilledButton.tonalIcon(
+                  key: const Key('open-guided'),
+                  onPressed: c.captureWarning != null || c.loading
+                      ? null
+                      : () => showGuided(context, c),
+                  icon: const Icon(Icons.checklist, size: 18),
+                  label: const Text('選んで深掘り'),
+                ),
               ),
             if (has)
               Padding(
