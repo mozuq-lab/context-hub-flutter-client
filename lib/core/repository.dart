@@ -5,6 +5,14 @@ import 'package:unorm_dart/unorm_dart.dart' as unicode;
 import 'models.dart';
 import 'parser.dart';
 
+/// 元の入力と訂正のチェーン、有効な処理記録、関連するプロジェクト。
+typedef _Unit = ({
+  HubRecord root,
+  List<HubRecord> chain,
+  Map<String, dynamic>? receipt,
+  Set<String> related,
+});
+
 class HubRepository {
   late final review = ReviewRepository(snapshot, records.values);
   final VaultSnapshot snapshot;
@@ -20,6 +28,9 @@ class HubRepository {
   final Map<String, String> _latestResolutions = {};
   final Map<String, String> _outstandingItems = {};
   final Map<String, String> _outstandingDrafts = {};
+
+  /// 訂正対象の入力ID → 反映待ちの訂正依頼のREQ ID。
+  final Map<String, String> _outstandingCorrections = {};
   final Map<String, GitDraft> gitDrafts = {};
 
   /// 本体が生成する直近の期間のふりかえり（REVIEW.md）。未生成ならnull。
@@ -553,15 +564,7 @@ class HubRepository {
     }
   }
 
-  final List<
-    ({
-      HubRecord root,
-      List<HubRecord> chain,
-      Map<String, dynamic>? receipt,
-      Set<String> related,
-    })
-  >
-  _units = [];
+  final List<_Unit> _units = [];
   void _corrections() {
     const pendingNotice = '訂正未反映です。旧要約の可能性があるため、訂正原文を確認してください。';
     const unconfirmedNotice = '訂正整理済みですが、表示への反映未確認です。訂正原文も確認してください。';
@@ -807,6 +810,14 @@ class HubRepository {
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['draft_hash']))) {
           throw const FormatException();
         }
+        final correction = m['operation'] == 'correct';
+        var correctionSynced = false;
+        if (correction &&
+            (doc.body.trim().isEmpty ||
+                m['target_id'] is! String ||
+                !inputIdPattern.hasMatch(m['target_id']))) {
+          throw const FormatException();
+        }
         // 下書きから作った入力は、本体に届くまで下書きを使用中として扱う。
         final usedDraft = m['operation'] == 'capture' && m['meta'] is Map
             ? (m['meta'] as Map)['git_draft']
@@ -870,6 +881,8 @@ class HubRepository {
               ? '適用停止依頼: ${m['target_id']}'
               : decision
               ? '${(m['operation'] as String).endsWith('approve') ? '採用' : '却下'}依頼: ${m['candidate_id']}'
+              : correction
+              ? '訂正: ${readableTitle(doc.body)}'
               : readableTitle(doc.body),
           at: timestamp(m['occurred_at']),
         );
@@ -954,6 +967,13 @@ class HubRepository {
                   : 'Mini受領済み。判断・反映結果を再同期してください。';
             }
             final input = _inputs[(ack['result'] as Map)['inputId']];
+            // 本体は同じ対象・同じ本文の既存の訂正を重複として返すことがあるため、出典ではなく受領結果の入力で判断する。
+            if (correction &&
+                input != null &&
+                input.kind == 'correction' &&
+                input.metadata['corrects_input_id'] == m['target_id']) {
+              correctionSynced = true;
+            }
             if (input?.status == 'organized') item.state = 'organized';
             if (input?.status == 'failed') item.state = 'failed';
           }
@@ -973,7 +993,16 @@ class HubRepository {
                 item.state == 'conflict' || error['status'] == 'conflict'
                 ? 'conflict'
                 : 'rejected';
-            item.detail = clip('${error['code'] ?? '受付失敗'}', 300);
+            item.detail = clip(_intakeErrorDetail(error), 300);
+          }
+        }
+        // 訂正は、本体が受け付けて訂正原文が同期されるまで反映待ちとする。
+        if (correction &&
+            (item.state == 'waiting' ||
+                (item.state == 'accepted' && !correctionSynced))) {
+          _outstandingCorrections[m['target_id'] as String] = item.id;
+          if (item.state == 'accepted') {
+            item.detail = 'Mini受領済み。訂正原文の同期を待っています。';
           }
         }
         if (statusChange) _statusRequest(item, m, changeId);
@@ -994,6 +1023,39 @@ class HubRepository {
       }
     }
     intake.sort((a, b) => b.at?.compareTo(a.at ?? DateTime(0)) ?? 0);
+  }
+
+  /// 受付失敗の理由。本体のintakeErrorMessageと同じ内容を、アプリの操作に合わせた文で示す。
+  static String _intakeErrorDetail(Map error) {
+    final reason = error['reason'];
+    if (reason is Map && reason['code'] == 'stale-correction-target') {
+      final latest = reason['latest_input_id'];
+      return '訂正対象が古くなっています（先に別の訂正が届いていました）。'
+          '最新の訂正${latest is String && inputIdPattern.hasMatch(latest) ? '（$latest）' : ''}を開き、もう一度訂正してください。';
+    }
+    if (reason is Map && reason['code'] == 'missing-correction-target') {
+      return '訂正対象のメモが見つかりません。同期を確認してください。';
+    }
+    return '${error['code'] ?? '受付失敗'}';
+  }
+
+  /// 原文の記録（メモ・作業要約・訂正）が属する訂正チェーン。元の記録が先頭、最新の訂正が末尾。原文でなければnull。
+  List<HubRecord>? correctionChainOf(String recordId) {
+    final record = records[recordId];
+    if (record == null ||
+        !const ['memo', 'work-summary', 'correction'].contains(record.kind)) {
+      return null;
+    }
+    return _unitBySource[record.sourceId]?.chain;
+  }
+
+  /// このチェーンへの訂正で、まだ反映されていない依頼のREQ ID。
+  String? correctionRequestIdFor(String recordId) {
+    for (final r in correctionChainOf(recordId) ?? const <HubRecord>[]) {
+      final id = _outstandingCorrections[r.sourceId];
+      if (id != null) return id;
+    }
+    return null;
   }
 
   String _itemTitle(String projectId, String key) {
@@ -1077,38 +1139,110 @@ class HubRepository {
   List<HubRecord> get _ordered =>
       records.values.toList()
         ..sort((a, b) => (b.at ?? DateTime(0)).compareTo(a.at ?? DateTime(0)));
+
+  /// 最近のメモ（原文・作業要約・訂正）。新しい順の全件。画面側で少しずつ表示する。
   List<HubRecord> get recent => _ordered
       .where((r) => ['memo', 'work-summary', 'correction'].contains(r.kind))
-      .take(50)
       .toList();
-  List<HubRecord> get ideas =>
-      _ordered.where((r) => r.kind == 'idea').take(100).toList();
-  List<HubRecord> search(String query) {
-    if (query.trim().isEmpty || query.length > 500) return [];
-    final tokens = unicode
-        .nfkc(query)
-        .toLowerCase()
-        .trim()
-        .split(RegExp(r'\s+'));
-    final hits =
-        _ordered
-            .map((r) {
-              final text = unicode.nfkc('${r.title}\n${r.body}').toLowerCase();
-              return (
-                record: r,
-                score: tokens.every(text.contains)
-                    ? tokens.fold<int>(
-                        0,
-                        (n, t) => n + text.split(t).length - 1,
-                      )
-                    : 0,
-              );
-            })
-            .where((h) => h.score > 0)
-            .toList()
-          ..sort((a, b) => b.score.compareTo(a.score));
-    return hits.take(50).map((h) => h.record).toList();
+  List<HubRecord> get ideas => _ordered.where((r) => r.kind == 'idea').toList();
+
+  /// 検索語を本体と同じ規則（NFKC・小文字化・空白区切りのすべてを含む）で語に分ける。
+  static List<String> searchTokens(String query) => unicode
+      .nfkc(query)
+      .toLowerCase()
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((t) => t.isNotEmpty)
+      .toList();
+
+  /// 記録とプロジェクトの関係。本人が指定した帰属・NOW・プロジェクト知識は確定（owned）、
+  /// 整理結果の関連候補はAI推定（estimated）。アイデアは元のメモに従い、共通の知識はどのプロジェクトにも含めない。
+  String? projectRelation(HubRecord record, String projectId) {
+    if (record.kind == 'project') {
+      return record.sourceId == projectId ? 'owned' : null;
+    }
+    if (record.kind == 'knowledge') {
+      return record.path.startsWith('10_projects/$projectId/knowledge/')
+          ? 'owned'
+          : null;
+    }
+    final ids = record.kind == 'idea'
+        ? record.references.map((id) => records[id]?.sourceId)
+        : [record.sourceId];
+    String? relation;
+    for (final id in ids) {
+      final unit = _unitBySource[id];
+      if (unit == null) continue;
+      if (unit.root.metadata['project'] == projectId) return 'owned';
+      if (unit.related.contains(projectId)) relation = 'estimated';
+    }
+    return relation;
   }
+
+  /// 原文の入力ID → その入力を含む訂正チェーン。検索の帰属判定と訂正で引く。
+  late final Map<String, _Unit> _unitBySource = {
+    for (final unit in _units)
+      for (final r in unit.chain) r.sourceId: unit,
+  };
+
+  /// 検索の期間と新しい順に使う日時。NOWは最終根拠（再生成の時刻ではない）、ほかは発生日時か生成日時。
+  DateTime? searchTimeOf(HubRecord r) => r.kind == 'project'
+      ? projects[r.sourceId]?.lastEvidenceAt ?? r.at
+      : r.at ?? r.generatedAt;
+
+  /// 検索。検索語がなくても絞り込み条件があれば、条件に合う記録を新しい順に返す。件数は打ち切らない。
+  List<HubRecord> search(
+    String query, [
+    SearchFilter filter = const SearchFilter(),
+  ]) {
+    final tokens = searchTokens(query);
+    if (query.length > 500 || (tokens.isEmpty && !filter.active)) return [];
+    final project = filter.project;
+    final hits = <({HubRecord record, int score, int order})>[];
+    final ordered = records.values.toList()
+      ..sort(
+        (a, b) => (searchTimeOf(b) ?? DateTime(0)).compareTo(
+          searchTimeOf(a) ?? DateTime(0),
+        ),
+      );
+    for (final r in ordered) {
+      if (filter.kinds.isNotEmpty &&
+          (!filter.kinds.contains(searchKindOf(r)) ||
+              r.metadata['retracted'] == true)) {
+        // 分類を取り消したアイデアは、種類での絞り込みではアイデアとして数えない（本体と同じ）。
+        continue;
+      }
+      if (project != null && projectRelation(r, project) == null) continue;
+      final at = searchTimeOf(r);
+      if (filter.since != null && (at == null || at.isBefore(filter.since!))) {
+        continue;
+      }
+      if (filter.until != null && (at == null || at.isAfter(filter.until!))) {
+        continue;
+      }
+      var score = 1;
+      if (tokens.isNotEmpty) {
+        final text = unicode.nfkc('${r.title}\n${r.body}').toLowerCase();
+        score = tokens.every(text.contains)
+            ? tokens.fold<int>(0, (n, t) => n + text.split(t).length - 1)
+            : 0;
+      }
+      if (score > 0) hits.add((record: r, score: score, order: hits.length));
+    }
+    // orderedは新しい順。同じ一致数の中は新しい順のまま残す。
+    if (tokens.isNotEmpty && filter.sort == 'relevance') {
+      hits.sort(
+        (a, b) => b.score != a.score
+            ? b.score.compareTo(a.score)
+            : a.order.compareTo(b.order),
+      );
+    }
+    return hits.map((h) => h.record).toList();
+  }
+
+  /// 検索の種類の区分。NOWはプロジェクトの記録（kind: project）。
+  static String searchKindOf(HubRecord r) =>
+      r.kind == 'project' ? 'now' : r.kind;
 
   String context(String id, {int maxChars = 6000}) {
     final project = projects[id];

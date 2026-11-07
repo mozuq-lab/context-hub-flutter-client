@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:unorm_dart/unorm_dart.dart' as unicode;
 import 'package:uuid/uuid.dart';
 import '../app/controller.dart';
 import '../core/models.dart';
@@ -47,8 +48,70 @@ class HubView extends StatefulWidget {
   State<HubView> createState() => _HubViewState();
 }
 
+/// 一致箇所の前後を抜き出す。最初に見つかった語の少し前から始める。
+/// 本文は検索と同じくNFKCで正規化してから探す（全角・半角の違いでも一致箇所を示す）。
+String searchSnippet(String body, List<String> words) {
+  final text = unicode.nfkc(body).replaceAll(RegExp(r'\s+'), ' ').trim();
+  var start = 0;
+  for (final w in words) {
+    final m = RegExp(RegExp.escape(w), caseSensitive: false).firstMatch(text);
+    if (m != null) {
+      start = m.start > 40 ? m.start - 40 : 0;
+      break;
+    }
+  }
+  if (start > text.length) start = text.length;
+  var end = start + 160 < text.length ? start + 160 : text.length;
+  // サロゲートペアの途中で切らない。
+  bool low(int i) =>
+      i > 0 && i < text.length && (text.codeUnitAt(i) & 0xFC00) == 0xDC00;
+  if (low(start)) start--;
+  if (low(end)) end--;
+  return '${start > 0 ? '…' : ''}${text.substring(start, end)}${end < text.length ? '…' : ''}';
+}
+
+/// 抜粋の中の検索語を強調する。大文字・小文字は区別しない。
+List<TextSpan> highlightSpans(String text, List<String> words, Color color) {
+  // 長い語を先に試し、「a|ab」のように一部だけ強調しない。
+  final pattern =
+      (words.where((w) => w.isNotEmpty).toList()
+            ..sort((a, b) => b.length.compareTo(a.length)))
+          .map(RegExp.escape)
+          .join('|');
+  if (pattern.isEmpty) return [TextSpan(text: text)];
+  final spans = <TextSpan>[];
+  var last = 0;
+  for (final m in RegExp(pattern, caseSensitive: false).allMatches(text)) {
+    if (m.start > last) {
+      spans.add(TextSpan(text: text.substring(last, m.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: m.group(0),
+        style: TextStyle(fontWeight: FontWeight.bold, backgroundColor: color),
+      ),
+    );
+    last = m.end;
+  }
+  if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+  return spans;
+}
+
 class _HubViewState extends State<HubView> {
   String query = '';
+  final queryController = TextEditingController();
+
+  /// 検索の絞り込み。本体の `ctx find` の --project・--kind・期間・--sort に対応する。
+  String? searchProject;
+  final Set<String> selectedKinds = {};
+  int? searchDays;
+  String searchSort = 'relevance';
+
+  /// 一覧・検索結果は[pageSize]件ずつ表示し、「さらに読み込む」で古い記録へさかのぼる。
+  static const pageSize = 50;
+  int shown = pageSize;
+  Object? _searchKey;
+  List<HubRecord> _searchResults = const [];
 
   /// 「次の一手」画面で表示する欄（next または open）。
   String nextSection = 'next';
@@ -64,8 +127,49 @@ class _HubViewState extends State<HubView> {
   @override
   void didUpdateWidget(HubView old) {
     super.didUpdateWidget(old);
-    if (old.page != widget.page) _visit();
+    if (old.page != widget.page) {
+      shown = pageSize;
+      _visit();
+    }
   }
+
+  @override
+  void dispose() {
+    queryController.dispose();
+    super.dispose();
+  }
+
+  /// 検索条件を変えたら、表示件数を最初のページに戻す。
+  void updateSearch(void Function() change) => setState(() {
+    change();
+    shown = pageSize;
+  });
+
+  SearchFilter get searchFilter {
+    final now = DateTime.now();
+    return SearchFilter(
+      project: searchProject,
+      kinds: {...selectedKinds},
+      since: searchDays == null
+          ? null
+          : now.subtract(Duration(days: searchDays!)),
+      sort: searchSort,
+    );
+  }
+
+  /// 「さらに読み込む」ボタン。表示しきれていなければ残りの件数を示す。
+  Widget moreButton(int total) => total <= shown
+      ? const SizedBox.shrink()
+      : Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Center(
+            child: OutlinedButton(
+              key: const Key('show-more'),
+              onPressed: () => setState(() => shown += pageSize),
+              child: Text('さらに読み込む（残り${total - shown}件）'),
+            ),
+          ),
+        );
 
   /// プロジェクトを開いたら、前回見たときとの比較を固定してから既読にする。
   void _visit() {
@@ -116,16 +220,52 @@ class _HubViewState extends State<HubView> {
       ],
     ),
   );
-  Widget recordCard(HubRecord r, {Key? key}) => Card(
+  Widget recordCard(
+    HubRecord r, {
+    Key? key,
+    List<String>? words,
+    String? badge,
+  }) => Card(
     key: key,
     child: ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       title: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 8),
-        child: Text(
-          '${originLabel(r.origin)} · ${stateLabel(r.status)}\n${timeLabel(r.at)}',
-          style: const TextStyle(fontSize: 12, height: 1.7),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${words == null ? '' : '${searchKindLabels[HubRepository.searchKindOf(r)] ?? r.kind} · '}${originLabel(r.origin)} · ${stateLabel(r.status)}\n${timeLabel(r.at ?? r.generatedAt)}',
+              style: const TextStyle(fontSize: 12, height: 1.7),
+            ),
+            if (badge != null)
+              Text(
+                badge,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.7,
+                  color: Theme.of(context).colorScheme.tertiary,
+                ),
+              ),
+            if (words != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text.rich(
+                  key: const Key('search-snippet'),
+                  TextSpan(
+                    children: highlightSpans(
+                      searchSnippet(r.body, words),
+                      words,
+                      Theme.of(context).colorScheme.primaryContainer,
+                    ),
+                  ),
+                  style: const TextStyle(fontSize: 13, height: 1.6),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
         ),
       ),
       trailing: const Icon(Icons.chevron_right),
@@ -344,33 +484,7 @@ class _HubViewState extends State<HubView> {
             ),
       );
     } else if (page == 'search') {
-      children.add(
-        title('FIND A THOUGHT', '検索', 'タイトルと本文を検索します。複数の語は空白で区切ります。'),
-      );
-      children.add(
-        TextField(
-          key: const Key('search-query'),
-          decoration: const InputDecoration(
-            hintText: '思い出したいことを入力',
-            prefixIcon: Icon(Icons.search),
-          ),
-          onChanged: (v) => setState(() => query = v),
-        ),
-      );
-      children.add(const SizedBox(height: 20));
-      if (query.trim().isNotEmpty) {
-        final results = repo.search(query);
-        children.add(Text('${results.length}件（最大50件）'));
-        children.add(const SizedBox(height: 12));
-        children.addAll(
-          results.map(
-            (r) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: recordCard(r, key: const Key('search-result')),
-            ),
-          ),
-        );
-      }
+      children.addAll(searchView());
     } else if (page == 'intake') {
       children.add(
         title(
@@ -457,15 +571,28 @@ class _HubViewState extends State<HubView> {
       );
       if (records.isEmpty) {
         children.add(const Text('まだ記録がありません。'));
+      } else {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              '${records.length}件（新しい順）',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        );
       }
       children.addAll(
-        records.map(
-          (r) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: recordCard(r),
-          ),
-        ),
+        records
+            .take(shown)
+            .map(
+              (r) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: recordCard(r),
+              ),
+            ),
       );
+      children.add(moreButton(records.length));
     }
     return Align(
       alignment: Alignment.topCenter,
@@ -480,6 +607,152 @@ class _HubViewState extends State<HubView> {
         ),
       ),
     );
+  }
+
+  /// 検索画面。検索語と、プロジェクト・種類・期間・並び順の絞り込み。
+  List<Widget> searchView() {
+    // 同期で消えたプロジェクトが選ばれたままにならないようにする。
+    if (searchProject != null && !repo.projects.containsKey(searchProject)) {
+      searchProject = null;
+    }
+    final words = HubRepository.searchTokens(query);
+    final filter = searchFilter;
+    final out = <Widget>[
+      title(
+        'FIND A THOUGHT',
+        '検索',
+        'タイトルと本文を検索します。複数の語は空白で区切ります。プロジェクト・種類・期間で絞り込むと、語を入れなくても一覧できます。',
+      ),
+      TextField(
+        key: const Key('search-query'),
+        controller: queryController,
+        decoration: const InputDecoration(
+          hintText: '思い出したいことを入力',
+          prefixIcon: Icon(Icons.search),
+        ),
+        onChanged: (v) => updateSearch(() => query = v),
+      ),
+      const SizedBox(height: 16),
+      Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          SizedBox(
+            width: 260,
+            child: DropdownButtonFormField<String>(
+              key: const Key('search-project'),
+              initialValue: searchProject ?? '',
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'プロジェクト'),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('すべて')),
+                for (final p in repo.orderedProjects)
+                  DropdownMenuItem(
+                    value: p.id,
+                    child: Text(p.title, overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (v) =>
+                  updateSearch(() => searchProject = v == '' ? null : v),
+            ),
+          ),
+          SizedBox(
+            width: 180,
+            child: DropdownButtonFormField<int>(
+              key: const Key('search-period'),
+              initialValue: searchDays ?? 0,
+              decoration: const InputDecoration(labelText: '期間'),
+              items: const [
+                DropdownMenuItem(value: 0, child: Text('すべて')),
+                DropdownMenuItem(value: 7, child: Text('直近7日')),
+                DropdownMenuItem(value: 30, child: Text('直近30日')),
+                DropdownMenuItem(value: 90, child: Text('直近90日')),
+                DropdownMenuItem(value: 365, child: Text('直近1年')),
+              ],
+              onChanged: (v) =>
+                  updateSearch(() => searchDays = v == 0 ? null : v),
+            ),
+          ),
+          SegmentedButton<String>(
+            key: const Key('search-sort'),
+            segments: const [
+              ButtonSegment(value: 'relevance', label: Text('一致の多い順')),
+              ButtonSegment(value: 'newest', label: Text('新しい順')),
+            ],
+            selected: {words.isEmpty ? 'newest' : searchSort},
+            onSelectionChanged: words.isEmpty
+                ? null
+                : (v) => updateSearch(() => searchSort = v.first),
+          ),
+        ],
+      ),
+      const SizedBox(height: 12),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final kind in searchKinds)
+            FilterChip(
+              key: Key('search-kind-$kind'),
+              label: Text(searchKindLabels[kind]!),
+              selected: selectedKinds.contains(kind),
+              onSelected: (on) => updateSearch(
+                () => on ? selectedKinds.add(kind) : selectedKinds.remove(kind),
+              ),
+            ),
+          if (filter.active)
+            TextButton(
+              key: const Key('search-clear'),
+              onPressed: () => updateSearch(() {
+                searchProject = null;
+                selectedKinds.clear();
+                searchDays = null;
+              }),
+              child: const Text('条件をクリア'),
+            ),
+        ],
+      ),
+      const SizedBox(height: 20),
+    ];
+    if (words.isEmpty && !filter.active) {
+      out.add(const Text('語を入力するか、条件で絞り込んでください。'));
+      return out;
+    }
+    // 画面の再構築（入力・続きの読み込み・保存中の通知）ごとに全件を検索し直さない。
+    final key = (
+      repo,
+      query,
+      searchProject,
+      (selectedKinds.toList()..sort()).join(','),
+      searchDays,
+      searchSort,
+    );
+    if (_searchKey != key) {
+      _searchKey = key;
+      _searchResults = repo.search(query, filter);
+    }
+    final results = _searchResults;
+    out.add(Text('${results.length}件', key: const Key('search-count')));
+    out.add(const SizedBox(height: 12));
+    for (final r in results.take(shown)) {
+      final estimated =
+          searchProject != null &&
+          repo.projectRelation(r, searchProject!) == 'estimated';
+      out.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: recordCard(
+            r,
+            key: const Key('search-result'),
+            words: words,
+            badge: estimated ? 'AI推定の関連（帰属未確定）' : null,
+          ),
+        ),
+      );
+    }
+    out.add(moreButton(results.length));
+    return out;
   }
 
   /// 状態と最終根拠からの日数を1行で示す。
@@ -1065,6 +1338,64 @@ class RecordView extends StatelessWidget {
     }
   }
 
+  /// 原文の訂正。最新の訂正に対して書き、反映待ちの間は重ねて訂正しない。
+  Widget correctionPanel(BuildContext context) {
+    final repo = controller.repository;
+    final chain = repo?.correctionChainOf(record.id);
+    if (repo == null || chain == null) return const SizedBox.shrink();
+    final latest = chain.last,
+        requestId = repo.correctionRequestIdFor(record.id);
+    return Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (latest.id != record.id)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: NoticeBox(
+                'この記録には新しい訂正があります（${latest.sourceId}）。訂正は最新の本文に対して書きます。',
+              ),
+            ),
+          if (requestId != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: NoticeBox(
+                '訂正を送りました。Miniに届いて整理されるまで、要約は訂正前の内容のままです（$requestId）。',
+              ),
+            ),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const Key('write-correction'),
+                icon: const Icon(Icons.edit_note),
+                label: const Text('訂正を書く'),
+                onPressed:
+                    requestId != null ||
+                        controller.saving ||
+                        controller.composing
+                    ? null
+                    : () => showCorrection(
+                        context,
+                        controller,
+                        record.id,
+                        latest,
+                      ),
+              ),
+              if (latest.id != record.id)
+                TextButton(
+                  onPressed: () => open(context, latest.id),
+                  child: const Text('最新の訂正を開く'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('記録の詳細')),
@@ -1094,6 +1425,15 @@ class RecordView extends StatelessWidget {
               controller: controller,
               onRecord: (id) => open(context, id),
             ),
+            if (const [
+              'memo',
+              'work-summary',
+              'correction',
+            ].contains(record.kind))
+              ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => correctionPanel(context),
+              ),
             const SizedBox(height: 32),
             const Divider(),
             const SizedBox(height: 16),
@@ -1165,6 +1505,187 @@ Future<void> showCapture(
     );
   } finally {
     c.composing = false;
+  }
+}
+
+Future<void> showCorrection(
+  BuildContext context,
+  HubController c,
+  String recordId,
+  HubRecord latest,
+) async {
+  if (c.composing) return;
+  c.composing = true;
+  try {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          CorrectionDialog(controller: c, recordId: recordId, latest: latest),
+    );
+  } finally {
+    c.composing = false;
+  }
+}
+
+/// 元のメモを残したまま、訂正後の全文を新しい入力として送るフォーム。
+class CorrectionDialog extends StatefulWidget {
+  const CorrectionDialog({
+    super.key,
+    required this.controller,
+    required this.recordId,
+    required this.latest,
+  });
+  final HubController controller;
+  final String recordId;
+
+  /// 訂正チェーンの最新の記録。本文を下書きにし、この入力IDを訂正対象にする。
+  final HubRecord latest;
+  @override
+  State<CorrectionDialog> createState() => _CorrectionDialogState();
+}
+
+class _CorrectionDialogState extends State<CorrectionDialog> {
+  late final text = TextEditingController(text: widget.latest.body.trimRight());
+  final operation = const Uuid().v4();
+  String? error;
+  CaptureResult? result;
+  bool busy = false;
+
+  /// 新しい訂正が届いて、この下書きの訂正対象が古くなった。保存は出さず、閉じて開き直してもらう。
+  bool targetChanged = false;
+  @override
+  void dispose() {
+    text.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit() async {
+    if (text.text.trim().isEmpty || text.text.length > 8000) {
+      setState(() => error = '訂正文は1〜8000文字で入力してください。');
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final r = await widget.controller.requestCorrection(
+        operation,
+        widget.recordId,
+        widget.latest.sourceId,
+        text.text,
+      );
+      if (mounted) setState(() => result = r);
+    } catch (e) {
+      // 保存前に止まった場合は、本文を直してもう一度保存できる。
+      if (mounted) {
+        setState(() {
+          error = HubController.message(e);
+          targetChanged = e is CorrectionTargetChanged;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> confirm() async {
+    setState(() => busy = true);
+    try {
+      final r = await widget.controller.confirm(operation);
+      if (mounted) setState(() => result = r);
+    } catch (e) {
+      if (mounted) setState(() => error = HubController.message(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = result != null;
+    return PopScope(
+      canPop: !busy,
+      child: AlertDialog(
+        title: const Text('メモを訂正する'),
+        content: SizedBox(
+          width: 620,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '訂正対象: ${widget.latest.sourceId}',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
+                  style: TextStyle(fontSize: 12, height: 1.6),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  key: const Key('correction-text'),
+                  controller: text,
+                  readOnly: locked || busy,
+                  minLines: 5,
+                  maxLines: 12,
+                  maxLength: 8000,
+                  decoration: const InputDecoration(alignLabelWithHint: true),
+                ),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: NoticeBox(error!, error: true),
+                  ),
+                if (result != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: NoticeBox(
+                      result!.saved
+                          ? 'この端末のInputに訂正を保存しました'
+                          : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                    ),
+                  ),
+                if (locked)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: SelectableText(
+                      '操作ID: $operation',
+                      style: const TextStyle(fontSize: 10),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: busy ? null : () => Navigator.pop(context),
+            child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
+          ),
+          if (!locked && !targetChanged)
+            FilledButton(
+              key: const Key('save-correction'),
+              onPressed: busy ? null : submit,
+              child: const Text('訂正を保存'),
+            ),
+          if (locked && result?.saved != true)
+            FilledButton(
+              onPressed: busy ? null : confirm,
+              child: const Text('同じ操作を確認'),
+            ),
+          if (busy)
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+        ],
+      ),
+    );
   }
 }
 
