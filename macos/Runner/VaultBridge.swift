@@ -9,7 +9,15 @@ final class VaultBridge {
   private let folders = ["00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system"]
   /// Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
   private let rootFiles = ["POLICY.md", "REVIEW.md"]
+  /// 操作journal以外の状態ファイル。保存先の設定と、端末に残す書きかけのメモ。
+  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json"]
   private let maxFile = 1_048_576
+  /// 読む.md/.jsonの件数、走査する項目（フォルダー・対象外のファイルを含む）の件数、合計バイト数の上限。
+  private let maxFiles = 20_000
+  private let maxEntries = 100_000
+  private let maxTotal = 64 * 1_048_576
+  /// 更新時刻の粒度（HFS+は1秒、FAT32は2秒）を見込んで、これより新しいファイルは差分読取で再利用しない。
+  private let racyInterval: TimeInterval = 3
   private enum Failure: Error { case invalid, io }
 
   init(_ messenger: FlutterBinaryMessenger) {
@@ -145,29 +153,52 @@ final class VaultBridge {
     try syncDirectory(parent)
   }
   private func stateFile(_ name: String) throws -> URL {
-    guard name == "settings.json" || name.range(of: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$", options: .regularExpression) != nil else { throw Failure.invalid }
+    guard nonJournalStates.contains(name) || name.range(of: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$", options: .regularExpression) != nil else { throw Failure.invalid }
     return try directory(appData().appendingPathComponent("state"), create: true).appendingPathComponent(name)
   }
-  private func snapshot(_ root: URL) throws -> [String: Any] {
-    var files = [String: String](); var warnings = [String](); var count = 0; var total = 0; var recognized = false
+  /// Vaultを読む。skipに挙げたパス（フォルダーまたはファイル）は数えず読まない。
+  /// knownに前回の更新時刻と大きさ（stamp）が一致するファイルは本文を読まずunchangedに返す。stampは読む前に取る。
+  /// 更新時刻が読取開始の直前（racyInterval以内）のファイルはstampを返さない。時刻の粒度が粗い保存先では、
+  /// 同じ時刻のうちに同じ大きさで書き換えられても区別できないため、次回も本文を読み直す。
+  private func snapshot(_ root: URL, skip: Set<String> = [], known: [String: String] = [:]) throws -> [String: Any] {
+    var files = [String: String](); var warnings = [String](); var unchanged = [String](); var stamps = [String: String]()
+    var entries = 0; var count = 0; var total = 0; var recognized = false
+    let settled = Date().addingTimeInterval(-racyInterval)
+    let limitWarning = "読取の上限（ファイル\(maxFiles)件・合計64MB）に達したため、"
+    func over() -> Bool { entries > maxEntries || count > maxFiles || total > maxTotal }
     func visit(_ dir: URL, _ prefix: String, _ depth: Int) throws {
       if depth > 12 { warnings.append("深さの上限に達しました。"); return }
-      for entry in try fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey], options: []) {
-        count += 1
-        if count > 5000 { throw Failure.invalid }
+      let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
+      for entry in try fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: []) {
+        entries += 1
+        if entries > maxEntries { throw Failure.invalid }
         if entry.lastPathComponent.hasPrefix(".") || entry.pathExtension == "tmp" { continue }
         let path = prefix + "/" + entry.lastPathComponent
-        let values = try entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
+        if skip.contains(path) { continue }
+        let values = try entry.resourceValues(forKeys: Set(keys))
         if values.isSymbolicLink == true { warnings.append("symlinkを除外: " + path); continue }
         if values.isDirectory == true { try visit(try physical(entry), path, depth + 1); continue }
         if !["md", "json"].contains(entry.pathExtension) { continue }
+        count += 1
+        if count > maxFiles { throw Failure.invalid }
+        var stamp: String? = nil
+        if let date = values.contentModificationDate, date < settled, let size = values.fileSize {
+          stamp = "\(Int64(date.timeIntervalSince1970 * 1000)):\(size)"
+        }
+        if let stamp = stamp, let size = values.fileSize, known[path] == stamp {
+          total += size
+          if total > maxTotal { throw Failure.invalid }
+          unchanged.append(path); stamps[path] = stamp
+          continue
+        }
         do {
           let raw = try read(entry)
           total += raw.utf8.count
-          if total > 64 * 1_048_576 { throw Failure.invalid }
+          if total > maxTotal { throw Failure.invalid }
           files[path] = raw
+          if let stamp = stamp { stamps[path] = stamp }
         } catch { warnings.append("読取できないファイル: " + path) }
-        if total > 64 * 1_048_576 { throw Failure.invalid }
+        if total > maxTotal { throw Failure.invalid }
       }
     }
     for name in folders {
@@ -178,21 +209,24 @@ final class VaultBridge {
         recognized = true
         try visit(checked, name, 1)
       }
-      catch { warnings.append("フォルダーの読取を中断: " + name); if count > 5000 || total > 64 * 1_048_576 { break } }
+      catch {
+        if over() { warnings.append(limitWarning + name + "の一部を読めませんでした。"); break }
+        warnings.append("フォルダーの読取を中断: " + name)
+      }
     }
     for name in rootFiles {
       let file = root.appendingPathComponent(name)
       if !fm.fileExists(atPath: file.path) { continue }
       count += 1
       do {
-        guard count <= 5000 else { throw Failure.invalid }
+        guard count <= maxFiles else { warnings.append(limitWarning + name + "を読めませんでした。"); continue }
         let raw = try read(file)
         total += raw.utf8.count
-        guard total <= 64 * 1_048_576 else { throw Failure.invalid }
+        guard total <= maxTotal else { warnings.append(limitWarning + name + "を読めませんでした。"); continue }
         files[name] = raw
       } catch { warnings.append("読取できないファイル: " + name) }
     }
-    return ["files": files, "warnings": warnings, "recognized": recognized]
+    return ["files": files, "warnings": warnings, "recognized": recognized, "unchanged": unchanged, "stamps": stamps]
   }
   private func invoke(_ method: String, _ args: [String: Any]) throws -> Any? {
     switch method {
@@ -223,11 +257,15 @@ final class VaultBridge {
       try write(stateFile(name), raw: raw, exclusive: args["exclusive"] as? Bool == true); return nil
     case "listJournals":
       let state = try stateFile("settings.json").deletingLastPathComponent()
-      return try fm.contentsOfDirectory(atPath: state.path).filter { $0 != "settings.json" && !$0.hasPrefix(".") }
+      return try fm.contentsOfDirectory(atPath: state.path).filter { !nonJournalStates.contains($0) && !$0.hasPrefix(".") }
     default:
       guard let handle = args["handle"] as? String else { throw Failure.invalid }
       return try root(handle) { root in
-        if method == "readSnapshot" { return try snapshot(root) }
+        if method == "readSnapshot" {
+          let skip = Set((args["skip"] as? [String]) ?? [])
+          let known = (args["known"] as? [String: String]) ?? [:]
+          return try snapshot(root, skip: skip, known: known)
+        }
         guard ["readRequest", "writeRequest"].contains(method), let id = args["requestId"] as? String,
               id.range(of: "^REQ-[a-f0-9]{32}$", options: .regularExpression) != nil else { throw Failure.invalid }
         let input = root.appendingPathComponent("Input")

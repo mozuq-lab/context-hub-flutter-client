@@ -24,6 +24,8 @@ class HubRepository {
   final Map<String, Map<String, dynamic>> _receipts = {};
   final Map<String, Map<String, dynamic>> _statusChanges = {};
   final Map<String, String> _outstandingStatus = {};
+  final Map<String, Map<String, dynamic>> _definitionChanges = {};
+  final Map<String, String> _outstandingDefinition = {};
   final Map<String, DateTime> _resolutionTimes = {};
   final Map<String, String> _latestResolutions = {};
   final Map<String, String> _outstandingItems = {};
@@ -240,6 +242,7 @@ class HubRepository {
     }
     _corrections();
     _readStatusChanges();
+    _readDefinitionChanges();
     _readNowItems();
     _readGitDrafts();
     _readIntake();
@@ -433,6 +436,44 @@ class HubRepository {
             .toList()
           ..sort();
     return ids.lastOrNull;
+  }
+
+  /// まだ反映されていない、このプロジェクトの名前・別名・キーワードの変更依頼。
+  String? projectDefinitionRequestIdFor(String projectId) =>
+      _outstandingDefinition[projectId];
+
+  /// 本体が記録した、このプロジェクトの最新の定義変更ID。
+  String? latestDefinitionChangeId(String projectId) {
+    final ids =
+        _definitionChanges.values
+            .where((c) => c['project_id'] == projectId)
+            .map((c) => c['id'] as String)
+            .toList()
+          ..sort();
+    return ids.lastOrNull;
+  }
+
+  void _readDefinitionChanges() {
+    final pattern = RegExp(
+      r'^90_system/project-definitions/(PDEF-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in snapshot.files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['project_id'] is! String ||
+            j['before_hash'] is! String ||
+            j['after_hash'] is! String) {
+          throw const FormatException();
+        }
+        _definitionChanges[j['id'] as String] = j;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
   }
 
   void _readStatusChanges() {
@@ -769,6 +810,7 @@ class HubRepository {
               'knowledge-reject',
               'knowledge-retire',
               'project-status',
+              'project-definition',
               'item-resolution',
               'git-draft-dismiss',
             ].contains(m['operation']) ||
@@ -785,6 +827,21 @@ class HubRepository {
                 m['project_hash'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
                 !projectLifecycles.contains(m['status']))) {
+          throw const FormatException();
+        }
+        final definitionChange = m['operation'] == 'project-definition';
+        bool terms(Object? v) =>
+            v is List && v.length <= 200 && v.every((t) => t is String);
+        if (definitionChange &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['project_hash'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
+                m['title'] is! String ||
+                !terms(m['aliases']) ||
+                !terms(m['keywords']))) {
           throw const FormatException();
         }
         final itemReport = m['operation'] == 'item-resolution',
@@ -873,6 +930,8 @@ class HubRepository {
           path: e.key,
           title: statusChange
               ? '状態変更依頼: ${projects[m['project_id']]?.title ?? m['project_id']} → ${projectLifecycleLabels[m['status']]}'
+              : definitionChange
+              ? '呼び名とキーワードの変更依頼: ${m['title']}'
               : itemReport
               ? '${m['action'] == 'resolve' ? '完了・解決' : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
@@ -916,6 +975,19 @@ class HubRepository {
                   !RegExp(
                     r'^PST-[0-9A-HJKMNP-TV-Z]{26}$',
                   ).hasMatch(r['changeId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              changeId = r['changeId'] as String;
+            }
+            if (definitionChange) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['changeId'] is! String ||
+                  !RegExp(
+                    r'^PDEF-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['changeId']) ||
+                  r['changed'] is! List ||
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
@@ -1005,7 +1077,28 @@ class HubRepository {
             item.detail = 'Mini受領済み。訂正原文の同期を待っています。';
           }
         }
-        if (statusChange) _statusRequest(item, m, changeId);
+        if (statusChange) {
+          _projectRequest(
+            item,
+            m,
+            changeId,
+            records: _statusChanges,
+            latest: latestStatusChangeId,
+            outstanding: _outstandingStatus,
+            what: '状態の変更',
+          );
+        }
+        if (definitionChange) {
+          _projectRequest(
+            item,
+            m,
+            changeId,
+            records: _definitionChanges,
+            latest: latestDefinitionChangeId,
+            outstanding: _outstandingDefinition,
+            what: '呼び名とキーワードの変更',
+          );
+        }
         if (itemReport) _itemRequest(item, m, resolutionId);
         if (draftDismiss &&
             ['waiting', 'accepted'].contains(item.state) &&
@@ -1104,36 +1197,40 @@ class HubRepository {
     ...projects.values.where((p) => p.lifecycle != 'active'),
   ];
 
-  /// 状態変更依頼の反映状況を、本体の変更記録と現在の定義hashから判断する。
-  /// 同じ定義へ戻る変更（休止→再開）でも、古い依頼を未反映と扱わない。
-  void _statusRequest(
+  /// 定義を書き換える依頼（状態変更・名前と別名・キーワードの変更）の反映状況を、
+  /// 本体の変更記録と現在の定義hashから判断する。同じ定義へ戻る変更（休止→再開）でも、古い依頼を未反映と扱わない。
+  void _projectRequest(
     IntakeStatus item,
     Map<String, dynamic> m,
-    String? changeId,
-  ) {
+    String? changeId, {
+    required Map<String, Map<String, dynamic>> records,
+    required String? Function(String projectId) latest,
+    required Map<String, String> outstanding,
+    required String what,
+  }) {
     final projectId = m['project_id'] as String,
         current = projects[projectId]?.definitionHash;
-    var outstanding = false;
+    var waiting = false;
     if (item.state == 'accepted') {
-      final record = _statusChanges[changeId];
+      final record = records[changeId];
       if (record == null) {
-        outstanding = current == m['project_hash'];
-        item.detail = outstanding
+        waiting = current == m['project_hash'];
+        item.detail = waiting
             ? 'Mini受領済み。プロジェクト定義の同期を待っています。'
             : 'Mini受領済み。変更記録の同期を待っています。';
       } else if (current == record['before_hash'] &&
-          latestStatusChangeId(projectId) == changeId) {
-        outstanding = true;
+          latest(projectId) == changeId) {
+        waiting = true;
         item.detail = 'Mini受領済み。プロジェクト定義の同期を待っています。';
       } else {
         item.detail = current == record['after_hash']
-            ? '状態の変更をMiniが反映しました。'
-            : '状態の変更をMiniが反映しました（その後に別の変更があります）。';
+            ? '$whatをMiniが反映しました。'
+            : '$whatをMiniが反映しました（その後に別の変更があります）。';
       }
     } else if (item.state == 'waiting') {
-      outstanding = current == m['project_hash'];
+      waiting = current == m['project_hash'];
     }
-    if (outstanding) _outstandingStatus[projectId] = item.id;
+    if (waiting) outstanding[projectId] = item.id;
   }
 
   List<HubRecord> get _ordered =>

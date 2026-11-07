@@ -8,7 +8,8 @@ import tempfile
 source = Path('macos/Runner/VaultBridge.swift').read_text()
 members = []
 for prefix in ['  private let fm ', '  private let folders ', '  private let rootFiles ',
-               '  private let maxFile ', '  private enum Failure:']:
+               '  private let maxFile ', '  private let maxFiles ', '  private let maxEntries ',
+               '  private let maxTotal ', '  private let racyInterval ', '  private enum Failure:']:
     members.append(next(line for line in source.splitlines() if line.startswith(prefix)))
 for name in ['physical', 'identity', 'directory', 'read', 'syncDirectory', 'snapshot']:
     start = source.index('  private func ' + name + '(')
@@ -19,7 +20,7 @@ import Cocoa
 import Darwin
 final class SnapshotUnderTest {
 MEMBERS
-  func run(_ root: URL) throws -> [String: Any] { try snapshot(root) }
+  func run(_ root: URL, skip: Set<String> = [], known: [String: String] = [:]) throws -> [String: Any] { try snapshot(root, skip: skip, known: known) }
   func identifier(_ root: URL) throws -> String { try identity(root) }
 }
 let fm = FileManager.default
@@ -37,16 +38,44 @@ func root(_ name: String) throws -> URL {
   try fm.createDirectory(at: url.appendingPathComponent("00_inbox"), withIntermediateDirectories: true)
   return url
 }
-for count in [5000, 5001] {
+for count in [20000, 20001] {
   let dir = try root("count-\\(count)")
   for i in 0..<count {
     try "架空fixture".write(to: dir.appendingPathComponent("00_inbox/\\(i).md"), atomically: false, encoding: .utf8)
   }
   let result = try SnapshotUnderTest().run(dir)
   check(result["recognized"] as? Bool == true, "件数\\(count): Vault認識と部分表示を保持")
-  check((result["files"] as! [String:String]).count == min(count, 5000), "件数\\(count): 5000件の読取上限")
-  check((result["warnings"] as! [String]).isEmpty == (count == 5000), "件数\\(count): 上限超過の警告")
+  check((result["files"] as! [String:String]).count == min(count, 20000), "件数\\(count): 20000件の読取上限")
+  check((result["warnings"] as! [String]).isEmpty == (count == 20000), "件数\\(count): 上限超過の警告")
+  if count > 20000 {
+    check((result["warnings"] as! [String]).first?.hasPrefix("読取の上限") == true, "上限超過の警告を区別できる")
+  }
 }
+let skipping = try root("skip")
+try fm.createDirectory(at: skipping.appendingPathComponent("90_system/receipts/pending"), withIntermediateDirectories: true)
+try "{}".write(to: skipping.appendingPathComponent("90_system/receipts/pending/IN-A.json"), atomically: false, encoding: .utf8)
+let receipt = skipping.appendingPathComponent("90_system/receipts/IN-A.json")
+try "{}".write(to: receipt, atomically: false, encoding: .utf8)
+let fresh = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"])
+check((fresh["stamps"] as! [String:String]).isEmpty, "書いた直後のファイルは差分読取で再利用しない")
+func age(_ url: URL, _ seconds: TimeInterval) throws {
+  try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-seconds)], ofItemAtPath: url.path)
+}
+try age(receipt, 60)
+let skippedResult = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"])
+check((skippedResult["files"] as! [String:String]).keys.sorted() == ["90_system/receipts/IN-A.json"], "除外したフォルダーは読まない")
+let stamps = skippedResult["stamps"] as! [String:String]
+check(stamps["90_system/receipts/IN-A.json"] != nil, "読んだファイルの更新時刻と大きさを返す")
+let again = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"], known: stamps)
+check((again["files"] as! [String:String]).isEmpty, "変わっていないファイルは本文を返さない")
+check((again["unchanged"] as! [String]) == ["90_system/receipts/IN-A.json"], "変わっていないファイルを示す")
+try age(receipt, 30)
+let touched = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"], known: stamps)
+check((touched["files"] as! [String:String])["90_system/receipts/IN-A.json"] == "{}", "大きさが同じでも更新時刻が変わったファイルは読み直す")
+try "{\\"changed\\":true}".write(to: receipt, atomically: false, encoding: .utf8)
+try age(receipt, 10)
+let changed = try SnapshotUnderTest().run(skipping, skip: ["90_system/receipts/pending"], known: stamps)
+check((changed["files"] as! [String:String])["90_system/receipts/IN-A.json"] == "{\\"changed\\":true}", "変わったファイルは読み直す")
 let capacity = try root("capacity")
 let large = String(repeating: "x", count: 1_048_576)
 for i in 0..<65 {

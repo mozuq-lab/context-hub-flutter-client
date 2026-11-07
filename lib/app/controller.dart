@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
+import '../storage/draft_store.dart';
 import '../core/repository.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
@@ -172,11 +173,15 @@ class HubController extends ChangeNotifier {
       return;
     }
     final epoch = _epoch;
+    final previous = repository?.snapshot;
     loading = true;
     error = null;
     _changed();
     try {
-      final data = await access.readSnapshot(target);
+      // 表示の更新では、変わっていないファイルを読み直さない。
+      final data = previous == null
+          ? await access.readSnapshot(target)
+          : await access.refreshSnapshot(target, previous);
       if (epoch != _epoch) {
         return;
       }
@@ -261,6 +266,28 @@ class HubController extends ChangeNotifier {
       saving = false;
       await reload();
       _changed();
+    }
+  }
+
+  /// 書きかけのメモ（端末内のみ）。
+  late final DraftStore drafts = DraftStore(access);
+
+  /// 現在のVaultでの書きかけのキー。Vaultが未選択ならnull。
+  String? draftKey({String? gitDraftId}) {
+    final target = location;
+    return target == null
+        ? null
+        : DraftStore.keyFor(target.identity, gitDraftId: gitDraftId);
+  }
+
+  /// 書きかけに残した操作IDの保存状態。journalがなければnull、読めなければ再送を防ぐため'uncertain'。
+  Future<String?> operationState(String operationId) async {
+    final target = location;
+    if (target == null) return 'uncertain';
+    try {
+      return await CaptureService(access, target).journalState(operationId);
+    } catch (_) {
+      return 'uncertain';
     }
   }
 
@@ -468,6 +495,9 @@ class HubController extends ChangeNotifier {
       if (parsed.projectStatusRequestIdFor(projectId) != null) {
         throw StateError('このプロジェクトの状態変更は依頼済みです。受付状況を確認してください。');
       }
+      if (parsed.projectDefinitionRequestIdFor(projectId) != null) {
+        throw StateError('呼び名とキーワードの変更が反映されるまで待ってから依頼してください。');
+      }
       if (pending.isNotEmpty) {
         throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
       }
@@ -490,6 +520,37 @@ class HubController extends ChangeNotifier {
       if (!_disposed) await reload();
       _changed();
     }
+  }
+
+  /// 表示中の定義hashに結び付けて、名前・別名・キーワードの変更をInputへ依頼する。
+  Future<CaptureResult> requestProjectDefinition(
+    String projectId,
+    String expectedHash,
+    ProjectDefinitionDraft next,
+  ) {
+    late HubProject project;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId];
+        if (found == null || found.definitionHash != expectedHash) {
+          throw StateError('プロジェクト定義が変更されています。表示を確認してから操作してください。');
+        }
+        if (parsed.projectDefinitionRequestIdFor(projectId) != null ||
+            parsed.projectStatusRequestIdFor(projectId) != null) {
+          throw StateError('このプロジェクトへの依頼が反映待ちです。受付状況を確認してください。');
+        }
+        final problem = next.problem;
+        if (problem != null) throw StateError(problem);
+        if (next.sameAs(found)) {
+          throw StateError('名前・別名・キーワードに変更がありません。');
+        }
+        project = found;
+        // 変更後の内容と最新の変更記録を含め、同じ定義へ戻す依頼が過去の操作と混ざらないようにする。
+        return 'project-definition/$projectId/$expectedHash/${digest(jsonEncode([next.title, next.aliases, next.keywords]))}/${parsed.latestDefinitionChangeId(projectId) ?? '-'}';
+      },
+      (service, parsed, operation) =>
+          service.saveProjectDefinition(operation, project, next),
+    );
   }
 
   /// 最新のVaultを読み直して確認し、同じ確認内容には同じ操作IDを使って依頼を保存する。
