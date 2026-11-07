@@ -629,6 +629,70 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 新しいプロジェクトの作成を依頼する。操作IDとプロジェクトIDは入力フォームが持ち、
+  /// 保存結果が不明なときは同じ操作IDで確認する。
+  Future<CaptureResult> requestProjectCreate(NewProjectRequest request) async {
+    final target = location, epoch = _epoch;
+    if (target == null ||
+        repository == null ||
+        loading ||
+        saving ||
+        error != null ||
+        captureWarning != null) {
+      throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    final problem = request.formatError;
+    if (problem != null) throw StateError(problem);
+    saving = true;
+    _changed();
+    try {
+      final fresh = await access.readSnapshot(target);
+      if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+      final parsed = HubRepository(fresh);
+      repository = parsed;
+      _changed();
+      if (pending.any((p) => p.operationId != request.operationId)) {
+        throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
+      }
+      // 保存結果が不明だった同じ依頼の確認では、自分自身を作成依頼中として重なりに数えない。
+      if (!pending.any((p) => p.operationId == request.operationId)) {
+        final overlap = request.overlapError(
+          parsed.projects.values,
+          parsed.pendingProjectCreations,
+        );
+        if (overlap != null) throw StateError(overlap);
+      }
+      return await CaptureService(access, target).saveProjectCreate(request);
+    } finally {
+      saving = false;
+      if (!_disposed) await reload();
+      _changed();
+    }
+  }
+
+  /// 手で書き換えて止まったNOWを、表示中のNOW.mdのhashに結び付けて生成版へ戻す依頼を保存する。
+  Future<CaptureResult> requestConflictResolve(
+    String projectId,
+    String expectedHash,
+  ) {
+    late HubProject project;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId];
+        if (found?.nowConflict?.nowHash != expectedHash) {
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.conflictRequestIdFor(projectId) != null) {
+          throw StateError('生成版に戻す依頼は送信済みです。受付状況を確認してください。');
+        }
+        project = found!;
+        return 'conflict-resolve/$projectId/$expectedHash';
+      },
+      (service, parsed, operation) =>
+          service.saveConflictResolve(operation, project),
+    );
+  }
+
   /// 作業記録の下書きを見送る依頼を保存する。
   Future<CaptureResult> requestGitDraftDismiss(
     String draftId,

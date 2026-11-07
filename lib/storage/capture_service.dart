@@ -327,6 +327,43 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// 新しいプロジェクトの作成依頼。本文は任意の最初のメモで、作ったプロジェクトの入力になる。
+  Future<CaptureResult> saveProjectCreate(NewProjectRequest request) =>
+      _serial(() async {
+        final problem = request.formatError;
+        if (!_uuid.hasMatch(request.operationId) || problem != null) {
+          throw FormatException(problem ?? '操作IDが不正です。');
+        }
+        final fields = request.fields;
+        return _saveRequest(
+          request.operationId,
+          digest(jsonEncode([fields, request.firstMemo])),
+          fields,
+          request.firstMemo,
+        );
+      });
+
+  /// 手で書き換えて止まったNOWを、確認したNOW.mdのhashに結び付けて生成版へ戻す依頼。
+  Future<CaptureResult> saveConflictResolve(
+    String operationId,
+    HubProject project,
+  ) => _serial(() async {
+    final conflict = project.nowConflict;
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(project.id) ||
+        conflict == null ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(conflict.nowHash)) {
+      throw const FormatException('戻す対象のNOWを確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'conflict-resolve',
+      'target': nowTargetPath(project.id),
+      'target_hash': conflict.nowHash,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// 名前・別名・キーワードの変更依頼。変更後の全体を、表示中の定義hashに結び付けて送る。
   Future<CaptureResult> saveProjectDefinition(
     String operationId,
