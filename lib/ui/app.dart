@@ -140,6 +140,40 @@ class _HubShellState extends State<HubShell> {
                     }
                   },
                 ),
+              for (final pending
+                  in c.repository?.pendingProjectCreations ??
+                      const <PendingProjectCreation>[])
+                ListTile(
+                  key: Key('pending-project-${pending.projectId}'),
+                  enabled: false,
+                  leading: const Icon(
+                    Icons.create_new_folder_outlined,
+                    size: 20,
+                  ),
+                  title: Text(
+                    pending.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    pending.state == 'accepted' ? '作成済み・同期待ち' : '作成依頼中',
+                  ),
+                ),
+              if (c.repository != null)
+                ListTile(
+                  key: const Key('new-project'),
+                  leading: const Icon(Icons.add, size: 20),
+                  title: const Text('新しいプロジェクト'),
+                  enabled:
+                      !c.loading &&
+                      !c.saving &&
+                      c.error == null &&
+                      c.captureWarning == null,
+                  onTap: () async {
+                    if (drawer) Navigator.pop(context);
+                    await showProjectCreate(context, c);
+                  },
+                ),
             ],
           ),
         ),

@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:crypto/crypto.dart';
+import 'package:unorm_dart/unorm_dart.dart' as unicode;
 
 String digest(String value) => sha256.convert(utf8.encode(value)).toString();
 String recordId(String path) => 'record-${digest(path).substring(0, 24)}';
@@ -131,6 +133,9 @@ class HubProject {
 
   /// 確認待ちの作業記録の下書き。
   final List<GitDraft> drafts = [];
+
+  /// NOWの自動領域が手で書き換えられ、本体が新版を退避している（更新が止まっている）状態。なければnull。
+  NowConflict? nowConflict;
   HubProject({
     required this.id,
     required this.title,
@@ -214,4 +219,145 @@ class SearchFilter {
   final String sort;
   bool get active =>
       project != null || kinds.isNotEmpty || since != null || until != null;
+}
+
+/// 手で書き換えたため更新が止まったNOW。本体の`conflict-resolve`で生成版に戻せる。
+class NowConflict {
+  /// 本体が退避した最新の生成版（`90_system/conflicts/NOW.<id>.<ULID>.md`）。
+  final String latestPath;
+
+  /// 退避の件数。旧版の本体は再生成のたびに1件ずつ増やす。
+  final int count;
+
+  /// 確認時点のNOW.mdのhash。依頼に結び付ける。
+  final String nowHash;
+
+  /// 手で変えた（最後に書いた生成版にない）行。
+  final List<String> manualLines;
+
+  /// 手で変える前の生成版と比べたか。falseは基準がなく最新の退避と比べた結果。
+  final bool comparedWithGenerated;
+  const NowConflict({
+    required this.latestPath,
+    required this.count,
+    required this.nowHash,
+    required this.manualLines,
+    required this.comparedWithGenerated,
+  });
+}
+
+/// 本人が依頼し、まだプロジェクト定義が届いていない新しいプロジェクト。
+class PendingProjectCreation {
+  final String requestId, projectId, title;
+  final String state;
+  const PendingProjectCreation({
+    required this.requestId,
+    required this.projectId,
+    required this.title,
+    required this.state,
+  });
+}
+
+/// 本体のproject-createと同じ形式のID（`project-` + 小文字のULID）。
+final newProjectIdPattern = RegExp(r'^project-[0-9a-hjkmnp-tv-z]{26}$');
+
+/// 本体のconflict-resolveで戻せるNOWの対象パス。
+String nowTargetPath(String projectId) => '10_projects/$projectId/NOW.md';
+
+/// 現在の内容のうち、基準の生成版にない行（前後の空白を除き、重複は1つにする）。本体のmanualLinesと同じ。
+List<String> manualLinesOf(String current, String generated) {
+  final known = generated.split(RegExp(r'\r?\n')).map((l) => l.trim()).toSet();
+  final seen = <String>{};
+  return [
+    for (final line in current.split(RegExp(r'\r?\n')).map((l) => l.trim()))
+      if (line.isNotEmpty && !known.contains(line) && seen.add(line)) line,
+  ];
+}
+
+const _crockford = '0123456789abcdefghjkmnpqrstvwxyz';
+
+/// 新しいプロジェクトのID。本体のプロジェクト案の採用と同じ`project-` + 小文字のULID。
+String newProjectId([DateTime? now, Random? random]) {
+  final rng = random ?? Random.secure();
+  var time = (now ?? DateTime.now()).millisecondsSinceEpoch;
+  final chars = List.filled(26, '0');
+  for (var i = 9; i >= 0; i--) {
+    chars[i] = _crockford[time % 32];
+    time ~/= 32;
+  }
+  for (var i = 10; i < 26; i++) {
+    chars[i] = _crockford[rng.nextInt(32)];
+  }
+  return 'project-${chars.join()}';
+}
+
+/// 名前の重なりの判定に使う正規化（本体と同じNFKC・前後の空白除去・小文字化）。
+String normalizeProjectName(String value) =>
+    unicode.nfkc(value).trim().toLowerCase();
+
+/// 本人が入力した新しいプロジェクトの内容。本体のproject-createに送る。
+class NewProjectRequest {
+  final String operationId, projectId, title, firstMemo;
+  final List<String> aliases, keywords;
+  const NewProjectRequest({
+    required this.operationId,
+    required this.projectId,
+    required this.title,
+    this.aliases = const [],
+    this.keywords = const [],
+    this.firstMemo = '',
+  });
+
+  /// カンマ・読点・改行区切りの入力を、前後の空白を除いた重複のない一覧にする。
+  static List<String> splitNames(String value) {
+    final seen = <String>{};
+    return [
+      for (final name in value.split(RegExp(r'[,、，\n]')).map((s) => s.trim()))
+        if (name.isNotEmpty && seen.add(name)) name,
+    ];
+  }
+
+  /// 本体の受付形式に合わない内容の理由。問題なければnull。
+  String? get formatError {
+    bool bad(String s, int max) =>
+        s.isEmpty || s.length > max || s.trim() != s || s.contains('\n');
+    if (!newProjectIdPattern.hasMatch(projectId)) return 'プロジェクトIDが不正です。';
+    if (bad(title, 200)) return '名前は1〜200文字で入力してください。';
+    if (aliases.length > 50 || aliases.any((a) => bad(a, 100))) {
+      return '別名は50件まで、それぞれ100文字までで入力してください。';
+    }
+    if (keywords.length > 50 || keywords.any((k) => bad(k, 100))) {
+      return 'キーワードは50件まで、それぞれ100文字までで入力してください。';
+    }
+    if (firstMemo.length > 8000 || utf8.encode(firstMemo).length > 32000) {
+      return '最初のメモは8000文字までで入力してください。';
+    }
+    return null;
+  }
+
+  /// 名前・別名が、既存のプロジェクトや作成依頼中のプロジェクトと重なる場合の理由。本体と同じ判定。
+  String? overlapError(
+    Iterable<HubProject> projects,
+    Iterable<PendingProjectCreation> pending,
+  ) {
+    final wanted = {
+      for (final n in [title, ...aliases]) normalizeProjectName(n),
+    }..remove('');
+    for (final p in projects) {
+      final hit = [p.id, p.title, ...p.aliases].firstWhere(
+        (n) => wanted.contains(normalizeProjectName(n)),
+        orElse: () => '',
+      );
+      if (hit.isNotEmpty) {
+        return '「$hit」は既存のプロジェクト「${p.title}」の名前・別名と重なります。既存のプロジェクトを使うか、名前を変えてください。';
+      }
+    }
+    for (final p in pending) {
+      if (p.projectId == projectId) return 'このプロジェクトは作成を依頼済みです。受付状況を確認してください。';
+      if (wanted.contains(normalizeProjectName(p.title))) {
+        return '「${p.title}」は作成を依頼済みです。受付状況を確認してください。';
+      }
+    }
+    return null;
+  }
 }

@@ -805,6 +805,105 @@ class _HubViewState extends State<HubView> {
     ];
   }
 
+  /// 手で書き換えたため更新が止まったNOWの説明と、生成版に戻す操作。
+  Widget conflictPanel(HubProject project, NowConflict conflict) {
+    final requested = repo.conflictRequestIdFor(project.id) != null;
+    const shown = 8;
+    final lines = conflict.manualLines;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Card(
+        key: const Key('now-conflict'),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'NOWの更新が止まっています',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'NOWの自動で作られる部分が手で書き換えられているため、${timeLabel(project.generatedAt)}の生成から更新されていません。'
+                '下の内容は止まった時点のものです${conflict.count > 1 ? '（新しい版の退避${conflict.count}件）' : ''}。',
+                style: const TextStyle(fontSize: 12, height: 1.6),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                lines.isEmpty
+                    ? '手で変えた行は見つかりませんでした（行の削除や並べ替えだけの可能性があります）。'
+                    : '手で変えた行${conflict.comparedWithGenerated ? '' : '（最新の生成版との違い。生成側の変化も含みます）'}:',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              for (final line in lines.take(shown))
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    line,
+                    style: const TextStyle(fontSize: 12, height: 1.5),
+                  ),
+                ),
+              if (lines.length > shown)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'ほか${lines.length - shown}行',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              if (requested)
+                const NoticeBox(
+                  '生成版に戻す依頼を送りました。Miniで受け付けられ、同期されると最新のNOWが表示されます。',
+                )
+              else
+                OutlinedButton.icon(
+                  key: const Key('conflict-resolve'),
+                  onPressed: c.loading || c.saving || c.captureWarning != null
+                      ? null
+                      : () => resolveConflict(project, conflict),
+                  icon: const Icon(Icons.restore, size: 18),
+                  label: const Text('生成版に戻す'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> resolveConflict(HubProject project, NowConflict conflict) async {
+    if (!await confirmAction(
+      'NOWを生成版に戻す',
+      '${conflict.manualLines.isEmpty ? '' : '手で変えた${conflict.manualLines.length}行を、このプロジェクトのメモとして保存してから、'}'
+          'Miniが最新の入力からNOWを作り直します。NOWの自動で作られる部分の外に書いたメモは残ります。'
+          '置き換える前のNOWの全文は本体の記録に残ります。',
+      '生成版に戻す',
+    )) {
+      return;
+    }
+    try {
+      final result = await c.requestConflictResolve(
+        project.id,
+        conflict.nowHash,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '生成版に戻す依頼を保存しました。Miniで受け付けられると反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   Future<void> changeStatus(HubProject project) async {
     final hash = project.definitionHash;
     if (hash == null) return;
@@ -1119,6 +1218,8 @@ class _HubViewState extends State<HubView> {
           padding: EdgeInsets.only(bottom: 10),
           child: NoticeBox('状態の変更を依頼済みです。Miniで受け付けられ、同期されると反映されます。'),
         ),
+      if (project.nowConflict case final conflict?)
+        conflictPanel(project, conflict),
       for (final warning in project.warnings)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -1955,5 +2056,223 @@ class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
         child: const Text('変更を依頼'),
       ),
     ],
+  );
+}
+
+Future<void> showProjectCreate(BuildContext context, HubController c) async {
+  if (c.composing) return;
+  c.composing = true;
+  try {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => ProjectCreateDialog(controller: c),
+    );
+  } finally {
+    c.composing = false;
+  }
+}
+
+/// 新しいプロジェクトの作成を依頼するフォーム。IDと操作IDはフォームを開いたときに決め、
+/// 保存結果が不明なときは同じ操作IDで確認する。
+class ProjectCreateDialog extends StatefulWidget {
+  const ProjectCreateDialog({super.key, required this.controller});
+  final HubController controller;
+  @override
+  State<ProjectCreateDialog> createState() => _ProjectCreateDialogState();
+}
+
+class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
+  final title = TextEditingController(),
+      aliases = TextEditingController(),
+      keywords = TextEditingController(),
+      memo = TextEditingController();
+  final operation = const Uuid().v4(), projectId = newProjectId();
+  String? error;
+  CaptureResult? result;
+  bool busy = false, locked = false;
+
+  @override
+  void dispose() {
+    for (final c in [title, aliases, keywords, memo]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  NewProjectRequest get request => NewProjectRequest(
+    operationId: operation,
+    projectId: projectId,
+    title: title.text.trim(),
+    aliases: NewProjectRequest.splitNames(aliases.text),
+    keywords: NewProjectRequest.splitNames(keywords.text),
+    firstMemo: memo.text.trim().isEmpty ? '' : memo.text,
+  );
+
+  Future<void> submit() async {
+    final r = request, repo = widget.controller.repository;
+    final problem =
+        r.formatError ??
+        (repo == null
+            ? null
+            : r.overlapError(
+                repo.projects.values,
+                repo.pendingProjectCreations,
+              ));
+    if (problem != null) {
+      setState(() => error = problem);
+      return;
+    }
+    setState(() {
+      busy = true;
+      locked = true;
+      error = null;
+    });
+    try {
+      final saved = await widget.controller.requestProjectCreate(r);
+      if (mounted) setState(() => result = saved);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          error = HubController.message(e);
+          // 保存前に止まった場合（重なり・形式）は直して送り直せるようにする。
+          if (result == null) locked = false;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Widget field(
+    String key,
+    TextEditingController controller,
+    String label, {
+    String? hint,
+    int lines = 1,
+    int? max,
+  }) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: TextField(
+      key: Key(key),
+      controller: controller,
+      readOnly: locked,
+      minLines: lines,
+      maxLines: lines == 1 ? 1 : lines + 4,
+      maxLength: max,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        alignLabelWithHint: lines > 1,
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !busy,
+    child: AlertDialog(
+      title: const Text('新しいプロジェクト'),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '保存先: ${widget.controller.location?.name ?? ''}',
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              field('project-create-title', title, '名前', max: 200),
+              field(
+                'project-create-aliases',
+                aliases,
+                '別名（任意）',
+                hint: 'カンマ・読点区切り。AIがメモを結び付ける手がかりになります',
+              ),
+              field(
+                'project-create-keywords',
+                keywords,
+                'キーワード（任意）',
+                hint: 'カンマ・読点区切り',
+              ),
+              field(
+                'project-create-memo',
+                memo,
+                '最初のメモ（任意）',
+                hint: 'このプロジェクトのメモとして保存します',
+                lines: 4,
+                max: 8000,
+              ),
+              const Text(
+                '作成の依頼をInputへ追加します。Miniで受け付けられ、同期されるとプロジェクト一覧に表示されます。名前・別名が既存のプロジェクトと重なる場合は作成されません。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: NoticeBox(error!, error: true),
+                ),
+              if (result != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: NoticeBox(
+                    result!.saved
+                        ? 'この端末のInputに作成の依頼を保存しました'
+                        : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                  ),
+                ),
+              if (locked && result != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: SelectableText(
+                    '操作ID: $operation',
+                    style: const TextStyle(fontSize: 10),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: busy ? null : () => Navigator.pop(context),
+          child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
+        ),
+        if (result == null)
+          FilledButton(
+            key: const Key('project-create-submit'),
+            onPressed: busy ? null : submit,
+            child: const Text('作成を依頼'),
+          ),
+        if (result != null && !result!.saved)
+          FilledButton(
+            onPressed: busy
+                ? null
+                : () async {
+                    setState(() => busy = true);
+                    try {
+                      final r = await widget.controller.confirm(operation);
+                      if (mounted) setState(() => result = r);
+                    } catch (e) {
+                      if (mounted) {
+                        setState(() => error = HubController.message(e));
+                      }
+                    } finally {
+                      if (mounted) setState(() => busy = false);
+                    }
+                  },
+            child: const Text('同じ操作を確認'),
+          ),
+        if (busy)
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+      ],
+    ),
   );
 }

@@ -29,6 +29,12 @@ class HubRepository {
   final Map<String, String> _outstandingItems = {};
   final Map<String, String> _outstandingDrafts = {};
 
+  /// プロジェクトID → 反映待ちの「NOWを生成版に戻す」依頼のREQ ID。
+  final Map<String, String> _outstandingConflicts = {};
+
+  /// 依頼済みで、まだ定義が届いていない新しいプロジェクト。
+  final List<PendingProjectCreation> pendingProjectCreations = [];
+
   /// 訂正対象の入力ID → 反映待ちの訂正依頼のREQ ID。
   final Map<String, String> _outstandingCorrections = {};
   final Map<String, GitDraft> gitDrafts = {};
@@ -459,6 +465,62 @@ class HubRepository {
     }
   }
 
+  /// 本体がNOWの新版を退避していれば、止まっている状態と手で変えた行を求める。
+  void _readNowConflict(
+    HubProject project,
+    String raw,
+    Map<String, dynamic> meta,
+    String current,
+  ) {
+    final pattern = RegExp(
+      '^90_system/conflicts/NOW\\.${RegExp.escape(project.id)}\\.[0-9A-HJKMNP-TV-Z]{26}\\.md\$',
+    );
+    final files = snapshot.files.keys.where((p) => pattern.hasMatch(p)).toList()
+      ..sort();
+    if (files.isEmpty) return;
+    String? base;
+    try {
+      final baseline =
+          jsonDecode(
+                snapshot.files['90_system/now-generated/${project.id}.json'] ??
+                    'null',
+              )
+              as Map<String, dynamic>?;
+      final auto = baseline?['auto'];
+      if (baseline != null &&
+          baseline['schema_version'] == 1 &&
+          baseline['project'] == project.id &&
+          auto is String &&
+          baseline['generated_hash'] == meta['generated_hash'] &&
+          meta['generated_hash'] == 'sha256:${digest(auto)}') {
+        base = auto;
+      }
+    } catch (_) {
+      // 基準がない旧版の本体では、最新の退避と比べる。
+    }
+    final generated = base == null;
+    if (base == null) {
+      final latest = snapshot.files[files.last]!;
+      try {
+        final body = parseMarkdown(latest).body;
+        base = autoRegion(body)?.auto ?? body;
+      } catch (_) {
+        base = latest;
+      }
+    }
+    project.nowConflict = NowConflict(
+      latestPath: files.last,
+      count: files.length,
+      nowHash: digest(raw),
+      manualLines: manualLinesOf(current, base),
+      comparedWithGenerated: !generated,
+    );
+  }
+
+  /// 反映待ちの「NOWを生成版に戻す」依頼。
+  String? conflictRequestIdFor(String projectId) =>
+      _outstandingConflicts[projectId];
+
   void _problem(String path) =>
       warnings.add('$path: 形式・参照・整合性を確認できません。同期後に再読込してください。');
 
@@ -537,11 +599,7 @@ class HubRepository {
             .expand((item) => item.references)
             .toSet(),
       );
-      if (snapshot.files.keys.any(
-        (p) => p.startsWith('90_system/conflicts/NOW.${project.id}.'),
-      )) {
-        project.warnings.add('生成物の競合が記録されています。');
-      }
+      _readNowConflict(project, raw, m, region?.auto ?? doc.body);
       records[recordId(path)] = HubRecord(
         sourceId: project.id,
         path: path,
@@ -771,6 +829,8 @@ class HubRepository {
               'project-status',
               'item-resolution',
               'git-draft-dismiss',
+              'project-create',
+              'conflict-resolve',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
           throw const FormatException();
@@ -809,6 +869,37 @@ class HubRepository {
                 m['draft_hash'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['draft_hash']))) {
           throw const FormatException();
+        }
+        final creation = m['operation'] == 'project-create',
+            conflictResolve = m['operation'] == 'conflict-resolve';
+        if (creation &&
+            (m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !newProjectIdPattern.hasMatch(m['project_id']) ||
+                m['title'] is! String ||
+                (m['title'] as String).isEmpty ||
+                m['aliases'] is! List ||
+                m['keywords'] is! List ||
+                (m['aliases'] as List).any((a) => a is! String) ||
+                (m['keywords'] as List).any((k) => k is! String))) {
+          throw const FormatException();
+        }
+        String? conflictProject;
+        if (conflictResolve) {
+          final target = m['target'];
+          conflictProject = target is String
+              ? RegExp(
+                  r'^10_projects/([a-z0-9][a-z0-9-]{1,40})/NOW\.md$',
+                ).firstMatch(target)?.group(1)
+              : null;
+          if (doc.body.trim().isNotEmpty ||
+              m['confirmed'] != true ||
+              (conflictProject == null &&
+                  !['HOME.md', 'REVIEW.md'].contains(target)) ||
+              m['target_hash'] is! String ||
+              !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['target_hash'])) {
+            throw const FormatException();
+          }
         }
         final correction = m['operation'] == 'correct';
         var correctionSynced = false;
@@ -871,7 +962,11 @@ class HubRepository {
         final item = IntakeStatus(
           id: id,
           path: e.key,
-          title: statusChange
+          title: creation
+              ? '新しいプロジェクトの作成依頼: ${m['title']}'
+              : conflictResolve
+              ? 'NOWを生成版に戻す依頼: ${projects[conflictProject]?.title ?? m['target']}'
+              : statusChange
               ? '状態変更依頼: ${projects[m['project_id']]?.title ?? m['project_id']} → ${projectLifecycleLabels[m['status']]}'
               : itemReport
               ? '${m['action'] == 'resolve' ? '完了・解決' : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
@@ -934,6 +1029,37 @@ class HubRepository {
                 throw const FormatException();
               }
               resolutionId = r['resolutionId'] as String;
+            }
+            if (creation) {
+              final r = ack['result'] as Map, memo = r['firstMemoInputId'];
+              if (r['projectId'] != m['project_id'] ||
+                  r['creationId'] is! String ||
+                  !RegExp(
+                    r'^PCR-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['creationId']) ||
+                  (memo != null &&
+                      (memo is! String || !inputIdPattern.hasMatch(memo))) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              item.detail = projects.containsKey(m['project_id'])
+                  ? 'プロジェクトを作成しました。'
+                  : 'Mini受領済み。プロジェクト定義の同期を待っています。';
+            }
+            if (conflictResolve) {
+              final r = ack['result'] as Map;
+              if (r['target'] != m['target'] ||
+                  r['conflictResolutionId'] is! String ||
+                  !RegExp(
+                    r'^CRS-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['conflictResolutionId']) ||
+                  (r['memoInputId'] != null &&
+                      (r['memoInputId'] is! String ||
+                          !inputIdPattern.hasMatch(r['memoInputId']))) ||
+                  r['archived'] is! int ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
             }
             if (draftDismiss) {
               final r = ack['result'] as Map;
@@ -1006,6 +1132,32 @@ class HubRepository {
           }
         }
         if (statusChange) _statusRequest(item, m, changeId);
+        if (creation &&
+            ['waiting', 'accepted'].contains(item.state) &&
+            !projects.containsKey(m['project_id'])) {
+          pendingProjectCreations.add(
+            PendingProjectCreation(
+              requestId: item.id,
+              projectId: m['project_id'] as String,
+              title: m['title'] as String,
+              state: item.state,
+            ),
+          );
+        }
+        if (conflictProject != null) {
+          final conflict = projects[conflictProject]?.nowConflict;
+          if (item.state == 'waiting' &&
+              conflict?.nowHash == m['target_hash']) {
+            _outstandingConflicts[conflictProject] = item.id;
+          } else if (item.state == 'accepted') {
+            if (conflict != null) {
+              _outstandingConflicts[conflictProject] = item.id;
+              item.detail = 'Mini受領済み。NOWの同期を待っています。';
+            } else {
+              item.detail = 'NOWを生成版に戻しました。手で変えた行はメモとして残っています。';
+            }
+          }
+        }
         if (itemReport) _itemRequest(item, m, resolutionId);
         if (draftDismiss &&
             ['waiting', 'accepted'].contains(item.state) &&
@@ -1035,6 +1187,19 @@ class HubRepository {
     }
     if (reason is Map && reason['code'] == 'missing-correction-target') {
       return '訂正対象のメモが見つかりません。同期を確認してください。';
+    }
+    if (reason is Map && reason['code'] == 'project-exists') {
+      return '同じIDのプロジェクトが既にあります。もう一度作成してください。';
+    }
+    if (reason is Map && reason['code'] == 'project-overlap') {
+      final other = reason['project_id'];
+      return '名前か別名が既存のプロジェクト${other is String && projectIdPattern.hasMatch(other) ? '（$other）' : ''}と重なるため、作成しませんでした。名前を変えて作成し直すか、既存のプロジェクトを使ってください。';
+    }
+    if (reason is Map && reason['code'] == 'conflict-target-changed') {
+      return '確認した後にNOWが変わっていました。再読込して差分を確認し直してください。';
+    }
+    if (reason is Map && reason['code'] == 'conflict-missing') {
+      return '戻す必要のある競合がありませんでした。既に生成版に戻っている可能性があります。';
     }
     return '${error['code'] ?? '受付失敗'}';
   }
