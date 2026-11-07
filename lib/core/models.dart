@@ -6,17 +6,43 @@ import 'package:unorm_dart/unorm_dart.dart' as unicode;
 String digest(String value) => sha256.convert(utf8.encode(value)).toString();
 String recordId(String path) => 'record-${digest(path).substring(0, 24)}';
 
+/// アプリが使わない本体の記録。読取の件数と時間を抑えるため、ネイティブ側で数えず読まない。
+/// 本体の受付・整理の回復用や、再送判定・表示完了の記録で、アプリのどの画面も参照しない。
+const snapshotSkippedPaths = [
+  '90_system/receipts/pending',
+  '90_system/receipts/events',
+  '90_system/intake/pending',
+  '90_system/association-views',
+  '90_system/project-confirmations',
+  '90_system/project-approvals/materialized',
+];
+
+/// ネイティブの読取上限に達したときの注意の書き出し。
+const snapshotLimitWarningPrefix = '読取の上限';
+
 class VaultSnapshot {
   final Map<String, String> files;
   final List<String> warnings;
   final bool recognized;
   final DateTime loadedAt;
+
+  /// ファイルごとの更新時刻と大きさ。次の読取で変わっていないファイルを読み直さないために使う。
+  final Map<String, String> stamps;
+
+  /// 前回の読取から本文を引き継いだファイルの数。
+  final int reused;
   VaultSnapshot(
     this.files, {
     this.warnings = const [],
     this.recognized = true,
     DateTime? loadedAt,
+    this.stamps = const {},
+    this.reused = 0,
   }) : loadedAt = loadedAt ?? DateTime.now();
+
+  /// 読取の上限に達し、一部の記録を読めていない。
+  bool get limitReached =>
+      warnings.any((w) => w.startsWith(snapshotLimitWarningPrefix));
   String get fingerprint {
     final paths = files.keys.toList()..sort();
     return digest(paths.map((p) => '$p:${digest(files[p]!)}').join('\n'));

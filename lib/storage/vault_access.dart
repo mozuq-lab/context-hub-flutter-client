@@ -23,6 +23,13 @@ abstract class VaultAccess {
   Future<VaultLocation?> pickVault();
   Future<VaultLocation> sampleVault(Map<String, String> files);
   Future<VaultSnapshot> readSnapshot(VaultLocation location);
+
+  /// [previous]から変わっていないファイルは読み直さずに引き継ぐ。表示の更新だけに使い、
+  /// 確認を伴う操作（コピー・採用・依頼）は[readSnapshot]で全体を読み直す。
+  Future<VaultSnapshot> refreshSnapshot(
+    VaultLocation location,
+    VaultSnapshot previous,
+  ) => readSnapshot(location);
   Future<String?> readRequest(VaultLocation location, String requestId);
   Future<void> writeRequest(
     VaultLocation location,
@@ -51,17 +58,47 @@ class NativeVaultAccess implements VaultAccess {
         }))!,
       );
   @override
-  Future<VaultSnapshot> readSnapshot(VaultLocation location) async {
-    final value = (await channel.invokeMapMethod<String, dynamic>(
-      'readSnapshot',
-      {'handle': location.handle},
-    ))!;
-    return VaultSnapshot(
-      Map<String, String>.from(value['files']),
-      warnings: List<String>.from(value['warnings'] ?? []),
-      recognized: value['recognized'] == true,
-    );
+  Future<VaultSnapshot> readSnapshot(VaultLocation location) async =>
+      _merge(await _read(location, const {}), const {});
+
+  @override
+  Future<VaultSnapshot> refreshSnapshot(
+    VaultLocation location,
+    VaultSnapshot previous,
+  ) async {
+    final known = {
+      for (final e in previous.stamps.entries)
+        if (previous.files.containsKey(e.key)) e.key: e.value,
+    };
+    final value = await _read(location, known);
+    try {
+      return _merge(value, previous.files);
+    } on FormatException {
+      // 引き継ぐ本文が見つからない場合は、全体を読み直す。
+      return readSnapshot(location);
+    }
   }
+
+  Future<Map<String, dynamic>> _read(
+    VaultLocation location,
+    Map<String, String> known,
+  ) async => (await channel.invokeMapMethod<String, dynamic>('readSnapshot', {
+    'handle': location.handle,
+    'skip': snapshotSkippedPaths,
+    if (known.isNotEmpty) 'known': known,
+  }))!;
+
+  static VaultSnapshot _merge(
+    Map<String, dynamic> value,
+    Map<String, String> previous,
+  ) => mergeSnapshot(
+    files: Map<String, String>.from(value['files']),
+    unchanged: List<String>.from(value['unchanged'] ?? const []),
+    stamps: Map<String, String>.from(value['stamps'] ?? const {}),
+    warnings: List<String>.from(value['warnings'] ?? []),
+    recognized: value['recognized'] == true,
+    previous: previous,
+  );
 
   @override
   Future<String?> readRequest(VaultLocation location, String requestId) =>
@@ -102,4 +139,30 @@ class NativeVaultAccess implements VaultAccess {
     }
     await channel.invokeMethod('openExternal', {'url': url});
   }
+}
+
+/// ネイティブの読取結果と、前回から引き継ぐ本文をまとめる。引き継ぐ本文がなければFormatException。
+VaultSnapshot mergeSnapshot({
+  required Map<String, String> files,
+  required List<String> unchanged,
+  required Map<String, String> stamps,
+  required List<String> warnings,
+  required bool recognized,
+  required Map<String, String> previous,
+}) {
+  final merged = Map<String, String>.of(files);
+  for (final path in unchanged) {
+    final raw = previous[path];
+    if (raw == null || merged.containsKey(path)) {
+      throw const FormatException('引き継ぐ記録がありません。');
+    }
+    merged[path] = raw;
+  }
+  return VaultSnapshot(
+    merged,
+    warnings: warnings,
+    recognized: recognized,
+    stamps: stamps,
+    reused: unchanged.length,
+  );
 }

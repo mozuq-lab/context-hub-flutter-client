@@ -18,11 +18,21 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
+    private companion object {
+        // 読む.md/.jsonの件数、走査する項目（フォルダー・対象外のファイルを含む）の件数、合計バイト数の上限。
+        const val MAX_FILES = 20_000
+        const val MAX_ENTRIES = 100_000
+        /** 更新時刻の粒度（FAT32は2秒）を見込んで、これより新しいファイルは差分読取で再利用しない。 */
+        const val RACY_MS = 3_000L
+        const val MAX_TOTAL = 64L * 1_048_576
+    }
     private val resolver = activity.contentResolver
     private val executor = Executors.newSingleThreadExecutor()
     private val folders = setOf("00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system")
     // Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
     private val rootFiles = listOf("POLICY.md", "REVIEW.md")
+    // 操作journal以外の状態ファイル。保存先の設定と、端末に残す書きかけのメモ。
+    private val nonJournalStates = setOf("settings.json", "drafts.json")
     private val data = File(activity.filesDir, "context-hub").canonicalFile.apply { mkdirs() }
     private val state = File(data, "state").apply { mkdirs() }
     private val sample = File(data, "sample-vault")
@@ -77,23 +87,30 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
         } catch (_: Exception) { fail(result) }
         return true
     }
-    private data class Entry(val uri: Uri, val name: String, val dir: Boolean)
+    // stampは更新時刻（ミリ秒）と大きさ。providerが返さない場合はnullで、その場合は毎回読む。
+    private data class Entry(val uri: Uri, val name: String, val dir: Boolean, val stamp: String? = null, val size: Long? = null)
     private fun info(uri: Uri): Entry {
         resolver.query(uri, arrayOf(Docs.Document.COLUMN_DISPLAY_NAME, Docs.Document.COLUMN_MIME_TYPE), null, null, null).use { c ->
             require(c != null && c.moveToFirst())
             return Entry(uri, c.getString(0), c.getString(1) == Docs.Document.MIME_TYPE_DIR)
         }
     }
-    private fun children(uri: Uri, limit: Int = 5000): List<Entry> {
+    /** フォルダーの項目数が読取の上限を超えた。 */
+    private class EntryLimit : Exception()
+    private fun children(uri: Uri, limit: Int = MAX_ENTRIES): List<Entry> {
         val list = ArrayList<Entry>()
         resolver.query(Docs.buildChildDocumentsUriUsingTree(uri, Docs.getDocumentId(uri)),
-            arrayOf(Docs.Document.COLUMN_DOCUMENT_ID, Docs.Document.COLUMN_DISPLAY_NAME, Docs.Document.COLUMN_MIME_TYPE), null, null, null).use { c ->
+            arrayOf(Docs.Document.COLUMN_DOCUMENT_ID, Docs.Document.COLUMN_DISPLAY_NAME, Docs.Document.COLUMN_MIME_TYPE,
+                Docs.Document.COLUMN_LAST_MODIFIED, Docs.Document.COLUMN_SIZE), null, null, null).use { c ->
             require(c != null)
             while (c.moveToNext()) {
-                require(list.size < limit)
+                if (list.size >= limit) throw EntryLimit()
                 val name = c.getString(1)
                 require(name.isNotEmpty() && !name.contains('/') && !name.contains('\\'))
-                list.add(Entry(Docs.buildDocumentUriUsingTree(uri, c.getString(0)), name, c.getString(2) == Docs.Document.MIME_TYPE_DIR))
+                val modified = if (c.isNull(3)) 0L else c.getLong(3)
+                val size = if (c.isNull(4)) null else c.getLong(4)
+                val stamp = if (modified > 0 && size != null) "$modified:$size" else null
+                list.add(Entry(Docs.buildDocumentUriUsingTree(uri, c.getString(0)), name, c.getString(2) == Docs.Document.MIME_TYPE_DIR, stamp, size))
             }
         }
         require(list.map { it.name }.distinct().size == list.size)
@@ -122,7 +139,7 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
         return file
     }
     private fun stateFile(name: String): File {
-        require(name == "settings.json" || name.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json")))
+        require(name in nonJournalStates || name.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json")))
         return safe(File(state, name))
     }
     private fun syncDir(dir: File) {
@@ -148,67 +165,100 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
             syncDir(file.parentFile!!)
         } finally { temp.delete() }
     }
-    private fun snapshot(handle: String): Map<String, Any> {
+    /**
+     * Vaultを読む。skipに挙げたパス（フォルダーまたはファイル）は数えず読まない。
+     * knownに前回のstamp（更新時刻と大きさ）が一致するファイルは本文を読まずunchangedに返す。stampは読む前に取る。
+     * 更新時刻が読取開始の直前（RACY_MS以内）のファイルはstampを返さない。時刻の粒度が粗い保存先では、
+     * 同じ時刻のうちに同じ大きさで書き換えられても区別できないため、次回も本文を読み直す。
+     */
+    private fun snapshot(handle: String, skip: Set<String> = emptySet(), known: Map<String, String> = emptyMap()): Map<String, Any> {
         val files = linkedMapOf<String, String>(); val warnings = arrayListOf<String>()
-        var count = 0; var total = 0L; var recognized = false
-        fun add(path: String, read: () -> String) {
+        val unchanged = arrayListOf<String>(); val stamps = linkedMapOf<String, String>()
+        var entries = 0; var count = 0; var total = 0L; var recognized = false
+        val started = System.currentTimeMillis()
+        val limitWarning = "読取の上限（ファイル${MAX_FILES}件・合計64MB）に達したため、"
+        fun over() = entries > MAX_ENTRIES || count > MAX_FILES || total > MAX_TOTAL
+        fun add(path: String, stamp: String?, size: Long?, read: () -> String) {
+            require(++count <= MAX_FILES)
+            if (stamp != null && size != null && known[path] == stamp) {
+                total += size; require(total <= MAX_TOTAL)
+                unchanged.add(path); stamps[path] = stamp
+                return
+            }
             try {
                 val raw = read(); total += raw.toByteArray(Charsets.UTF_8).size
-                require(total <= 64L * 1_048_576)
+                require(total <= MAX_TOTAL)
                 files[path] = raw
+                val modified = stamp?.substringBefore(':')?.toLongOrNull()
+                if (stamp != null && modified != null && modified < started - RACY_MS) stamps[path] = stamp
             } catch (_: Exception) { warnings.add("読取できないファイル: $path") }
-            require(total <= 64L * 1_048_576)
+            require(total <= MAX_TOTAL)
         }
         fun local(dir: File, prefix: String, depth: Int) {
             if (depth > 12) { warnings.add("深さの上限に達しました。"); return }
             for (file in safe(dir).listFiles() ?: error("読取不可")) {
-                require(++count <= 5000)
+                require(++entries <= MAX_ENTRIES)
                 if (file.name.startsWith('.') || file.extension == "tmp") continue
                 val path = "$prefix/${file.name}"
+                if (path in skip) continue
                 if (file.canonicalPath != file.absolutePath) { warnings.add("symlinkを除外: $path"); continue }
                 if (file.isDirectory) local(file, path, depth + 1)
-                else if (file.extension in listOf("md", "json")) add(path) { text(safe(file).inputStream()) }
+                else if (file.extension in listOf("md", "json")) {
+                    val size = file.length(); val modified = file.lastModified()
+                    add(path, if (modified > 0) "$modified:$size" else null, size) { text(safe(file).inputStream()) }
+                }
             }
         }
         fun visit(dir: Uri, prefix: String, depth: Int) {
             if (depth > 12) { warnings.add("深さの上限に達しました。"); return }
-            for (e in children(dir, 5000 - count)) {
-                require(++count <= 5000)
+            // 1つのフォルダーの項目数が上限を超えた場合も、読取の上限として扱う。
+            val list = try { children(dir, MAX_ENTRIES - entries) } catch (e: EntryLimit) { entries = MAX_ENTRIES + 1; throw e }
+            for (e in list) {
+                require(++entries <= MAX_ENTRIES)
                 if (e.name.startsWith('.') || e.name.endsWith(".tmp")) continue
                 val path = "$prefix/${e.name}"
+                if (path in skip) continue
                 if (e.dir) visit(e.uri, path, depth + 1)
-                else if (e.name.substringAfterLast('.') in listOf("md", "json")) add(path) {
+                else if (e.name.substringAfterLast('.') in listOf("md", "json")) add(path, e.stamp, e.size) {
                     text(resolver.openInputStream(e.uri) ?: error("読取不可"))
                 }
             }
+        }
+        fun interrupted(name: String): Boolean {
+            if (over()) { warnings.add(limitWarning + name + "の一部を読めませんでした。"); return true }
+            warnings.add("フォルダーの読取を中断: $name"); return false
         }
         if (handle == "sample") {
             for (name in folders) {
                 val dir = File(sample, name)
                 if (!dir.exists()) continue
                 try { require(dir.isDirectory); recognized = true; local(dir, name, 1) }
-                catch (_: Exception) { warnings.add("フォルダーの読取を中断: $name"); if (count > 5000 || total > 64L * 1_048_576) break }
+                catch (_: Exception) { if (interrupted(name)) break }
             }
             for (name in rootFiles) {
                 val file = File(sample, name)
                 if (!file.exists()) continue
-                if (++count > 5000) warnings.add("件数上限により${name}を読取できません")
-                else add(name) { text(safe(file).inputStream()) }
+                if (count + 1 > MAX_FILES) warnings.add(limitWarning + name + "を読めませんでした。")
+                else try { add(name, null, null) { text(safe(file).inputStream()) } }
+                catch (_: Exception) { warnings.add(limitWarning + name + "を読めませんでした。") }
             }
         } else {
-            for (e in children(tree(handle))) {
-                if (e.name in rootFiles) {
-                    if (++count > 5000) warnings.add("件数上限により${e.name}を読取できません")
-                    else if (e.dir) warnings.add("${e.name}が通常ファイルではありません")
-                    else add(e.name) { text(resolver.openInputStream(e.uri) ?: error("読取不可")) }
-                    continue
-                }
+            val top = children(tree(handle))
+            for (e in top) {
                 if (e.name !in folders) continue
                 try { require(e.dir); recognized = true; visit(e.uri, e.name, 1) }
-                catch (_: Exception) { warnings.add("フォルダーの読取を中断: ${e.name}"); if (count > 5000 || total > 64L * 1_048_576) break }
+                catch (_: Exception) { if (interrupted(e.name)) break }
+            }
+            // macOSと同じく、フォルダーの読取が上限で止まっても直下の方針・ふりかえりは読む。
+            for (e in top) {
+                if (e.name !in rootFiles) continue
+                if (count + 1 > MAX_FILES) warnings.add(limitWarning + e.name + "を読めませんでした。")
+                else if (e.dir) warnings.add("${e.name}が通常ファイルではありません")
+                else try { add(e.name, null, null) { text(resolver.openInputStream(e.uri) ?: error("読取不可")) } }
+                catch (_: Exception) { warnings.add(limitWarning + e.name + "を読めませんでした。") }
             }
         }
-        return mapOf("files" to files, "warnings" to warnings, "recognized" to recognized)
+        return mapOf("files" to files, "warnings" to warnings, "recognized" to recognized, "unchanged" to unchanged, "stamps" to stamps)
     }
     private fun invoke(method: String, args: Map<*, *>): Any? {
         when (method) {
@@ -233,7 +283,7 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                 safe(sample)
                 return mapOf("handle" to "sample", "name" to "架空サンプル")
             }
-            "listJournals" -> return (state.list() ?: error("読取不可")).filter { it != "settings.json" && !it.startsWith('.') }
+            "listJournals" -> return (state.list() ?: error("読取不可")).filter { it !in nonJournalStates && !it.startsWith('.') }
             "readState" -> {
                 val file = stateFile(args["name"] as String)
                 return if (file.exists()) text(file.inputStream(), 65536) else null
@@ -244,7 +294,12 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
             }
         }
         val handle = args["handle"] as String
-        if (method == "readSnapshot") return snapshot(handle)
+        if (method == "readSnapshot") {
+            val skip = (args["skip"] as? List<*>)?.filterIsInstance<String>()?.toSet() ?: emptySet()
+            val known = (args["known"] as? Map<*, *>)?.entries
+                ?.mapNotNull { (k, v) -> if (k is String && v is String) k to v else null }?.toMap() ?: emptyMap()
+            return snapshot(handle, skip, known)
+        }
         require(method in listOf("readRequest", "writeRequest"))
         val id = args["requestId"] as String
         require(id.matches(Regex("REQ-[a-f0-9]{32}")))
