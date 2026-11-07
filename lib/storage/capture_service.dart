@@ -214,6 +214,31 @@ class CaptureService {
       draft.text,
     );
   });
+
+  /// 原文を残したまま、訂正チェーンの最新の入力（targetId）を訂正する依頼。本文は訂正後の全文。
+  Future<CaptureResult> saveCorrection(
+    String operationId,
+    String targetId,
+    String text,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !inputIdPattern.hasMatch(targetId) ||
+        text.trim().isEmpty ||
+        text.length > 8000 ||
+        utf8.encode(text).length > 32000) {
+      throw const FormatException('訂正文は1〜8000文字で入力してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'correct',
+      'target_id': targetId,
+    };
+    return _saveRequest(
+      operationId,
+      digest(jsonEncode(['correct', targetId, text])),
+      fields,
+      text,
+    );
+  });
   Future<CaptureResult> saveReview(
     String operationId,
     ReviewCandidate candidate,

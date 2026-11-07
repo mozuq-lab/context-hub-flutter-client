@@ -204,3 +204,40 @@ class IntakeStatus {
     this.detail = '',
   });
 }
+
+/// 検索の種類。本体の `ctx find --kind` と同じ名前。
+const searchKinds = [
+  'memo',
+  'work-summary',
+  'correction',
+  'idea',
+  'knowledge',
+  'now',
+];
+const searchKindLabels = {
+  'memo': 'メモ',
+  'work-summary': '作業要約',
+  'correction': '訂正',
+  'idea': 'アイデア',
+  'knowledge': '知識',
+  'now': 'NOW',
+};
+
+/// 検索の絞り込み条件。本体の `ctx find` の --project・--kind・--since・--until・--sort に対応する。
+class SearchFilter {
+  const SearchFilter({
+    this.project,
+    this.kinds = const {},
+    this.since,
+    this.until,
+    this.sort = 'relevance',
+  });
+  final String? project;
+  final Set<String> kinds;
+  final DateTime? since, until;
+
+  /// relevance（一致数の多い順）またはnewest（新しい順）。検索語がなければ新しい順。
+  final String sort;
+  bool get active =>
+      project != null || kinds.isNotEmpty || since != null || until != null;
+}
