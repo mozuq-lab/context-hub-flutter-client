@@ -440,6 +440,9 @@ class HubController extends ChangeNotifier {
       if (parsed.projectStatusRequestIdFor(projectId) != null) {
         throw StateError('このプロジェクトの状態変更は依頼済みです。受付状況を確認してください。');
       }
+      if (parsed.projectDefinitionRequestIdFor(projectId) != null) {
+        throw StateError('呼び名とキーワードの変更が反映されるまで待ってから依頼してください。');
+      }
       if (pending.isNotEmpty) {
         throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
       }
@@ -462,6 +465,37 @@ class HubController extends ChangeNotifier {
       if (!_disposed) await reload();
       _changed();
     }
+  }
+
+  /// 表示中の定義hashに結び付けて、名前・別名・キーワードの変更をInputへ依頼する。
+  Future<CaptureResult> requestProjectDefinition(
+    String projectId,
+    String expectedHash,
+    ProjectDefinitionDraft next,
+  ) {
+    late HubProject project;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId];
+        if (found == null || found.definitionHash != expectedHash) {
+          throw StateError('プロジェクト定義が変更されています。表示を確認してから操作してください。');
+        }
+        if (parsed.projectDefinitionRequestIdFor(projectId) != null ||
+            parsed.projectStatusRequestIdFor(projectId) != null) {
+          throw StateError('このプロジェクトへの依頼が反映待ちです。受付状況を確認してください。');
+        }
+        final problem = next.problem;
+        if (problem != null) throw StateError(problem);
+        if (next.sameAs(found)) {
+          throw StateError('名前・別名・キーワードに変更がありません。');
+        }
+        project = found;
+        // 変更後の内容と最新の変更記録を含め、同じ定義へ戻す依頼が過去の操作と混ざらないようにする。
+        return 'project-definition/$projectId/$expectedHash/${digest(jsonEncode([next.title, next.aliases, next.keywords]))}/${parsed.latestDefinitionChangeId(projectId) ?? '-'}';
+      },
+      (service, parsed, operation) =>
+          service.saveProjectDefinition(operation, project, next),
+    );
   }
 
   /// 最新のVaultを読み直して確認し、同じ確認内容には同じ操作IDを使って依頼を保存する。

@@ -569,6 +569,29 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  Future<void> changeDefinition(HubProject project) async {
+    final hash = project.definitionHash;
+    if (hash == null) return;
+    final next = await showDialog<ProjectDefinitionDraft>(
+      context: context,
+      builder: (_) => ProjectDefinitionDialog(project: project),
+    );
+    if (next == null || !mounted) return;
+    try {
+      final result = await c.requestProjectDefinition(project.id, hash, next);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '呼び名とキーワードの変更を依頼しました。Miniで受け付けられると反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   Future<bool> confirmAction(String title, String body, String action) async =>
       await showDialog<bool>(
         context: context,
@@ -840,6 +863,14 @@ class _HubViewState extends State<HubView> {
   List<Widget> projectView(HubProject project) {
     final now = DateTime.now(),
         requested = repo.projectStatusRequestIdFor(project.id) != null,
+        defining = repo.projectDefinitionRequestIdFor(project.id) != null,
+        editable =
+            !c.loading &&
+            !c.saving &&
+            !requested &&
+            !defining &&
+            c.captureWarning == null &&
+            project.definitionHash != null,
         changes = c.changesSince(project, visit: true),
         added = changes?.added.map((i) => i.id).toSet() ?? const <String>{};
     return [
@@ -860,6 +891,22 @@ class _HubViewState extends State<HubView> {
           padding: EdgeInsets.only(bottom: 10),
           child: NoticeBox('状態の変更を依頼済みです。Miniで受け付けられ、同期されると反映されます。'),
         ),
+      if (defining)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 10),
+          child: NoticeBox(
+            '呼び名とキーワードの変更を依頼済みです。Miniで受け付けられ、同期されると反映されます。',
+            key: Key('project-definition-requested'),
+          ),
+        ),
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: SelectableText(
+          '別名: ${project.aliases.isEmpty ? 'なし' : project.aliases.join('・')}\nキーワード: ${project.keywords.isEmpty ? 'なし' : project.keywords.join('・')}',
+          key: const Key('project-terms'),
+          style: const TextStyle(fontSize: 12, height: 1.7),
+        ),
+      ),
       for (final warning in project.warnings)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -886,16 +933,15 @@ class _HubViewState extends State<HubView> {
         children: [
           OutlinedButton.icon(
             key: const Key('project-status'),
-            onPressed:
-                c.loading ||
-                    c.saving ||
-                    requested ||
-                    c.captureWarning != null ||
-                    project.definitionHash == null
-                ? null
-                : () => changeStatus(project),
+            onPressed: editable ? () => changeStatus(project) : null,
             icon: const Icon(Icons.flag_outlined, size: 18),
             label: const Text('状態を変更'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('project-definition'),
+            onPressed: editable ? () => changeDefinition(project) : null,
+            icon: const Icon(Icons.label_outline, size: 18),
+            label: const Text('呼び名とキーワード'),
           ),
           OutlinedButton.icon(
             key: const Key('copy-context'),
@@ -1653,4 +1699,119 @@ class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
       ),
     ],
   );
+}
+
+/// プロジェクトの名前・別名・キーワードを編集する。別名とキーワードは1行に1つ。
+class ProjectDefinitionDialog extends StatefulWidget {
+  const ProjectDefinitionDialog({super.key, required this.project});
+  final HubProject project;
+  @override
+  State<ProjectDefinitionDialog> createState() =>
+      _ProjectDefinitionDialogState();
+}
+
+class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
+  late final title = TextEditingController(text: widget.project.title),
+      aliases = TextEditingController(text: widget.project.aliases.join('\n')),
+      keywords = TextEditingController(
+        text: widget.project.keywords.join('\n'),
+      );
+
+  ProjectDefinitionDraft get draft => ProjectDefinitionDraft(
+    title: title.text,
+    aliases: aliases.text.split('\n'),
+    keywords: keywords.text.split('\n'),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    for (final t in [title, aliases, keywords]) {
+      t.addListener(() => setState(() {}));
+    }
+  }
+
+  @override
+  void dispose() {
+    title.dispose();
+    aliases.dispose();
+    keywords.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final next = draft,
+        problem = next.problem,
+        unchanged = next.sameAs(widget.project);
+    return AlertDialog(
+      title: Text('${widget.project.title}の呼び名とキーワード'),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'AIはメモをどのプロジェクトに結び付けるかを、名前・別名・キーワードから判断します。メモでよく使う呼び方や、このプロジェクトに特有の言葉を加えてください。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('definition-title'),
+                controller: title,
+                maxLength: ProjectDefinitionDraft.maxTitleChars,
+                decoration: const InputDecoration(labelText: '名前'),
+              ),
+              TextField(
+                key: const Key('definition-aliases'),
+                controller: aliases,
+                minLines: 2,
+                maxLines: 6,
+                decoration: InputDecoration(
+                  labelText: '別名（1行に1つ）',
+                  helperText:
+                      '${next.aliases.length}/${ProjectDefinitionDraft.maxTerms}件',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('definition-keywords'),
+                controller: keywords,
+                minLines: 2,
+                maxLines: 6,
+                decoration: InputDecoration(
+                  labelText: 'キーワード（1行に1つ）',
+                  helperText:
+                      '${next.keywords.length}/${ProjectDefinitionDraft.maxTerms}件',
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (problem != null)
+                NoticeBox(problem, error: true)
+              else
+                const Text(
+                  '依頼はInputへ保存され、Miniで受け付けられると反映されます。プロジェクトを指定せずに保存したメモのうち、まだどのプロジェクトにも結び付いていないものは、次の整理で新しい定義に合わせて見直されます（AIを使います）。',
+                  style: TextStyle(fontSize: 12, height: 1.6),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton(
+          key: const Key('definition-submit'),
+          onPressed: problem != null || unchanged
+              ? null
+              : () => Navigator.pop(context, next),
+          child: const Text('変更を依頼'),
+        ),
+      ],
+    );
+  }
 }

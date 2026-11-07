@@ -26,6 +26,57 @@ class CaptureDraft {
   final String? gitDraftHash;
 }
 
+/// アプリで編集した名前・別名・キーワード。整えた値を持ち、上限は本体と同じにする。
+class ProjectDefinitionDraft {
+  ProjectDefinitionDraft({
+    required String title,
+    required List<String> aliases,
+    required List<String> keywords,
+  }) : title = _clean(title),
+       aliases = normalizeTerms(aliases),
+       keywords = normalizeTerms(keywords);
+  final String title;
+  final List<String> aliases, keywords;
+  static const maxTerms = 50, maxTermChars = 100, maxTitleChars = 200;
+
+  static String _clean(String value) =>
+      value.replaceAll(RegExp(r'[\r\n\t]+'), ' ').trim();
+
+  /// 前後の空白を除き、空の語と大文字小文字だけが違う重複を除く（全角・半角の違いは本体がまとめる）。
+  static List<String> normalizeTerms(List<String> values) {
+    final seen = <String>{}, result = <String>[];
+    for (final value in values) {
+      final term = _clean(value);
+      if (term.isEmpty || !seen.add(term.toLowerCase())) continue;
+      result.add(term);
+    }
+    return result;
+  }
+
+  /// 上限を超えていれば利用者向けの説明。問題がなければnull。
+  String? get problem {
+    if (title.isEmpty || title.length > maxTitleChars) {
+      return '名前は1〜$maxTitleChars文字で入力してください。';
+    }
+    for (final (label, list) in [('別名', aliases), ('キーワード', keywords)]) {
+      if (list.length > maxTerms) return '$labelは$maxTerms件までにしてください。';
+      if (list.any((t) => t.length > maxTermChars)) {
+        return '$labelは1件$maxTermChars文字までにしてください。';
+      }
+    }
+    return null;
+  }
+
+  bool sameAs(HubProject project) =>
+      title == project.title &&
+      listEquals(aliases, project.aliases) &&
+      listEquals(keywords, project.keywords);
+
+  static bool listEquals(List<String> a, List<String> b) =>
+      a.length == b.length &&
+      Iterable<int>.generate(a.length).every((i) => a[i] == b[i]);
+}
+
 class CaptureResult {
   const CaptureResult(this.operationId, this.requestId, this.state);
   final String operationId;
@@ -246,6 +297,34 @@ class CaptureService {
       'project_id': project.id,
       'project_hash': hash,
       'status': status,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 名前・別名・キーワードの変更依頼。変更後の全体を、表示中の定義hashに結び付けて送る。
+  Future<CaptureResult> saveProjectDefinition(
+    String operationId,
+    HubProject project,
+    ProjectDefinitionDraft next,
+  ) => _serial(() async {
+    final hash = project.definitionHash;
+    final problem = next.problem;
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(project.id) ||
+        hash == null ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(hash) ||
+        problem != null ||
+        next.sameAs(project)) {
+      throw FormatException(problem ?? '名前・別名・キーワードの変更を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'project-definition',
+      'project_id': project.id,
+      'project_hash': hash,
+      'title': next.title,
+      'aliases': next.aliases,
+      'keywords': next.keywords,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
