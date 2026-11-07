@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
+import '../storage/draft_store.dart';
 import '../core/repository.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
@@ -261,6 +262,28 @@ class HubController extends ChangeNotifier {
       saving = false;
       await reload();
       _changed();
+    }
+  }
+
+  /// 書きかけのメモ（端末内のみ）。
+  late final DraftStore drafts = DraftStore(access);
+
+  /// 現在のVaultでの書きかけのキー。Vaultが未選択ならnull。
+  String? draftKey({String? gitDraftId}) {
+    final target = location;
+    return target == null
+        ? null
+        : DraftStore.keyFor(target.identity, gitDraftId: gitDraftId);
+  }
+
+  /// 書きかけに残した操作IDの保存状態。journalがなければnull、読めなければ再送を防ぐため'uncertain'。
+  Future<String?> operationState(String operationId) async {
+    final target = location;
+    if (target == null) return 'uncertain';
+    try {
+      return await CaptureService(access, target).journalState(operationId);
+    } catch (_) {
+      return 'uncertain';
     }
   }
 

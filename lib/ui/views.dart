@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
@@ -5,6 +6,7 @@ import '../app/controller.dart';
 import '../core/models.dart';
 import '../core/repository.dart';
 import '../storage/capture_service.dart';
+import '../storage/draft_store.dart';
 import 'markdown_view.dart';
 import 'review_view.dart';
 
@@ -1180,25 +1182,167 @@ class CaptureDialog extends StatefulWidget {
 
 class _CaptureDialogState extends State<CaptureDialog> {
   final text = TextEditingController();
-  final operation = const Uuid().v4();
+  String operation = const Uuid().v4();
   String kind = 'memo';
   String? project, error;
   CaptureResult? result;
   bool busy = false, locked = false;
+
+  // ---- 書きかけの保持（端末内のみ） ----
+  String? _draftKey;
+  bool _ready = false, _keepDrafts = true, _finished = false;
+
+  /// 戻した書きかけの日時。戻していなければnull。
+  DateTime? _restoredAt;
+  int _formGeneration = 0;
+  Timer? _debounce;
+  AppLifecycleListener? _lifecycle;
+
+  DraftStore get _drafts => widget.controller.drafts;
+
   @override
   void initState() {
     super.initState();
+    _initial();
+    _draftKey = widget.controller.draftKey(gitDraftId: widget.draft?.id);
+    text.addListener(_schedulePersist);
+    _lifecycle = AppLifecycleListener(
+      onInactive: _persistNow,
+      onHide: _persistNow,
+      onPause: _persistNow,
+    );
+    _restore();
+  }
+
+  void _initial() {
     final draft = widget.draft;
-    if (draft != null) {
-      text.text = draft.text;
-      project = draft.projectId;
+    text.text = draft?.text ?? '';
+    kind = 'memo';
+    project = draft?.projectId;
+  }
+
+  /// 前回の書きかけを戻す。保存済みの操作の書きかけは消し、保存結果が不明なものは確認へ戻す。
+  Future<void> _restore() async {
+    final key = _draftKey;
+    try {
+      if (key == null) return;
+      _keepDrafts = await _drafts.enabled();
+      final stored = await _drafts.read(key);
+      if (stored == null) return;
+      final draft = widget.draft;
+      final projects = widget.controller.repository?.projects ?? const {};
+      if ((draft != null && stored.gitDraftHash != draft.hash) ||
+          (draft != null && stored.project != draft.projectId)) {
+        // 下書きが作り直された場合、古い本文は戻さない。
+        await _drafts.remove(key);
+        return;
+      }
+      final op = stored.operationId;
+      final state = op == null
+          ? null
+          : await widget.controller.operationState(op);
+      if (state == 'saved') {
+        await _drafts.remove(key);
+        return;
+      }
+      if (!mounted || text.text != (draft?.text ?? '')) return;
+      text.text = stored.text;
+      kind = stored.kind;
+      project = draft != null
+          ? draft.projectId
+          : stored.project != null && projects.containsKey(stored.project)
+          ? stored.project
+          : null;
+      _restoredAt = stored.updatedAt;
+      if (op != null && state != null) {
+        // 保存を試みた操作は、同じ操作IDで確認だけを行う（再送しない）。
+        operation = op;
+        locked = true;
+        result = CaptureResult(op, '', 'uncertain');
+      }
+    } catch (_) {
+      // 書きかけを戻せなくても入力は始められる。
+    } finally {
+      if (mounted) setState(() => _ready = true);
     }
+  }
+
+  void _schedulePersist() {
+    if (!_ready) return;
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 600), _persistNow);
+  }
+
+  void _persistNow() {
+    _debounce?.cancel();
+    _debounce = null;
+    _persist();
+  }
+
+  Future<void> _persist() async {
+    final key = _draftKey;
+    if (key == null || !_ready || !_keepDrafts || _finished) return;
+    await _drafts.write(
+      key,
+      WritingDraft(
+        text: text.text.length > DraftStore.maxChars
+            ? text.text.substring(0, DraftStore.maxChars)
+            : text.text,
+        kind: kind,
+        project: project,
+        gitDraftHash: widget.draft?.hash,
+        operationId: locked ? operation : null,
+        updatedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  Future<void> _finish() async {
+    _finished = true;
+    _debounce?.cancel();
+    final key = _draftKey;
+    if (key != null) await _drafts.remove(key);
+  }
+
+  /// 戻した書きかけを捨て、最初の状態から書き直す。
+  Future<void> _discard() async {
+    final key = _draftKey;
+    _debounce?.cancel();
+    if (key != null) await _drafts.remove(key);
+    if (!mounted) return;
+    setState(() {
+      _initial();
+      operation = const Uuid().v4();
+      locked = false;
+      result = null;
+      error = null;
+      _restoredAt = null;
+      _formGeneration++;
+    });
+  }
+
+  Future<void> _setKeepDrafts(bool value) async {
+    setState(() => _keepDrafts = value);
+    await _drafts.setEnabled(value);
+    if (value) await _persist();
   }
 
   @override
   void dispose() {
+    if (_debounce?.isActive == true) _persistNow();
+    _debounce?.cancel();
+    _lifecycle?.dispose();
+    text.removeListener(_schedulePersist);
     text.dispose();
     super.dispose();
+  }
+
+  Future<void> _settled(CaptureResult r) async {
+    if (r.saved) {
+      await _finish();
+    } else {
+      await _persist();
+    }
   }
 
   Future<void> submit() async {
@@ -1211,6 +1355,9 @@ class _CaptureDialogState extends State<CaptureDialog> {
       locked = true;
       error = null;
     });
+    // 保存中に終了されても同じ操作の確認へ戻れるよう、先に操作IDを書きかけへ残す。
+    _debounce?.cancel();
+    await _persist();
     try {
       final r = await widget.controller.save(
         CaptureDraft(
@@ -1222,6 +1369,26 @@ class _CaptureDialogState extends State<CaptureDialog> {
           gitDraftHash: widget.draft?.hash,
         ),
       );
+      await _settled(r);
+      if (mounted) {
+        setState(() => result = r);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = HubController.message(e));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => busy = false);
+      }
+    }
+  }
+
+  Future<void> confirmSame() async {
+    setState(() => busy = true);
+    try {
+      final r = await widget.controller.confirm(operation);
+      await _settled(r);
       if (mounted) {
         setState(() => result = r);
       }
@@ -1243,98 +1410,154 @@ class _CaptureDialogState extends State<CaptureDialog> {
       title: Text(widget.draft == null ? '思いつきを、そのまま。' : '下書きから入力を作る'),
       content: SizedBox(
         width: 620,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                '保存先: ${widget.controller.location?.name ?? ''}',
-                style: const TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                key: const Key('memo-text'),
-                controller: text,
-                readOnly: locked,
-                minLines: 5,
-                maxLines: 10,
-                maxLength: 8000,
-                decoration: const InputDecoration(
-                  hintText: '断片的なメモ、疑問、あとで考えたいこと…',
-                  alignLabelWithHint: true,
-                ),
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: kind,
-                decoration: const InputDecoration(labelText: '種類'),
-                items: const [
-                  DropdownMenuItem(value: 'memo', child: Text('メモ')),
-                  DropdownMenuItem(
-                    value: 'work-summary',
-                    child: Text('AIの作業要約・未検証'),
-                  ),
-                ],
-                onChanged: locked ? null : (v) => setState(() => kind = v!),
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: project ?? '',
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'プロジェクト（任意）'),
-                items: [
-                  const DropdownMenuItem(value: '', child: Text('指定しない')),
-                  for (final p
-                      in widget.controller.repository?.projects.values ??
-                          const <HubProject>[])
-                    DropdownMenuItem(
-                      value: p.id,
-                      child: Text(p.title, overflow: TextOverflow.ellipsis),
+        child: !_ready
+            ? const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '保存先: ${widget.controller.location?.name ?? ''}',
+                      style: const TextStyle(fontSize: 12),
                     ),
-                ],
-                // 下書きは同じプロジェクトの入力でだけ使用済みになるため、プロジェクトを固定する。
-                onChanged: locked || widget.draft != null
-                    ? null
-                    : (v) => setState(() => project = v == '' ? null : v),
+                    if (_restoredAt != null && result?.saved != true) ...[
+                      const SizedBox(height: 12),
+                      NoticeBox(
+                        locked
+                            ? '前回、保存結果を確かめられないまま閉じた書きかけです（${timeLabel(_restoredAt)}）。同じ内容を送り直さず、「同じ操作を確認」を押してください。'
+                            : '前回の書きかけを戻しました（${timeLabel(_restoredAt)}）。',
+                        key: const Key('draft-restored'),
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          key: const Key('draft-discard'),
+                          onPressed: busy ? null : _discard,
+                          child: Text(
+                            locked ? '書きかけを閉じて新しく書く' : '書きかけを破棄して新しく書く',
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    TextField(
+                      key: const Key('memo-text'),
+                      controller: text,
+                      readOnly: locked,
+                      minLines: 5,
+                      maxLines: 10,
+                      maxLength: 8000,
+                      decoration: const InputDecoration(
+                        hintText: '断片的なメモ、疑問、あとで考えたいこと…',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey('memo-kind-$_formGeneration'),
+                      initialValue: kind,
+                      decoration: const InputDecoration(labelText: '種類'),
+                      items: const [
+                        DropdownMenuItem(value: 'memo', child: Text('メモ')),
+                        DropdownMenuItem(
+                          value: 'work-summary',
+                          child: Text('AIの作業要約・未検証'),
+                        ),
+                      ],
+                      onChanged: locked
+                          ? null
+                          : (v) {
+                              setState(() => kind = v!);
+                              _schedulePersist();
+                            },
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey('memo-project-$_formGeneration'),
+                      initialValue: project ?? '',
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'プロジェクト（任意）',
+                      ),
+                      items: [
+                        const DropdownMenuItem(value: '', child: Text('指定しない')),
+                        for (final p
+                            in widget.controller.repository?.projects.values ??
+                                const <HubProject>[])
+                          DropdownMenuItem(
+                            value: p.id,
+                            child: Text(
+                              p.title,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      // 下書きは同じプロジェクトの入力でだけ使用済みになるため、プロジェクトを固定する。
+                      onChanged: locked || widget.draft != null
+                          ? null
+                          : (v) {
+                              setState(() => project = v == '' ? null : v);
+                              _schedulePersist();
+                            },
+                    ),
+                    if (widget.draft != null && kind == 'work-summary')
+                      const Padding(
+                        padding: EdgeInsets.only(top: 12),
+                        child: NoticeBox(
+                          '作業要約として保存すると、NOWの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
+                      style: TextStyle(fontSize: 12, height: 1.6),
+                    ),
+                    if (_draftKey != null)
+                      CheckboxListTile(
+                        key: const Key('keep-drafts'),
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        dense: true,
+                        value: _keepDrafts,
+                        onChanged: (v) => _setKeepDrafts(v ?? true),
+                        title: const Text(
+                          '書きかけをこの端末に残す',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                        subtitle: const Text(
+                          'フォームを閉じたりアプリが終了したりしても、次に開いたときに続きから書けます。保存が確かめられたら消します。Vaultには書きません。',
+                          style: TextStyle(fontSize: 11, height: 1.5),
+                        ),
+                      ),
+                    if (error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: NoticeBox(error!, error: true),
+                      ),
+                    if (result != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: NoticeBox(
+                          result!.saved
+                              ? 'この端末のInputに保存しました'
+                              : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                        ),
+                      ),
+                    if (locked)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: SelectableText(
+                          '操作ID: $operation',
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              if (widget.draft != null && kind == 'work-summary')
-                const Padding(
-                  padding: EdgeInsets.only(top: 12),
-                  child: NoticeBox(
-                    '作業要約として保存すると、NOWの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
-                  ),
-                ),
-              const SizedBox(height: 16),
-              const Text(
-                'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
-                style: TextStyle(fontSize: 12, height: 1.6),
-              ),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: NoticeBox(error!, error: true),
-                ),
-              if (result != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: NoticeBox(
-                    result!.saved
-                        ? 'この端末のInputに保存しました'
-                        : '保存確認待ちです。再送せず同じ操作を確認してください。',
-                  ),
-                ),
-              if (locked)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: SelectableText(
-                    '操作ID: $operation',
-                    style: const TextStyle(fontSize: 10),
-                  ),
-                ),
-            ],
-          ),
-        ),
       ),
       actions: [
         TextButton(
@@ -1344,30 +1567,13 @@ class _CaptureDialogState extends State<CaptureDialog> {
         if (!locked)
           FilledButton(
             key: const Key('save-memo'),
-            onPressed: busy ? null : submit,
+            onPressed: busy || !_ready ? null : submit,
             child: const Text('Inputへ保存'),
           ),
         if (locked && result?.saved != true)
           FilledButton(
-            onPressed: busy
-                ? null
-                : () async {
-                    setState(() => busy = true);
-                    try {
-                      final r = await widget.controller.confirm(operation);
-                      if (mounted) {
-                        setState(() => result = r);
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                        setState(() => error = HubController.message(e));
-                      }
-                    } finally {
-                      if (mounted) {
-                        setState(() => busy = false);
-                      }
-                    }
-                  },
+            key: const Key('confirm-same'),
+            onPressed: busy ? null : confirmSame,
             child: const Text('同じ操作を確認'),
           ),
         if (busy)

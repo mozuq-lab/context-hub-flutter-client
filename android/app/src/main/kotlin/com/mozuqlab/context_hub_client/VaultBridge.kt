@@ -23,6 +23,8 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
     private val folders = setOf("00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system")
     // Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
     private val rootFiles = listOf("POLICY.md", "REVIEW.md")
+    // 操作journal以外の状態ファイル。保存先の設定と、端末に残す書きかけのメモ。
+    private val nonJournalStates = setOf("settings.json", "drafts.json")
     private val data = File(activity.filesDir, "context-hub").canonicalFile.apply { mkdirs() }
     private val state = File(data, "state").apply { mkdirs() }
     private val sample = File(data, "sample-vault")
@@ -122,7 +124,7 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
         return file
     }
     private fun stateFile(name: String): File {
-        require(name == "settings.json" || name.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json")))
+        require(name in nonJournalStates || name.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json")))
         return safe(File(state, name))
     }
     private fun syncDir(dir: File) {
@@ -233,7 +235,7 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                 safe(sample)
                 return mapOf("handle" to "sample", "name" to "架空サンプル")
             }
-            "listJournals" -> return (state.list() ?: error("読取不可")).filter { it != "settings.json" && !it.startsWith('.') }
+            "listJournals" -> return (state.list() ?: error("読取不可")).filter { it !in nonJournalStates && !it.startsWith('.') }
             "readState" -> {
                 val file = stateFile(args["name"] as String)
                 return if (file.exists()) text(file.inputStream(), 65536) else null

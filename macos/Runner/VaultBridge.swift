@@ -9,6 +9,8 @@ final class VaultBridge {
   private let folders = ["00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system"]
   /// Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
   private let rootFiles = ["POLICY.md", "REVIEW.md"]
+  /// 操作journal以外の状態ファイル。保存先の設定と、端末に残す書きかけのメモ。
+  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json"]
   private let maxFile = 1_048_576
   private enum Failure: Error { case invalid, io }
 
@@ -145,7 +147,7 @@ final class VaultBridge {
     try syncDirectory(parent)
   }
   private func stateFile(_ name: String) throws -> URL {
-    guard name == "settings.json" || name.range(of: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$", options: .regularExpression) != nil else { throw Failure.invalid }
+    guard nonJournalStates.contains(name) || name.range(of: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$", options: .regularExpression) != nil else { throw Failure.invalid }
     return try directory(appData().appendingPathComponent("state"), create: true).appendingPathComponent(name)
   }
   private func snapshot(_ root: URL) throws -> [String: Any] {
@@ -223,7 +225,7 @@ final class VaultBridge {
       try write(stateFile(name), raw: raw, exclusive: args["exclusive"] as? Bool == true); return nil
     case "listJournals":
       let state = try stateFile("settings.json").deletingLastPathComponent()
-      return try fm.contentsOfDirectory(atPath: state.path).filter { $0 != "settings.json" && !$0.hasPrefix(".") }
+      return try fm.contentsOfDirectory(atPath: state.path).filter { !nonJournalStates.contains($0) && !$0.hasPrefix(".") }
     default:
       guard let handle = args["handle"] as? String else { throw Failure.invalid }
       return try root(handle) { root in

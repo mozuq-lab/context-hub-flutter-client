@@ -87,8 +87,15 @@ class CaptureService {
     }
   }
 
+  /// 操作journalとして扱わない状態ファイル。
+  static const nonJournalStates = {'settings.json', 'drafts.json'};
+  Future<List<String>> _journalNames() async => [
+    for (final name in await access.listJournals())
+      if (!nonJournalStates.contains(name)) name,
+  ];
+
   Future<void> _checkJournals() async {
-    for (final name in await access.listJournals()) {
+    for (final name in await _journalNames()) {
       await _journal(name);
     }
   }
@@ -336,9 +343,18 @@ class CaptureService {
     }
     return _confirm(await _journal('$operationId.json'));
   });
+
+  /// 操作journalの状態（saved・uncertain・prepared）。journalがなければnull。別のVaultの操作は対象外。
+  Future<String?> journalState(String operationId) => _serial(() async {
+    if (!_uuid.hasMatch(operationId)) return null;
+    if (await access.readState('$operationId.json') == null) return null;
+    final j = await _journal('$operationId.json');
+    if (j['rootHash'] != digest(location.identity)) return null;
+    return j['state'] as String;
+  });
   Future<List<CaptureResult>> pending() => _serial(() async {
     final results = <CaptureResult>[];
-    for (final name in await access.listJournals()) {
+    for (final name in await _journalNames()) {
       final j = await _journal(name);
       if (j['rootHash'] == digest(location.identity) && j['state'] != 'saved') {
         results.add(
