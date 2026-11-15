@@ -210,7 +210,9 @@ void main() {
     ];
     for (final id in ops) {
       expect(
-        (await service.save(CaptureDraft(operationId: id, text: 'メモ$id'))).saved,
+        (await service.save(
+          CaptureDraft(operationId: id, text: 'メモ$id'),
+        )).saved,
         isTrue,
       );
     }

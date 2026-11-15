@@ -54,6 +54,7 @@ class _GuidedPageState extends State<GuidedPage> {
       summary = TextEditingController();
   GuidedPurpose purpose = GuidedPurpose.record;
   String? project;
+
   /// Vaultの資料を送るか。本人がオンにしたときだけ送り（既定はオフ）、送る全文を始める前に開いて見せる。
   bool includeContext = false, otherOpen = false;
   final picked = <String>{};

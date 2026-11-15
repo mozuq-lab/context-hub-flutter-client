@@ -814,7 +814,8 @@ void main() {
     });
 
     test('応答の途中で届いた失敗（混雑）は、やり直せる失敗として使用量とともに返す', () async {
-      final events = '${sse(started, cut: true)}'
+      final events =
+          '${sse(started, cut: true)}'
           'event: error\n'
           'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n';
       await expectLater(
@@ -1038,10 +1039,7 @@ void main() {
         onData: (_) => fail('失敗の本文は少しずつ渡さない'),
       );
       expect(limited.status, 429);
-      expect(limited.headers, {
-        'retry-after': '12',
-        'request-id': 'req_local',
-      });
+      expect(limited.headers, {'retry-after': '12', 'request-id': 'req_local'});
       expect(limited.body, contains('rate_limit_error'));
 
       final stalled = ClaudeClient(

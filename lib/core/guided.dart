@@ -75,14 +75,25 @@ Map<String, TokenUsage> addUsage(
 /// （入力の1.25倍）。深掘りで使うモデルと、安全上の理由で断られたときに代わりに答えうるモデル。
 /// 料金が変わると目安がずれるため、画面では「目安」として示す。
 const claudePricesAsOf = '2026-11';
-const claudePrices = <String, ({double input, double cacheWrite, double cacheRead, double output})>{
-  'claude-opus-5-5': (input: 4, cacheWrite: 5, cacheRead: 0.2, output: 20),
-  'claude-opus-5': (input: 5, cacheWrite: 6.25, cacheRead: 0.5, output: 25),
-  'claude-opus-4-8': (input: 5, cacheWrite: 6.25, cacheRead: 0.5, output: 25),
-};
+const claudePrices =
+    <
+      String,
+      ({double input, double cacheWrite, double cacheRead, double output})
+    >{
+      'claude-opus-5-5': (input: 4, cacheWrite: 5, cacheRead: 0.2, output: 20),
+      'claude-opus-5': (input: 5, cacheWrite: 6.25, cacheRead: 0.5, output: 25),
+      'claude-opus-4-8': (
+        input: 5,
+        cacheWrite: 6.25,
+        cacheRead: 0.5,
+        output: 25,
+      ),
+    };
 
 /// 概算額（米ドル）。料金表にないモデルの分は数えず、[unknown]にそのモデルを返す。
-({double usd, Set<String> unknown}) estimateCost(Map<String, TokenUsage> usage) {
+({double usd, Set<String> unknown}) estimateCost(
+  Map<String, TokenUsage> usage,
+) {
   var usd = 0.0;
   final unknown = <String>{};
   for (final e in usage.entries) {
@@ -750,9 +761,7 @@ String guidedSummary(GuidedPurpose purpose, String raw) {
   // 見えないよう、記録用の記号と見出しを拒んで作り直させる（問いの検証と同じ扱い）。
   void check(String heading, String text) {
     if (_markers.any(text.contains) || text.contains('問答の記録')) {
-      throw FormatException(
-        '「$heading」に「→」「（選択）」「（自由入力）」「問答の記録」を使わないでください。',
-      );
+      throw FormatException('「$heading」に「→」「（選択）」「（自由入力）」「問答の記録」を使わないでください。');
     }
     if (text.startsWith('#')) {
       throw FormatException('「$heading」を見出し（#）で始めないでください。');

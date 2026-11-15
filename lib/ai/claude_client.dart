@@ -129,9 +129,10 @@ class IoHttpTransport implements HttpTransport {
         var size = 0;
         // 一定の間何も届かなければ途切れたとみなす（考えている間もpingが届く）。
         await for (final chunk
-            in response.timeout(idle).cast<List<int>>().transform(
-              utf8.decoder,
-            )) {
+            in response
+                .timeout(idle)
+                .cast<List<int>>()
+                .transform(utf8.decoder)) {
           size += chunk.length;
           if (size > maxResponse) {
             throw const ModelException('応答が大きすぎます。', costUncertain: true);
@@ -278,9 +279,8 @@ class _StreamReader {
   /// 依頼したモデル、代わりのモデルの試行（fallback_message）は応答したモデルの分とする。
   Map<String, TokenUsage> get usage {
     final merged = <Object?, Object?>{...?startUsage, ...?finalUsage};
-    int count(Map m, String key) => m[key] is int && (m[key] as int) > 0
-        ? m[key] as int
-        : 0;
+    int count(Map m, String key) =>
+        m[key] is int && (m[key] as int) > 0 ? m[key] as int : 0;
     TokenUsage of(Map m) => TokenUsage(
       input: count(m, 'input_tokens'),
       cacheWrite: count(m, 'cache_creation_input_tokens'),
@@ -350,7 +350,8 @@ class ClaudeClient implements ModelClient {
   @override
   void abort() => transport.abort();
 
-  static const _uncertainNote = '送った依頼の分の費用がかかっている可能性があります（今月の利用には、受け取れた分だけを数えました）。';
+  static const _uncertainNote =
+      '送った依頼の分の費用がかかっている可能性があります（今月の利用には、受け取れた分だけを数えました）。';
 
   @override
   Future<ModelReply> send(GuidedPrompt prompt, {required String apiKey}) async {

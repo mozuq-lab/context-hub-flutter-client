@@ -6,14 +6,16 @@ import 'fixtures.dart';
 const conflictPath =
     '00_inbox/2026-09-14_IN-01M2DSFVRRA5MFS95MKFPP2CCM.sync-conflict-20261101-120000-ABCDEFG.md';
 
-HubRepository withWarnings(List<String> warnings, [Map<String, String>? files]) =>
-    HubRepository(
-      VaultSnapshot(
-        files ?? fixtureFiles(),
-        warnings: warnings,
-        loadedAt: DateTime.utc(2026, 10, 30),
-      ),
-    );
+HubRepository withWarnings(
+  List<String> warnings, [
+  Map<String, String>? files,
+]) => HubRepository(
+  VaultSnapshot(
+    files ?? fixtureFiles(),
+    warnings: warnings,
+    loadedAt: DateTime.utc(2026, 10, 30),
+  ),
+);
 
 void main() {
   test('同期の競合コピーは通常の記録から除外して注意を出し、コピーは止めない', () {
@@ -40,7 +42,11 @@ void main() {
     ]) {
       final repo = withWarnings([w]);
       expect(repo.warnings, [w], reason: w);
-      expect(repo.context('context-hub'), contains('# AI Context Hub'), reason: w);
+      expect(
+        repo.context('context-hub'),
+        contains('# AI Context Hub'),
+        reason: w,
+      );
       final memo = repo.records.values.firstWhere((r) => r.path == inputPath);
       expect(repo.bundleContext([memo.id]).included, isNotEmpty, reason: w);
     }
@@ -62,12 +68,16 @@ void main() {
         throwsA(isA<FormatException>()),
         reason: w,
       );
-      expect(() => repo.vaultContext(), throwsA(isA<FormatException>()), reason: w);
+      expect(
+        () => repo.vaultContext(),
+        throwsA(isA<FormatException>()),
+        reason: w,
+      );
     }
     // 統合元のプロジェクトのフォルダーは、統合先のcontextに関係する。
-    final memo = HubRepository(fixture()).records.values.firstWhere(
-      (r) => r.path == inputPath,
-    );
+    final memo = HubRepository(
+      fixture(),
+    ).records.values.firstWhere((r) => r.path == inputPath);
     expect(
       () => withWarnings([
         'symlinkを除外: 10_projects/context-hub/NOW.md',
