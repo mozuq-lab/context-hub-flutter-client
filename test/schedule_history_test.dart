@@ -9,6 +9,7 @@ import 'package:context_hub_client/storage/capture_service.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'capture_test.dart' show TempAccess, location;
 import 'widget_test.dart' show MemoryUIAccess;
+import 'draft_test.dart' show LosingAccess;
 import 'work_records_test.dart' show protocol, projectId;
 import 'next_actions_test.dart' show multiProjectFiles;
 import 'fixtures.dart';
@@ -49,6 +50,10 @@ void main() {
       expect(validScheduleDate(bad), isFalse, reason: '$bad');
     }
     expect(addScheduleDays('2026-12-30', 3), '2027-01-02');
+    // 「今日」は端末のタイムゾーンではなく、本体と同じ日本時間で決める。
+    expect(hubToday(DateTime.utc(2026, 11, 15, 14, 59)), '2026-11-15');
+    expect(hubToday(DateTime.utc(2026, 11, 15, 15)), '2026-11-16');
+    expect(hubToday(DateTime.parse('2026-11-15T10:00:00-08:00')), '2026-11-16');
     const today = '2026-11-15';
     expect(scheduleBucket('2026-11-14', null, today), (
       bucket: ScheduleBucket.overdue,
@@ -243,7 +248,7 @@ void main() {
   testWidgets('次の一手で期日の近い項目を先頭に、見直す日が先の項目を末尾にたたみ、日付を依頼できる', (tester) async {
     tester.view.physicalSize = const Size(1280, 2600);
     tester.view.devicePixelRatio = 1;
-    final today = scheduleDate(DateTime.now());
+    final today = hubToday();
     var files = multiProjectFiles();
     // side-appの次の一手は期限切れ、context-hubの次の一手は見直す日が先。
     files = withSchedule(files, 'side-app', 0, due: addScheduleDays(today, -2));
@@ -337,5 +342,94 @@ void main() {
     expect(find.byKey(const Key('history-view')), findsOneWidget);
     expect(find.text('AI Context Hubの経緯'), findsWidgets);
     expect(find.textContaining('届いた入力: 3件'), findsOneWidget);
+  });
+
+  test('保存結果が不明だった依頼を確認した後、外してから同じ日付を付け直す依頼は新しく保存する', () async {
+    final access = LosingAccess();
+    await access.init();
+    final files = fixtureFiles();
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    final item = c.repository!.projects[projectId]!.nowItems.first;
+    access.lose = true;
+    final first = await c.requestItemSchedule(
+      projectId,
+      item.key,
+      '2026-11-20',
+      null,
+    );
+    expect(first.state, 'uncertain');
+    access.lose = false;
+    expect((await c.confirm(c.pending.single.operationId)).saved, isTrue);
+    expect(access.requests, hasLength(1));
+    // 本体が日付を付け、その後に外した状態（項目の日付はなく、記録は2件）。
+    Map<String, String> record(String id, String? due) => {
+      '90_system/item-schedules/$id.json': jsonEncode({
+        'schema_version': 1,
+        'id': id,
+        'project_id': projectId,
+        'item_key': item.key,
+        'due': due,
+        'review_after': null,
+        'created_at': '2026-11-15T00:00:00.000Z',
+      }),
+    };
+    const applied = 'SCH-01M7AAAAAAAAAAAAAAAAAAAAA1',
+        removed = 'SCH-01M7AAAAAAAAAAAAAAAAAAAAA2';
+    final after = {
+      ...files,
+      ...record(applied, '2026-11-20'),
+      ...record(removed, null),
+    };
+    expect(
+      HubRepository(fixture(after)).latestScheduleIdFor(item.key),
+      removed,
+    );
+    access.current = VaultSnapshot(after);
+    await c.reload();
+    final again = await c.requestItemSchedule(
+      projectId,
+      item.key,
+      '2026-11-20',
+      null,
+    );
+    expect(again.saved, isTrue);
+    expect(again.requestId, isNot(first.requestId));
+    expect(access.requests, hasLength(2));
+  });
+
+  test('完了・解決の報告が反映待ちの項目には、日付を依頼しない', () async {
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = fixtureFiles();
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    final item = c.repository!.projects[projectId]!.nowItems.first;
+    final report = await c.requestItemResolution(
+      projectId,
+      item.key,
+      'resolve',
+    );
+    access.current = VaultSnapshot({
+      ...files,
+      'Input/${report.requestId}.md': access.requests[report.requestId]!,
+    });
+    await c.reload();
+    expect(c.repository!.itemRequestIdFor(item.key), report.requestId);
+    await expectLater(
+      c.requestItemSchedule(projectId, item.key, '2026-11-20', null),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('完了・解決の報告'),
+        ),
+      ),
+    );
+    expect(access.requests, hasLength(1));
   });
 }

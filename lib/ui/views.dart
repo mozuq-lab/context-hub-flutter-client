@@ -1050,6 +1050,8 @@ class _HubViewState extends State<HubView> {
   void showHistory(HubProject project) {
     final history = project.history;
     if (history == null) return;
+    // 本文と同じ読込の時刻を示す（開いたまま再読込しても、本文は開いたときのもの）。
+    final loadedAt = repo.snapshot.loadedAt;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1060,7 +1062,7 @@ class _HubViewState extends State<HubView> {
             padding: const EdgeInsets.all(24),
             children: [
               Text(
-                '生成: ${timeLabel(history.generatedAt)}\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+                '生成: ${timeLabel(history.generatedAt)}\n読込: ${timeLabel(loadedAt)}（同期完了の確認ではありません）',
                 style: const TextStyle(fontSize: 12, height: 1.6),
               ),
               const SizedBox(height: 12),
@@ -1176,7 +1178,9 @@ class _HubViewState extends State<HubView> {
                       icon: const Icon(Icons.check_circle_outline, size: 15),
                       label: Text(section == 'next' ? '完了にする' : '解決にする'),
                     ),
-            if (entry.itemKey case final key?)
+            // 完了・解決の報告が反映待ちの間は、日付を依頼させない（本体が断るため）。
+            if (entry.itemKey case final key?
+                when repo.itemRequestIdFor(key) == null)
               repo.scheduleRequestIdFor(key) != null
                   ? const Padding(
                       padding: EdgeInsets.symmetric(vertical: 10),
@@ -1225,7 +1229,7 @@ class _HubViewState extends State<HubView> {
   /// 本人が付けた期日が過ぎた・今日・7日以内の項目はプロジェクトをまたいで先頭に出し、見直す日が先の項目はたたむ。
   List<Widget> nextView() {
     final now = DateTime.now(),
-        today = scheduleDate(now),
+        today = hubToday(now),
         projects = repo.actionableProjects,
         section = nextSection,
         count = {
@@ -1245,12 +1249,16 @@ class _HubViewState extends State<HubView> {
             c.changesSince(p)?.added.map((i) => i.id).toSet() ??
             const <String>{},
     };
-    final front = <ScheduleBucket, List<(HubProject, NowEntry, NowItemRef)>>{},
-        resting = <(HubProject, NowEntry, NowItemRef)>[],
+    // 末尾の番号はNOWでの並び順。期日とプロジェクトが同じ項目の順を保つために使う。
+    final front =
+            <ScheduleBucket, List<(HubProject, NowEntry, NowItemRef, int)>>{},
+        resting = <(HubProject, NowEntry, NowItemRef, int)>[],
         listed = <String, List<NowEntry>>{};
     for (final project in projects) {
       final rest = <NowEntry>[];
+      var order = 0;
       for (final entry in project.entriesWithSource(section)) {
+        order++;
         final item = entry.itemKey == null
             ? null
             : project.nowItems.where((i) => i.key == entry.itemKey).firstOrNull;
@@ -1260,9 +1268,14 @@ class _HubViewState extends State<HubView> {
         }
         final b = scheduleBucket(item.due, item.reviewAfter, today);
         if (b.hidden) {
-          resting.add((project, entry, item));
+          resting.add((project, entry, item, order));
         } else if (scheduleBucketLabels.containsKey(b.bucket)) {
-          front.putIfAbsent(b.bucket, () => []).add((project, entry, item));
+          front.putIfAbsent(b.bucket, () => []).add((
+            project,
+            entry,
+            item,
+            order,
+          ));
         } else {
           rest.add(entry);
         }
@@ -1273,10 +1286,12 @@ class _HubViewState extends State<HubView> {
       list.sort(
         (a, b) => a.$3.due!.compareTo(b.$3.due!) != 0
             ? a.$3.due!.compareTo(b.$3.due!)
-            : a.$1.id.compareTo(b.$1.id),
+            : a.$1.id.compareTo(b.$1.id) != 0
+            ? a.$1.id.compareTo(b.$1.id)
+            : a.$4.compareTo(b.$4),
       );
     }
-    Widget crossEntry((HubProject, NowEntry, NowItemRef) e) => Column(
+    Widget crossEntry((HubProject, NowEntry, NowItemRef, int) e) => Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         InkWell(
@@ -1297,7 +1312,7 @@ class _HubViewState extends State<HubView> {
       title(
         'NEXT ACTIONS',
         '次の一手',
-        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付はこの端末の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
       Align(
         alignment: Alignment.centerLeft,
@@ -2514,7 +2529,7 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
   }
 
   Widget field(String key, String label, String help, TextEditingController c) {
-    final today = scheduleDate(DateTime.now());
+    final today = hubToday();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

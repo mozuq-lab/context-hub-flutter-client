@@ -30,6 +30,7 @@ class HubRepository {
   final Map<String, String> _latestResolutions = {};
   final Map<String, String> _outstandingItems = {};
   final Map<String, DateTime> _scheduleTimes = {};
+  final Map<String, String> _latestSchedules = {};
   final Map<String, String> _outstandingSchedules = {};
   final Map<String, String> _outstandingDrafts = {};
 
@@ -286,7 +287,7 @@ class HubRepository {
         _problem(e.key);
       }
     }
-    // 期日・見直す日の記録。依頼の反映を確かめるため、記録の時刻だけを読む（有効な日付は項目一覧のscheduleを使う）。
+    // 期日・見直す日の記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（有効な日付は項目一覧のscheduleを使う）。
     final schedule = RegExp(
       r'^90_system/item-schedules/(SCH-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
@@ -305,7 +306,10 @@ class HubRepository {
             at == null) {
           throw const FormatException();
         }
-        _scheduleTimes[j['id'] as String] = at;
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _scheduleTimes[id] = at;
+        final last = _latestSchedules[key];
+        if (last == null || id.compareTo(last) > 0) _latestSchedules[key] = id;
       } catch (_) {
         _problem(e.key);
       }
@@ -473,6 +477,9 @@ class HubRepository {
   /// 反映を待っている、この項目への期日・見直す日の依頼。
   String? scheduleRequestIdFor(String itemKey) =>
       _outstandingSchedules[itemKey];
+
+  /// この項目の最新の期日・見直す日の記録のID（外した記録を含む）。記録がなければnull。
+  String? latestScheduleIdFor(String itemKey) => _latestSchedules[itemKey];
 
   /// この項目の最新の解決・再開記録のID。記録がなければnull。
   String? latestResolutionIdFor(String itemKey) => _latestResolutions[itemKey];

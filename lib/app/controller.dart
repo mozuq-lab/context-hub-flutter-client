@@ -361,7 +361,12 @@ class HubController extends ChangeNotifier {
     saving = true;
     _changed();
     try {
-      return await CaptureService(access, location!).confirm(operation);
+      final result = await CaptureService(access, location!).confirm(operation);
+      // 受付状況から保存を確認できた操作は、同じ内容の次の依頼で使い回さない。
+      if (result.saved) {
+        _reviewOperations.removeWhere((_, value) => value == operation);
+      }
+      return result;
     } finally {
       saving = false;
       await reload();
@@ -659,9 +664,15 @@ class HubController extends ChangeNotifier {
         if (parsed.scheduleRequestIdFor(itemKey) != null) {
           throw StateError('この項目の日付は依頼済みです。受付状況を確認してください。');
         }
+        // 完了・解決の報告が先に反映されると、本体は日付の依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
         item = found;
-        // 現在の日付と依頼する日付を含め、同じ内容の再試行だけを同じ操作として扱う。
-        return 'schedule/$projectId/$itemKey/${found.scheduleId ?? '-'}/${due ?? '-'}/${reviewAfter ?? '-'}';
+        // 依頼する日付と最新の日付記録を含め、同じ内容の再試行だけを同じ操作として扱う。
+        // 項目の現在の日付のIDは外すと元に戻るため、付ける→外す→同じ日付を付ける、で過去の操作と混ざらないよう
+        // 外した記録も含む最新の記録IDを使う（引き継いだ日付は項目のキーに記録がないため、現在の日付のIDも含める）。
+        return 'schedule/$projectId/$itemKey/${parsed.latestScheduleIdFor(itemKey) ?? '-'}/${found.scheduleId ?? '-'}/${due ?? '-'}/${reviewAfter ?? '-'}';
       },
       (service, parsed, operation) => service.saveItemSchedule(
         operation,

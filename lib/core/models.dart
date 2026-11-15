@@ -210,9 +210,14 @@ bool validScheduleDate(Object? value) {
   return date.year == y && date.month == mo && date.day == d;
 }
 
-/// 端末の暦日（YYYY-MM-DD）。
+/// 日時の年月日をそのまま暦日（YYYY-MM-DD）にする。
 String scheduleDate(DateTime t) =>
     '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+
+/// 本体と同じ「今日」。本体の設定はタイムゾーンをAsia/Tokyo（UTC+9、夏時間なし）に固定しているため、
+/// 端末のタイムゾーンに関わらず日本時間の暦日で決める。
+String hubToday([DateTime? now]) =>
+    scheduleDate((now ?? DateTime.now()).toUtc().add(const Duration(hours: 9)));
 String addScheduleDays(String date, int days) {
   final m = scheduleDatePattern.firstMatch(date)!;
   return scheduleDate(
