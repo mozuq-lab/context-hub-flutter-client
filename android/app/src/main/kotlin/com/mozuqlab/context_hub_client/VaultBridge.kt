@@ -1,8 +1,12 @@
 package com.mozuqlab.context_hub_client
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract as Docs
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -26,8 +30,12 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 class VaultBridge(
-    private val activity: Activity,
+    private val context: Context,
     messenger: BinaryMessenger,
+    /** 画面のある起動だけ。アプリを閉じている間の確認ではnullで、フォルダー選択・外部リンク・通知の許可は使えない。 */
+    private val activity: Activity? = null,
+    /** アプリを閉じている間の確認が終わったことを受け取る。 */
+    private val backgroundDone: (() -> Unit)? = null,
     /** ショートカットやウィジェットで選ばれた起動時の操作を1回だけ取り出す。 */
     private val takeLaunchAction: () -> String? = { null },
 ) {
@@ -40,9 +48,12 @@ class VaultBridge(
         const val MAX_TOTAL = 64L * 1_048_576
         /** 秘密の暗号化に使うAndroid Keystoreの鍵の名前。鍵は端末の外へ取り出せない。 */
         const val SECRET_ALIAS = "context-hub-secrets"
+        /** アプリを閉じている間の確認（画面なし）で使える操作。読むことと通知だけで、書く操作と秘密の読取は受け付けない。 */
+        val BACKGROUND_METHODS = setOf("readState", "readSnapshot", "showAttention", "clearAttention", "backgroundDone")
     }
-    private val resolver = activity.contentResolver
+    private val resolver = context.contentResolver
     private val executor = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
     private val folders = setOf("00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system")
     // Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
     private val rootFiles = listOf("POLICY.md", "REVIEW.md")
@@ -50,17 +61,21 @@ class VaultBridge(
     private val nonJournalStates = setOf("settings.json", "drafts.json", "guided.json", "basket.json", "templates.json")
     // 端末に暗号化して置く秘密の名前。選んで深掘りで使うClaudeのAPIキーだけ。
     private val secretNames = setOf("anthropic-api-key")
-    private val data = File(activity.filesDir, "context-hub").canonicalFile.apply { mkdirs() }
+    private val data = File(context.filesDir, "context-hub").canonicalFile.apply { mkdirs() }
     private val state = File(data, "state").apply { mkdirs() }
     private val secrets = File(data, "secrets").apply { mkdirs() }
     private val sample = File(data, "sample-vault")
     private var picker: MethodChannel.Result? = null
+    /** 通知の許可画面の結果を待っている呼び出し。 */
+    private var permission: MethodChannel.Result? = null
     private val channel = MethodChannel(messenger, "com.mozuqlab.contexthub/vault")
     init {
         channel.setMethodCallHandler { call, result ->
             val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any>()
-            if (call.method == "pickVault") {
-                if (picker != null) { fail(result); return@setMethodCallHandler }
+            if (activity == null && call.method !in BACKGROUND_METHODS) {
+                fail(result)
+            } else if (call.method == "pickVault") {
+                if (picker != null || activity == null) { fail(result); return@setMethodCallHandler }
                 picker = result
                 try {
                     activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
@@ -71,7 +86,7 @@ class VaultBridge(
                 try {
                     val uri = Uri.parse(args["url"] as String)
                     require(uri.scheme in listOf("http", "https") && !uri.host.isNullOrEmpty())
-                    activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    requireNotNull(activity).startActivity(Intent(Intent.ACTION_VIEW, uri))
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
             } else if (call.method == "takeLaunchAction") {
@@ -79,21 +94,75 @@ class VaultBridge(
             } else if (call.method == "updateHomeWidget") {
                 // 表示用の短い文字列を端末内に置くだけで、Vaultには触れない。
                 try {
-                    HomeWidgetProvider.store(activity.applicationContext, args["content"] as String?)
+                    HomeWidgetProvider.store(context.applicationContext, args["content"] as String?)
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
+            } else if (call.method == "attentionNotifications") {
+                // 確認待ちの通知の有効・無効。有効にできた（通知が許可されている）ときだけtrueを返す。
+                try {
+                    val app = context.applicationContext
+                    if (args["enabled"] != true) {
+                        AttentionCheck.cancel(app)
+                        result.success(false)
+                    } else if (AttentionCheck.allowed(app)) {
+                        result.success(AttentionCheck.schedule(app))
+                    } else {
+                        // 許可がない間は、通知できない確認を続けない。
+                        AttentionCheck.cancel(app)
+                        if (args["request"] == true && activity != null && permission == null &&
+                            Build.VERSION.SDK_INT >= 33 &&
+                            activity.checkSelfPermission(AttentionCheck.PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            // 本人が設定を入れたときだけ、端末の許可画面を出す。
+                            permission = result
+                            activity.requestPermissions(arrayOf(AttentionCheck.PERMISSION), AttentionCheck.PERMISSION_REQUEST)
+                        } else result.success(false)
+                    }
+                } catch (_: Exception) {
+                    if (permission === result) permission = null
+                    fail(result)
+                }
+            } else if (call.method == "showAttention") {
+                // 件数と種類だけの短い文を通知に出す。Vaultには触れない。
+                try {
+                    // 確認の途中でアプリの画面が開いたら、アプリが件数を出すので通知しない。
+                    if (activity != null || !MainActivity.visible) {
+                        AttentionCheck.show(context.applicationContext, args["key"] as String, args["title"] as String, args["text"] as String)
+                    }
+                    result.success(null)
+                } catch (_: Exception) { fail(result) }
+            } else if (call.method == "clearAttention") {
+                try {
+                    AttentionCheck.clear(context.applicationContext)
+                    result.success(null)
+                } catch (_: Exception) { fail(result) }
+            } else if (call.method == "backgroundDone") {
+                result.success(null)
+                backgroundDone?.invoke()
             } else executor.execute {
                 try {
                     val value = invoke(call.method, args)
-                    activity.runOnUiThread { result.success(value) }
+                    main.post { result.success(value) }
                 } catch (e: Exception) {
-                    if (activity.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                    if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
                         android.util.Log.w("ContextHub", e.javaClass.simpleName + ": " + e.stackTrace.take(3).joinToString())
                     }
-                    activity.runOnUiThread { fail(result) }
+                    main.post { fail(result) }
                 }
             }
         }
+    }
+    /** アプリを閉じている間の確認が終わったら、読取用のスレッドを止める。 */
+    fun close() { executor.shutdown() }
+    /** 通知の許可画面の結果。許可されたら数時間おきの確認を登録する。 */
+    fun permissionResult(request: Int): Boolean {
+        if (request != AttentionCheck.PERMISSION_REQUEST) return false
+        val result = permission ?: return true
+        permission = null
+        try {
+            val app = context.applicationContext
+            result.success(AttentionCheck.allowed(app) && AttentionCheck.schedule(app))
+        } catch (_: Exception) { fail(result) }
+        return true
     }
     /** アプリを開いたまま新しい起動時の操作が届いたことをFlutter側へ知らせる。 */
     fun notifyLaunchAction() = channel.invokeMethod("launchAction", null)

@@ -10,4 +10,6 @@
     <string name="shortcut_guided_long">選んで深掘りを始める</string>
     <string name="shortcut_next_short">次の一手</string>
     <string name="shortcut_next_long">次の一手を見る</string>
+    <string name="attention_channel">確認待ちのお知らせ</string>
+    <string name="attention_channel_description">アプリを閉じている間に、確認待ちの候補・作業記録の下書き・止まったNOWが増えたことを知らせます。</string>
 </resources>
