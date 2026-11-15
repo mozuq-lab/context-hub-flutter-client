@@ -1049,6 +1049,55 @@ void main() {
                 ),
               );
               await socket.close();
+            case '/many':
+              // 本文は短いが、pingなどの包みで1MiBを超える応答。
+              socket.add(latin1.encode(stream));
+              final ping = utf8.encode(
+                'event: ping\ndata: {"type": "ping"}\n\n',
+              );
+              final pings = <int>[for (var i = 0; i < 1000; i++) ...ping];
+              for (var i = 0; i < 40; i++) {
+                socket.add(latin1.encode(chunk(pings)));
+              }
+              socket.add(
+                latin1.encode(
+                  chunk(
+                    utf8.encode(
+                      sse({
+                        'model': guidedModel,
+                        'stop_reason': 'end_turn',
+                        'content': [
+                          {'type': 'text', 'text': '{}'},
+                        ],
+                        'usage': {'input_tokens': 3, 'output_tokens': 2},
+                      }),
+                    ),
+                  ),
+                ),
+              );
+              socket.add(latin1.encode('0\r\n\r\n'));
+              await socket.close();
+            case '/broken':
+              // 入力の使用量のあとに、UTF-8として読めないバイトが届く。
+              socket.add(latin1.encode(stream));
+              socket.add(
+                latin1.encode(
+                  chunk(
+                    utf8.encode(
+                      sse({
+                        'model': guidedModel,
+                        'content': [],
+                        'usage': {'input_tokens': 9},
+                      }, cut: true),
+                    ),
+                  ),
+                ),
+              );
+              await socket.flush();
+              await Future<void>.delayed(const Duration(milliseconds: 50));
+              socket.add(latin1.encode(chunk([0xff, 0xfe])));
+              socket.add(latin1.encode('0\r\n\r\n'));
+              await socket.close();
             case '/stall':
               // 入力の使用量まで送って止まる。
               socket.add(latin1.encode(stream));
@@ -1090,6 +1139,25 @@ void main() {
       expect(limited.headers, {'retry-after': '12', 'request-id': 'req_local'});
       expect(limited.body, contains('rate_limit_error'));
 
+      // 包み（SSEのイベントやping）は本文の上限に数えない。
+      final many = await ClaudeClient(
+        transport: _Redirect(at('/many')),
+      ).send(prompt(), apiKey: key);
+      expect(many.text, '{}');
+
+      // 読めないバイトも、途中で途切れた応答として使用量とともに返す。
+      await expectLater(
+        ClaudeClient(
+          transport: _Redirect(at('/broken')),
+        ).send(prompt(), apiKey: key),
+        throwsA(
+          isA<ModelException>()
+              .having((e) => e.retryable, 'retryable', isTrue)
+              .having((e) => e.costUncertain, 'costUncertain', isTrue)
+              .having((e) => e.inputTokens, 'input', 9),
+        ),
+      );
+
       final stalled = ClaudeClient(
         transport: _Redirect(
           at('/stall'),
@@ -1108,6 +1176,113 @@ void main() {
               }),
         ),
       );
+    });
+  });
+
+  group('実APIの形のSSE', () {
+    GuidedPrompt prompt() => guidedQuestionPrompt(session());
+    const key = 'sk-ant-secret-key-1234567890';
+    Future<ModelReply> read(String events) => ClaudeClient(
+      transport: _RawTransport(events),
+    ).send(prompt(), apiKey: key);
+
+    test('message_deltaの使用量のnullは、message_startの値を消さない', () async {
+      const events =
+          'event: message_start\n'
+          'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":30,"cache_creation_input_tokens":900,"cache_read_input_tokens":0,"output_tokens":1}}}\n\n'
+          'event: content_block_start\n'
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+          'event: ping\n'
+          'data: {"type": "ping"}\n\n'
+          'event: content_block_delta\n'
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{}"}}\n\n'
+          'event: content_block_stop\n'
+          'data: {"type":"content_block_stop","index":0}\n\n'
+          'event: message_delta\n'
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":null,"cache_creation_input_tokens":null,"cache_read_input_tokens":null,"output_tokens":57}}\n\n'
+          'event: message_stop\n'
+          'data: {"type":"message_stop"}\n\n';
+      final reply = await read(events);
+      expect(reply.usage, {
+        'claude-opus-5-5': const TokenUsage(
+          input: 30,
+          cacheWrite: 900,
+          output: 57,
+        ),
+      });
+      // 累計の値が届けば、それを使う。
+      final cumulative = await read(
+        events.replaceFirst(
+          '"input_tokens":null,"cache_creation_input_tokens":null',
+          '"input_tokens":31,"cache_creation_input_tokens":901',
+        ),
+      );
+      expect(
+        cumulative.usage['claude-opus-5-5'],
+        const TokenUsage(input: 31, cacheWrite: 901, output: 57),
+      );
+    });
+
+    test('出力の途中で代わりのモデルに替わったら、続きを連結し、応答したモデルとその分の使用量を分ける', () async {
+      const events =
+          'event: message_start\n'
+          'data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}\n\n'
+          'event: content_block_start\n'
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+          'event: content_block_delta\n'
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{\\"a\\":"}}\n\n'
+          'event: content_block_stop\n'
+          'data: {"type":"content_block_stop","index":0}\n\n'
+          'event: content_block_start\n'
+          'data: {"type":"content_block_start","index":1,"content_block":{"type":"fallback","from":{"model":"claude-opus-5-5"},"to":{"model":"claude-opus-4-8"}}}\n\n'
+          'event: content_block_stop\n'
+          'data: {"type":"content_block_stop","index":1}\n\n'
+          'event: content_block_start\n'
+          'data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}\n\n'
+          'event: content_block_delta\n'
+          'data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"1}"}}\n\n'
+          'event: content_block_stop\n'
+          'data: {"type":"content_block_stop","index":2}\n\n'
+          'event: message_delta\n'
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":120,"cache_creation_input_tokens":null,"cache_read_input_tokens":null,"output_tokens":5,"iterations":[{"type":"message","input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3},{"type":"fallback_message","input_tokens":120,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}]}}\n\n'
+          'event: message_stop\n'
+          'data: {"type":"message_stop"}\n\n';
+      final reply = await read(events);
+      expect(reply.text, '{"a":1}');
+      expect(reply.model, 'claude-opus-4-8');
+      expect(reply.usage, {
+        'claude-opus-5-5': const TokenUsage(input: 100, output: 3),
+        'claude-opus-4-8': const TokenUsage(input: 120, output: 5),
+      });
+    });
+
+    test('出力の前に替わったとき・続けて代わりのモデルが答えるときも、応答したモデルの分にする', () async {
+      // 出力の前に替わったときは、message_startが代わりのモデルを示し、fallbackのブロックが先頭に来る。
+      const before =
+          'data: {"type":"message_start","message":{"model":"claude-opus-4-8","usage":{"input_tokens":120,"output_tokens":1}}}\n\n'
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"fallback","from":{"model":"claude-opus-5-5"},"to":{"model":"claude-opus-4-8"}}}\n\n'
+          'data: {"type":"content_block_stop","index":0}\n\n'
+          'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n'
+          'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"{}"}}\n\n'
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4,"iterations":[{"type":"message","input_tokens":100,"output_tokens":0},{"type":"fallback_message","input_tokens":120,"output_tokens":4}]}}\n\n'
+          'data: {"type":"message_stop"}\n\n';
+      final first = await read(before);
+      expect(first.model, 'claude-opus-4-8');
+      expect(first.usage, {
+        'claude-opus-5-5': const TokenUsage(input: 100),
+        'claude-opus-4-8': const TokenUsage(input: 120, output: 4),
+      });
+      // 続けて代わりのモデルが答えるとき（ブロックなし）は、message_startのモデルの分にする。
+      const sticky =
+          'data: {"type":"message_start","message":{"model":"claude-opus-4-8","usage":{"input_tokens":50,"output_tokens":1}}}\n\n'
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"{}"}}\n\n'
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2,"iterations":[{"type":"fallback_message","input_tokens":50,"output_tokens":2}]}}\n\n'
+          'data: {"type":"message_stop"}\n\n';
+      final again = await read(sticky);
+      expect(again.model, 'claude-opus-4-8');
+      expect(again.usage, {
+        'claude-opus-4-8': const TokenUsage(input: 50, output: 2),
+      });
     });
   });
 

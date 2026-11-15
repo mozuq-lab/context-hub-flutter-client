@@ -91,9 +91,10 @@ abstract class HttpTransport {
   void abort();
 }
 
-/// dart:ioで送る。応答は1MiBまで読む。
+/// dart:ioで送る。成功の応答を少しずつ受け取るとき（SSE）は、イベントの包みやpingも届くため
+/// [maxStream]まで読む（本文そのものの上限は受け取る側で数える）。それ以外の応答は[maxResponse]まで。
 class IoHttpTransport implements HttpTransport {
-  static const maxResponse = 1 << 20;
+  static const maxResponse = 1 << 20, maxStream = 16 << 20;
 
   /// 読み取る応答ヘッダー。混雑時に待つ秒数と、問い合わせに使う依頼ID。
   static const keptHeaders = ['retry-after', 'request-id'];
@@ -134,7 +135,7 @@ class IoHttpTransport implements HttpTransport {
                 .cast<List<int>>()
                 .transform(utf8.decoder)) {
           size += chunk.length;
-          if (size > maxResponse) {
+          if (size > (streaming ? maxStream : maxResponse)) {
             throw const ModelException('応答が大きすぎます。', costUncertain: true);
           }
           if (streaming) {
@@ -167,6 +168,13 @@ class IoHttpTransport implements HttpTransport {
         retryable: true,
         costUncertain: sent,
       );
+    } on Exception {
+      // UTF-8として読めない応答など。送った後なら、費用が発生した可能性がある。
+      throw ModelException(
+        'Claudeの応答を読めませんでした。もう一度試してください。',
+        retryable: true,
+        costUncertain: sent,
+      );
     } finally {
       _active.remove(client);
       client.close(force: true);
@@ -188,44 +196,82 @@ class _StreamReader {
 
   /// 依頼したモデル。代わりのモデルが答えたときの内訳の振り分けに使う。
   final String requested;
-  final _buffer = StringBuffer();
-  String _pending = '';
-  String? model, stopReason;
-  Map? stopDetails, startUsage, finalUsage, error;
+
+  /// 本文（textのブロック）の上限。包み（SSEのイベント・ping）は数えない。
+  static const maxText = 1 << 20;
+  final _line = StringBuffer(), _data = StringBuffer();
+  String? startModel, stopReason;
+  Map? stopDetails, error;
   bool started = false, stopped = false;
+
+  /// 代わりのモデルへの切替（fallbackのブロック）の順の、断ったモデルと続けたモデル。
+  final _switches = <(String?, String?)>[];
+
+  /// 届いた使用量。message_startの値に、message_deltaで届いた値（累計）を項目ごとに重ねる。
+  /// nullの項目は重ねない（届いていない項目の値を消さない）。
+  final _usage = <String, Object>{};
   final _texts = <int, StringBuffer>{};
+  int _textSize = 0;
 
   String get text => [
     for (final k in _texts.keys.toList()..sort()) _texts[k]!.toString(),
   ].join();
 
+  /// 応答したモデル。出力の途中で代わりのモデルに替わると、message_startは依頼したモデルのまま
+  /// で、fallbackのブロックの`to`が替わった先を示す。
+  String get model => _switches.isNotEmpty && _switches.last.$2 != null
+      ? _switches.last.$2!
+      : startModel ?? requested;
+
+  /// 行ごとに読む。受け取った文字列を行の終わりまでだけ見て、残りを毎回写し直さない。
   void add(String chunk) {
-    _pending += chunk;
+    var from = 0;
     while (true) {
-      final at = _pending.indexOf('\n');
-      if (at < 0) break;
-      var line = _pending.substring(0, at);
-      _pending = _pending.substring(at + 1);
+      final at = chunk.indexOf('\n', from);
+      if (at < 0) {
+        _line.write(chunk.substring(from));
+        return;
+      }
+      _line.write(chunk.substring(from, at));
+      from = at + 1;
+      var line = _line.toString();
+      _line.clear();
       if (line.endsWith('\r')) line = line.substring(0, line.length - 1);
       if (line.isEmpty) {
         _dispatch();
       } else if (line.startsWith('data:')) {
-        if (_buffer.isNotEmpty) _buffer.write('\n');
-        _buffer.write(line.substring(5).trimLeft());
+        if (_data.isNotEmpty) _data.write('\n');
+        _data.write(line.substring(5).trimLeft());
       }
       // event:行は、dataの中のtypeで判断するので読まない。ping・コメントも読み飛ばす。
     }
   }
 
   void close() {
-    if (_pending.isNotEmpty) add('\n');
+    if (_line.isNotEmpty) add('\n');
     _dispatch();
   }
 
+  void _overlay(Object? usage) {
+    if (usage is! Map) return;
+    for (final e in usage.entries) {
+      final v = e.value;
+      if (e.key is String &&
+          (v is int || (e.key == 'iterations' && v is List))) {
+        _usage[e.key as String] = v as Object;
+      }
+    }
+  }
+
+  static String? _modelOf(Object? value) =>
+      value is Map && value['model'] is String
+      ? value['model'] as String
+      : null;
+
   void _dispatch() {
-    if (_buffer.isEmpty) return;
-    final raw = _buffer.toString();
-    _buffer.clear();
+    if (_data.isEmpty) return;
+    final raw = _data.toString();
+    _data.clear();
     final Object? event;
     try {
       event = jsonDecode(raw);
@@ -238,15 +284,17 @@ class _StreamReader {
         final m = event['message'];
         if (m is Map) {
           started = true;
-          if (m['model'] is String) model = m['model'] as String;
-          if (m['usage'] is Map) startUsage = m['usage'] as Map;
+          if (m['model'] is String) startModel = m['model'] as String;
+          _overlay(m['usage']);
         }
       case 'content_block_start':
         final index = event['index'], block = event['content_block'];
-        if (index is int && block is Map && block['type'] == 'text') {
-          _texts[index] = StringBuffer(
-            block['text'] is String ? block['text'] as String : '',
-          );
+        if (block is Map && block['type'] == 'fallback') {
+          _switches.add((_modelOf(block['from']), _modelOf(block['to'])));
+        } else if (index is int && block is Map && block['type'] == 'text') {
+          final first = block['text'] is String ? block['text'] as String : '';
+          _grow(first.length);
+          _texts[index] = StringBuffer(first);
         }
       case 'content_block_delta':
         final index = event['index'], delta = event['delta'];
@@ -254,7 +302,9 @@ class _StreamReader {
             delta is Map &&
             delta['type'] == 'text_delta' &&
             delta['text'] is String) {
-          _texts[index]?.write(delta['text'] as String);
+          final piece = delta['text'] as String;
+          _grow(piece.length);
+          _texts[index]?.write(piece);
         }
       case 'message_delta':
         final delta = event['delta'];
@@ -266,7 +316,7 @@ class _StreamReader {
             stopDetails = delta['stop_details'] as Map;
           }
         }
-        if (event['usage'] is Map) finalUsage = event['usage'] as Map;
+        _overlay(event['usage']);
       case 'message_stop':
         stopped = true;
       case 'error':
@@ -274,11 +324,19 @@ class _StreamReader {
     }
   }
 
-  /// モデルごとの種類別のトークン数。message_deltaの使用量は累計で、届いた項目だけを上書きする。
-  /// サーバー側の代替が働いたときは、試行ごとの内訳（iterations）を使う。断られた試行（message）は
-  /// 依頼したモデル、代わりのモデルの試行（fallback_message）は応答したモデルの分とする。
+  void _grow(int n) {
+    _textSize += n;
+    if (_textSize > maxText) {
+      throw const ModelException('応答が大きすぎます。', costUncertain: true);
+    }
+  }
+
+  /// モデルごとの種類別のトークン数。
+  ///
+  /// サーバー側の代替が働いたときは、試行ごとの内訳（iterations）を使う。代わりのモデルの試行
+  /// （fallback_message）は応答したモデル、断られた試行（message）は、fallbackのブロックの`from`を
+  /// 順に当てる（ブロックがなければ依頼したモデル）。試行にモデル名があれば、それを使う。
   Map<String, TokenUsage> get usage {
-    final merged = <Object?, Object?>{...?startUsage, ...?finalUsage};
     int count(Map m, String key) =>
         m[key] is int && (m[key] as int) > 0 ? m[key] as int : 0;
     TokenUsage of(Map m) => TokenUsage(
@@ -287,17 +345,31 @@ class _StreamReader {
       cacheRead: count(m, 'cache_read_input_tokens'),
       output: count(m, 'output_tokens'),
     );
-    final served = model ?? requested;
-    final parts = merged['iterations'];
+    final served = model;
+    final declined = [for (final (from, _) in _switches) from ?? requested];
+    final parts = _usage['iterations'];
     if (parts is List && parts.whereType<Map>().isNotEmpty) {
       var result = <String, TokenUsage>{};
+      var refused = 0;
       for (final part in parts.whereType<Map>()) {
-        final who = part['type'] == 'fallback_message' ? served : requested;
+        final String who;
+        if (part['model'] is String) {
+          who = part['model'] as String;
+        } else if (part['type'] == 'fallback_message') {
+          who = served;
+        } else {
+          who = refused < declined.length
+              ? declined[refused]
+              : declined.isEmpty
+              ? requested
+              : declined.last;
+          refused++;
+        }
         result = addUsage(result, {who: of(part)});
       }
       return result;
     }
-    final total = of(merged);
+    final total = of(_usage);
     return total.isEmpty ? const {} : {served: total};
   }
 }
@@ -426,7 +498,7 @@ class ClaudeClient implements ModelClient {
     final model = reader.model;
     return ModelReply(
       text: text,
-      model: model != null && _modelName.hasMatch(model) ? model : guidedModel,
+      model: _modelName.hasMatch(model) ? model : guidedModel,
       usage: {
         for (final e in used.entries)
           (_modelName.hasMatch(e.key) ? e.key : guidedModel): e.value,
