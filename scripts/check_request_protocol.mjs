@@ -1,13 +1,13 @@
-// Dartが保存したNOW項目の完了・解決報告、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの訂正のREQを、
+// Dartが保存したNOW項目の完了・解決報告、期日・見直す日の依頼、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの訂正のREQを、
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readNowItems,readHintDismissals,readGitDrafts,rebuildDashboard,readInputs} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,rebuildDashboard,readInputs} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','git-draft-dismiss','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -38,6 +38,15 @@ try{
   assert.equal((await readItemResolutions(vault)).length,resolutionsBefore+1);
   const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
   assert.equal(item.resolution?.id??null,packet.action==='resolve'?ack.result.resolutionId:null);
+ }else if(packet.operation==='item-schedule'){
+  // 変更後の全体（期日と見直す日）がそのまま記録され、NOWの項目一覧に反映される。両方nullなら外す。
+  assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});
+  const record=(await readItemSchedules(vault)).records.find(r=>r.id===ack.result.scheduleId);
+  assert.deepEqual({due:record.due,review_after:record.review_after,source:record.source},{due:packet.due,review_after:packet.review_after,source:packet.source});
+  const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
+  const clearing=packet.due===null&&packet.review_after===null;
+  assert.deepEqual(item.schedule,clearing?null:{id:record.id,due:packet.due,review_after:packet.review_after});
+  assert.equal(activeSchedules((await readItemSchedules(vault)).records).has(packet.item_key),!clearing);
  }else if(packet.operation==='item-hint-dismiss'){
   // 見送りは候補の表示だけを変え、項目は未解決のまま残す。
   assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,hintInputId:ack.result.hintInputId,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,hintInputId:packet.input_id,deduped:false});

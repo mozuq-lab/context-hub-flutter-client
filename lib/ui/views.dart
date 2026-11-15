@@ -1204,6 +1204,76 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  Future<void> scheduleItem(HubProject project, NowItemRef item) async {
+    final value = await showDialog<({String? due, String? reviewAfter})>(
+      context: context,
+      builder: (_) => ScheduleDialog(item: item),
+    );
+    if (value == null || !mounted) return;
+    try {
+      final result = await c.requestItemSchedule(
+        project.id,
+        item.key,
+        value.due,
+        value.reviewAfter,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '日付を依頼しました。Miniで受け付けられるとNOWと一覧に反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 本体が生成するプロジェクトの経緯（HISTORY.md）を開く。
+  void showHistory(HubProject project) {
+    final history = project.history;
+    if (history == null) return;
+    // 本文と同じ読込の時刻を示す（開いたまま再読込しても、本文は開いたときのもの）。
+    final loadedAt = repo.snapshot.loadedAt;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text('${project.title}の経緯')),
+          body: ListView(
+            key: const Key('history-view'),
+            padding: const EdgeInsets.all(24),
+            children: [
+              Text(
+                '生成: ${timeLabel(history.generatedAt)}\n読込: ${timeLabel(loadedAt)}（同期完了の確認ではありません）',
+                style: const TextStyle(fontSize: 12, height: 1.6),
+              ),
+              const SizedBox(height: 12),
+              for (final warning in history.warnings)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: NoticeBox(warning),
+                ),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: SafeMarkdown(
+                    key: const Key('history-body'),
+                    text: history.body,
+                    sourcePath: '10_projects/${project.id}/HISTORY.md',
+                    controller: c,
+                    onRecord: open,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 「片付いたかも」が違うときに、そのメモからの候補を見送る。項目は未解決のまま残る。
   Future<void> dismissHint(
     HubProject project,
@@ -1398,6 +1468,36 @@ class _HubViewState extends State<HubView> {
                       icon: const Icon(Icons.check_circle_outline, size: 15),
                       label: Text(section == 'next' ? '完了にする' : '解決にする'),
                     ),
+            // 完了・解決の報告が反映待ちの間は、日付を依頼させない（本体が断るため）。
+            if (entry.itemKey case final key?
+                when repo.itemRequestIdFor(key) == null)
+              repo.scheduleRequestIdFor(key) != null
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Text(
+                        '日付を依頼済み（反映待ち）',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    )
+                  : TextButton.icon(
+                      key: Key('schedule-${key.substring(0, 12)}'),
+                      onPressed: busy
+                          ? null
+                          : () => scheduleItem(
+                              project,
+                              project.nowItems.firstWhere((i) => i.key == key),
+                            ),
+                      icon: const Icon(Icons.event_outlined, size: 15),
+                      label: Text(
+                        project.nowItems
+                                    .where((i) => i.key == key)
+                                    .firstOrNull
+                                    ?.scheduled ==
+                                true
+                            ? '日付を変える'
+                            : '日付を付ける',
+                      ),
+                    ),
             for (final id in entry.references)
               TextButton.icon(
                 key: const Key('source-record'),
@@ -1416,8 +1516,10 @@ class _HubViewState extends State<HubView> {
   );
 
   /// 進行中のプロジェクトの「次の一手」（または未解決）を、最新の根拠が新しい順にまとめる。
+  /// 本人が付けた期日が過ぎた・今日・7日以内の項目はプロジェクトをまたいで先頭に出し、見直す日が先の項目はたたむ。
   List<Widget> nextView() {
     final now = DateTime.now(),
+        today = hubToday(now),
         projects = repo.actionableProjects,
         section = nextSection,
         count = {
@@ -1437,11 +1539,70 @@ class _HubViewState extends State<HubView> {
             c.changesSince(p)?.added.map((i) => i.id).toSet() ??
             const <String>{},
     };
+    // 末尾の番号はNOWでの並び順。期日とプロジェクトが同じ項目の順を保つために使う。
+    final front =
+            <ScheduleBucket, List<(HubProject, NowEntry, NowItemRef, int)>>{},
+        resting = <(HubProject, NowEntry, NowItemRef, int)>[],
+        listed = <String, List<NowEntry>>{};
+    for (final project in projects) {
+      final rest = <NowEntry>[];
+      var order = 0;
+      for (final entry in project.entriesWithSource(section)) {
+        order++;
+        final item = entry.itemKey == null
+            ? null
+            : project.nowItems.where((i) => i.key == entry.itemKey).firstOrNull;
+        if (item == null || !item.scheduled) {
+          rest.add(entry);
+          continue;
+        }
+        final b = scheduleBucket(item.due, item.reviewAfter, today);
+        if (b.hidden) {
+          resting.add((project, entry, item, order));
+        } else if (scheduleBucketLabels.containsKey(b.bucket)) {
+          front.putIfAbsent(b.bucket, () => []).add((
+            project,
+            entry,
+            item,
+            order,
+          ));
+        } else {
+          rest.add(entry);
+        }
+      }
+      listed[project.id] = rest;
+    }
+    for (final list in front.values) {
+      list.sort(
+        (a, b) => a.$3.due!.compareTo(b.$3.due!) != 0
+            ? a.$3.due!.compareTo(b.$3.due!)
+            : a.$1.id.compareTo(b.$1.id) != 0
+            ? a.$1.id.compareTo(b.$1.id)
+            : a.$4.compareTo(b.$4),
+      );
+    }
+    Widget crossEntry((HubProject, NowEntry, NowItemRef, int) e) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () => widget.onNavigate('project:${e.$1.id}'),
+          child: Text(
+            e.$1.title,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+        nowEntry(e.$1, section, e.$2, added[e.$1.id]!),
+      ],
+    );
     return [
       title(
         'NEXT ACTIONS',
         '次の一手',
-        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
       Align(
         alignment: Alignment.centerLeft,
@@ -1465,9 +1626,37 @@ class _HubViewState extends State<HubView> {
               ? '進行中のプロジェクトに次の一手はありません。'
               : '進行中のプロジェクトに未解決はありません。',
         ),
+      for (final bucket in [
+        ScheduleBucket.overdue,
+        ScheduleBucket.today,
+        ScheduleBucket.week,
+      ])
+        if (front[bucket] case final entries?) ...[
+          Text(
+            '${scheduleBucketLabels[bucket]}（${entries.length}件）',
+            key: Key('next-bucket-${bucket.name}'),
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+              color: bucket == ScheduleBucket.overdue
+                  ? Theme.of(context).colorScheme.error
+                  : null,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [for (final e in entries) crossEntry(e)],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
       for (final project in projects)
-        if (project.entriesWithSource(section) case final entries
-            when entries.isNotEmpty) ...[
+        if (listed[project.id]! case final entries when entries.isNotEmpty) ...[
           InkWell(
             key: Key('next-project-${project.id}'),
             onTap: () => widget.onNavigate('project:${project.id}'),
@@ -1514,11 +1703,28 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
+      if (resting.isNotEmpty)
+        Card(
+          child: ExpansionTile(
+            key: const Key('next-resting'),
+            title: Text('見直す日まで休ませている項目（${resting.length}件）'),
+            subtitle: const Text(
+              '見直す日が来ると元の一覧に戻ります。',
+              style: TextStyle(fontSize: 12),
+            ),
+            childrenPadding: const EdgeInsets.fromLTRB(22, 0, 22, 6),
+            expandedCrossAxisAlignment: CrossAxisAlignment.start,
+            children: [for (final e in resting) crossEntry(e)],
+          ),
+        ),
       if (empty.isNotEmpty && count[section] != 0)
-        Text(
-          '${sectionLabels[section]}がないプロジェクト: ${empty.map((p) => p.title).join('、')}',
-          key: const Key('next-empty-projects'),
-          style: const TextStyle(fontSize: 12),
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Text(
+            '${sectionLabels[section]}がないプロジェクト: ${empty.map((p) => p.title).join('、')}',
+            key: const Key('next-empty-projects'),
+            style: const TextStyle(fontSize: 12),
+          ),
         ),
     ];
   }
@@ -1607,6 +1813,14 @@ class _HubViewState extends State<HubView> {
             onPressed: editable ? () => changeDefinition(project) : null,
             icon: const Icon(Icons.label_outline, size: 18),
             label: const Text('呼び名とキーワード'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('project-history'),
+            onPressed: project.history == null
+                ? null
+                : () => showHistory(project),
+            icon: const Icon(Icons.timeline, size: 18),
+            label: Text(project.history == null ? '経緯（未生成）' : 'これまでの経緯'),
           ),
           OutlinedButton.icon(
             key: const Key('project-guided'),
@@ -2699,6 +2913,142 @@ class _CaptureDialogState extends State<CaptureDialog> {
       ),
     ),
   );
+}
+
+/// NOWの項目に期日と次に見直す日を付ける画面。日付は本人が選び、AIは推測しない。
+class ScheduleDialog extends StatefulWidget {
+  const ScheduleDialog({super.key, required this.item});
+  final NowItemRef item;
+  @override
+  State<ScheduleDialog> createState() => _ScheduleDialogState();
+}
+
+class _ScheduleDialogState extends State<ScheduleDialog> {
+  late final due = TextEditingController(text: widget.item.due ?? ''),
+      review = TextEditingController(text: widget.item.reviewAfter ?? '');
+
+  @override
+  void dispose() {
+    due.dispose();
+    review.dispose();
+    super.dispose();
+  }
+
+  String? value(TextEditingController c) =>
+      c.text.trim().isEmpty ? null : c.text.trim();
+  String? problem(TextEditingController c) {
+    final v = value(c);
+    return v == null || validScheduleDate(v)
+        ? null
+        : 'YYYY-MM-DDの実在する日で入力してください（2000〜2099年）。';
+  }
+
+  Widget field(String key, String label, String help, TextEditingController c) {
+    final today = hubToday();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          key: Key('schedule-$key'),
+          controller: c,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: 'YYYY-MM-DD',
+            helperText: help,
+            helperMaxLines: 2,
+            errorText: problem(c),
+            suffixIcon: c.text.isEmpty
+                ? null
+                : IconButton(
+                    key: Key('schedule-$key-clear'),
+                    tooltip: '外す',
+                    icon: const Icon(Icons.clear),
+                    onPressed: () => setState(c.clear),
+                  ),
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final (label, days) in [
+              ('今日', 0),
+              ('明日', 1),
+              ('3日後', 3),
+              ('1週間後', 7),
+              ('2週間後', 14),
+              ('30日後', 30),
+            ])
+              ActionChip(
+                key: Key('schedule-$key-$days'),
+                label: Text(label),
+                onPressed: () =>
+                    setState(() => c.text = addScheduleDays(today, days)),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final nextDue = value(due), nextReview = value(review);
+    final valid = problem(due) == null && problem(review) == null,
+        changed =
+            nextDue != widget.item.due || nextReview != widget.item.reviewAfter,
+        clearing = nextDue == null && nextReview == null;
+    return AlertDialog(
+      title: const Text('期日と次に見直す日'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.item.display,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 16),
+              field('due', '期日（任意）', '過ぎた・今日・7日以内になると「次の一手」の先頭に出ます。', due),
+              const SizedBox(height: 18),
+              field(
+                'review',
+                '次に見直す日（任意）',
+                'その日までは「次の一手」の末尾にたたみます。期日が近ければたたみません。',
+                review,
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                '日付はMiniが受け付けるとNOWとHOMEに反映されます。原文と整理結果は変わりません。',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('schedule-save'),
+          onPressed: valid && changed
+              ? () => Navigator.pop(context, (
+                  due: nextDue,
+                  reviewAfter: nextReview,
+                ))
+              : null,
+          child: Text(clearing ? '日付を外す' : '依頼する'),
+        ),
+      ],
+    );
+  }
 }
 
 class ProjectStatusDialog extends StatefulWidget {
