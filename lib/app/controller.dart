@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
+import '../storage/basket_store.dart';
 import '../core/repository.dart';
 import '../core/home_widget.dart';
 import '../core/review_candidates.dart';
@@ -198,6 +199,8 @@ class HubController extends ChangeNotifier {
     location = target;
     pending = [];
     captureWarning = null;
+    basket = const Basket();
+    _basketFor = null;
     _changed();
     try {
       final data = await access.readSnapshot(target);
@@ -206,6 +209,8 @@ class HubController extends ChangeNotifier {
       }
       repository = HubRepository(data);
       _visits.clear();
+      await _ensureBasket(target);
+      if (epoch != _epoch) return;
       await _loadSeen();
       _initializeSeen();
       await _writeSettings();
@@ -241,6 +246,8 @@ class HubController extends ChangeNotifier {
         return;
       }
       repository = HubRepository(data);
+      // Vaultを開くのに失敗した後の再読込でも、残したかごを読んでから使う（空のかごで上書きしない）。
+      await _ensureBasket(target);
       if (_initializeSeen()) {
         try {
           await _writeSettings();
@@ -261,7 +268,12 @@ class HubController extends ChangeNotifier {
     }
   }
 
-  Future<String> context(String project) async {
+  Future<String> context(String project) async =>
+      (await _verifiedRepository()).context(project);
+
+  /// コピーの直前に読み直し、表示中の内容と同じで、確認の間にも変わっていないVaultを返す。
+  /// 変わっていれば表示を更新して止める（内容を確かめてからもう一度コピーしてもらう）。
+  Future<HubRepository> _verifiedRepository() async {
     final target = location, old = repository;
     final epoch = _epoch;
     if (target == null || old == null || loading || error != null) {
@@ -287,7 +299,128 @@ class HubController extends ChangeNotifier {
       _changed();
       throw StateError('コピーの確認中に同期された記録が変わりました。再読込して確認してください。');
     }
-    return parsed.context(project);
+    return parsed;
+  }
+
+  /// 文脈かご（端末内のみ）。
+  late final BasketStore baskets = BasketStore(access);
+  Basket basket = const Basket();
+
+  /// [basket]を読み込んだVaultのidentity。読む前にかごを書き換えて、残したかごを消さないようにする。
+  String? _basketFor;
+
+  Future<void> _ensureBasket(VaultLocation target) async {
+    if (_basketFor == target.identity) return;
+    final loaded = await baskets.read(target.identity);
+    if (location?.identity != target.identity) return;
+    basket = loaded;
+    _basketFor = target.identity;
+  }
+
+  /// この記録（訂正の前後は同じ1件）がかごに入っているか。
+  bool inBasket(String recordId) {
+    final repo = repository;
+    if (repo == null) return basket.ids.contains(recordId);
+    final key = repo.bundleKeyOf(recordId);
+    return basket.ids.any((id) => repo.bundleKeyOf(id) == key);
+  }
+
+  /// かごに入っている記録のうち、今のVaultで見つからない記録。
+  List<String> get missingInBasket {
+    final repo = repository;
+    if (repo == null) return const [];
+    return basket.ids
+        .where(
+          (id) =>
+              !HubRepository.bundleKinds.contains(repo.records[id]?.kind ?? ''),
+        )
+        .toList();
+  }
+
+  Future<void> _setBasket(Basket Function(Basket current) change) async {
+    final target = location;
+    if (target == null) return;
+    await _ensureBasket(target);
+    if (_basketFor != target.identity) {
+      throw StateError('Vaultが切り替わりました。');
+    }
+    final next = change(basket);
+    basket = next;
+    _changed();
+    await baskets.write(target.identity, next);
+  }
+
+  /// かごに入れる。入っていれば外す（訂正の前後も同じ1件として外す）。入れたらtrue。
+  Future<bool> toggleBasket(String recordId) async {
+    final repo = repository;
+    if (repo == null) throw StateError('先にVaultを再読込してください。');
+    final key = repo.bundleKeyOf(recordId);
+    var added = false;
+    await _setBasket((current) {
+      if (current.ids.any((id) => repo.bundleKeyOf(id) == key)) {
+        return Basket(
+          ids: current.ids.where((id) => repo.bundleKeyOf(id) != key).toList(),
+          maxChars: current.maxChars,
+        );
+      }
+      if (!HubRepository.bundleKinds.contains(repo.records[recordId]?.kind)) {
+        throw StateError('この記録はかごに入れられません。');
+      }
+      if (current.ids.length >= BasketStore.maxItems) {
+        throw StateError('かごには${BasketStore.maxItems}件まで入れられます。');
+      }
+      added = true;
+      return Basket(
+        ids: [...current.ids, recordId],
+        maxChars: current.maxChars,
+      );
+    });
+    return added;
+  }
+
+  Future<void> removeFromBasket(String recordId) => _setBasket(
+    (current) => Basket(
+      ids: current.ids.where((id) => id != recordId).toList(),
+      maxChars: current.maxChars,
+    ),
+  );
+
+  /// かごの並びを変える。[newIndex]は移動後の位置。
+  Future<void> moveInBasket(int oldIndex, int newIndex) =>
+      _setBasket((current) {
+        final ids = [...current.ids];
+        if (oldIndex < 0 || oldIndex >= ids.length) return current;
+        final id = ids.removeAt(oldIndex);
+        ids.insert(newIndex.clamp(0, ids.length), id);
+        return Basket(ids: ids, maxChars: current.maxChars);
+      });
+
+  Future<void> clearBasket() =>
+      _setBasket((current) => Basket(maxChars: current.maxChars));
+
+  Future<void> setBasketLimit(int maxChars) {
+    if (!Basket.limits.contains(maxChars)) {
+      throw StateError('文字数上限を選び直してください。');
+    }
+    return _setBasket(
+      (current) => Basket(ids: current.ids, maxChars: maxChars),
+    );
+  }
+
+  /// かごの記録を、コピーの直前に読み直したVaultから1つの文章にまとめる。
+  Future<({String text, List<String> included, List<String> omitted})>
+  bundleContext() async {
+    if (basket.ids.isEmpty) throw StateError('かごに記録がありません。');
+    final parsed = await _verifiedRepository();
+    // 読み直しの間にかごを変えた場合も、押した後のかごを使う。
+    final ids = [...basket.ids], maxChars = basket.maxChars;
+    if (ids.isEmpty) throw StateError('かごに記録がありません。');
+    if (ids.any(
+      (id) => !HubRepository.bundleKinds.contains(parsed.records[id]?.kind),
+    )) {
+      throw StateError('かごに見つからない記録があります。かごから外してください。');
+    }
+    return parsed.bundleContext(ids, maxChars: maxChars);
   }
 
   Future<CaptureResult> save(CaptureDraft draft) async {
@@ -408,7 +541,12 @@ class HubController extends ChangeNotifier {
     saving = true;
     _changed();
     try {
-      return await CaptureService(access, location!).confirm(operation);
+      final result = await CaptureService(access, location!).confirm(operation);
+      // 受付状況から保存を確認できた操作は、同じ内容の次の依頼で使い回さない。
+      if (result.saved) {
+        _reviewOperations.removeWhere((_, value) => value == operation);
+      }
+      return result;
     } finally {
       saving = false;
       await reload();
@@ -681,6 +819,79 @@ class HubController extends ChangeNotifier {
       },
       (service, parsed, operation) =>
           service.saveItemResolution(operation, projectId, item, action),
+    );
+  }
+
+  /// NOWの項目に期日・次に見直す日を付ける（両方nullで外す）依頼を保存する。
+  Future<CaptureResult> requestItemSchedule(
+    String projectId,
+    String itemKey,
+    String? due,
+    String? reviewAfter,
+  ) {
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId]?.nowItems
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null || found.resolved) {
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (found.due == due && found.reviewAfter == reviewAfter) {
+          throw StateError('日付は変わっていません。');
+        }
+        if (parsed.scheduleRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の日付は依頼済みです。受付状況を確認してください。');
+        }
+        // 完了・解決の報告が先に反映されると、本体は日付の依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        // 依頼する日付と最新の日付記録を含め、同じ内容の再試行だけを同じ操作として扱う。
+        // 項目の現在の日付のIDは外すと元に戻るため、付ける→外す→同じ日付を付ける、で過去の操作と混ざらないよう
+        // 外した記録も含む最新の記録IDを使う（引き継いだ日付は項目のキーに記録がないため、現在の日付のIDも含める）。
+        return 'schedule/$projectId/$itemKey/${parsed.latestScheduleIdFor(itemKey) ?? '-'}/${found.scheduleId ?? '-'}/${due ?? '-'}/${reviewAfter ?? '-'}';
+      },
+      (service, parsed, operation) => service.saveItemSchedule(
+        operation,
+        projectId,
+        item,
+        due,
+        reviewAfter,
+      ),
+    );
+  }
+
+  /// 「片付いたかも」が違うとき、そのメモからの候補を見送る依頼を保存する。項目の完了・解決は変えない。
+  Future<CaptureResult> requestHintDismiss(
+    String projectId,
+    String itemKey,
+    String inputId,
+  ) {
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId]?.nowItems
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null ||
+            found.resolved ||
+            !found.hints.any((h) => h.inputId == inputId)) {
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目は完了・解決を報告済みです。受付状況を確認してください。');
+        }
+        if (parsed.hintDismissRequestIdFor(itemKey, inputId) != null) {
+          throw StateError('この候補は見送り済みです。受付状況を確認してください。');
+        }
+        item = found;
+        return 'hint/$projectId/$itemKey/$inputId';
+      },
+      (service, parsed, operation) =>
+          service.saveHintDismiss(operation, projectId, item, inputId),
     );
   }
 

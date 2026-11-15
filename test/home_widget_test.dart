@@ -8,6 +8,7 @@ import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'fixtures.dart';
 import 'next_actions_test.dart' show multiProjectFiles, withProject;
+import 'schedule_history_test.dart' show withSchedule;
 import 'widget_test.dart' show MemoryUIAccess;
 
 /// ホーム画面の機能を持つ端末（Android）の代わり。渡された内容と起動時の操作を記録する。
@@ -106,6 +107,54 @@ void main() {
       expect(jsonEncode(none), isNot(contains('設定画面')));
       expect(jsonEncode(none), isNot(contains('サンプルの検索')));
     }
+  });
+
+  test('期日が近い次の一手を先に出し、見直す日が先の項目は数えず出さない', () {
+    final now = DateTime.utc(2026, 11, 15, 3);
+    const shown = HomeWidgetSettings(showText: true);
+    final base = HubRepository(fixture(multiProjectFiles()));
+    final plain = homeWidgetContent(base, settings: shown, now: now);
+    expect((plain['lines'] as List).first, startsWith('設定画面を作る。'));
+    final index = base.projects['context-hub']!.nowItems.indexWhere(
+      (i) => i.section == 'next',
+    );
+    // 期日が近い項目は、プロジェクトの並びより先に出す。
+    final due = homeWidgetContent(
+      HubRepository(
+        fixture(
+          withSchedule(
+            multiProjectFiles(),
+            'context-hub',
+            index,
+            due: '2026-11-16',
+          ),
+        ),
+      ),
+      settings: shown,
+      now: now,
+    );
+    expect(due['counts'], startsWith('次の一手 2件'));
+    expect((due['lines'] as List).last, startsWith('設定画面を作る。'));
+    // 見直す日が先の項目は、その日まで数えず出さない。
+    final resting = HubRepository(
+      fixture(
+        withSchedule(
+          multiProjectFiles(),
+          'context-hub',
+          index,
+          reviewAfter: '2026-11-20',
+        ),
+      ),
+    );
+    final later = homeWidgetContent(resting, settings: shown, now: now);
+    expect(later['counts'], startsWith('次の一手 1件'));
+    expect(later['lines'], ['設定画面を作る。（別のアプリ）']);
+    final back = homeWidgetContent(
+      resting,
+      settings: shown,
+      now: DateTime.utc(2026, 11, 20, 3),
+    );
+    expect(back['counts'], startsWith('次の一手 2件'));
   });
 
   test('長い本文は切り、上限を超える内容は件数だけにする', () {

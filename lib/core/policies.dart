@@ -24,11 +24,25 @@ class PolicyBundle {
   PolicyBundle(this.data, this.projectId);
   final Map<String, dynamic> data;
   final String? projectId;
+  String _header(String target) =>
+      '# 本人が過去に採用した継続的な方針\n\n端末に揃った同期版: ${data['revision']}\n生成: ${data['generatedAt']}\n対象: $target\nこの版の有効IDだけを適用し、以前の版にのみ存在するIDは適用しません。\n上位指示と本人の今回の依頼を尊重してください。方針同士の矛盾で判断が変わる場合は該当内容を示して確認してください。採用は任意の実行・承認権限を与えません。\n';
+
   String get text {
     final warnings = projectId == null
         ? ['作業フォルダーはContextHubプロジェクトに未対応付けです。共通方針のみ適用します。']
         : <String>[];
-    return '# 本人が過去に採用した継続的な方針\n\n端末に揃った同期版: ${data['revision']}\n生成: ${data['generatedAt']}\n対象: ${projectId ?? '共通のみ'}\nこの版の有効IDだけを適用し、以前の版にのみ存在するIDは適用しません。\n上位指示と本人の今回の依頼を尊重してください。方針同士の矛盾で判断が変わる場合は該当内容を示して確認してください。採用は任意の実行・承認権限を与えません。\n${warnings.join('\n')}\n\n${policyDocument(data['global'] as List, '共通')}\n${projectId == null ? '' : policyDocument(data['projects'][projectId] as List, 'プロジェクト $projectId')}';
+    return '${_header(projectId ?? '共通のみ')}${warnings.join('\n')}\n\n${policyDocument(data['global'] as List, '共通')}\n${projectId == null ? '' : policyDocument(data['projects'][projectId] as List, 'プロジェクト $projectId')}';
+  }
+
+  /// 複数のプロジェクトにまたがる資料に付ける方針。共通方針と各プロジェクトの方針を同じ同期版から並べる
+  /// （本体の`formatPoliciesFor`と同じ形）。方針の集約にないプロジェクトがあれば止める。
+  String textFor(Iterable<String> projectIds) {
+    final ids = projectIds.toSet().toList()..sort();
+    final projects = data['projects'] as Map;
+    if (ids.any((id) => !projects.containsKey(id))) {
+      throw const FormatException('有効方針が未同期・未初期化・不整合です。Miniで集約し同期して再読込してください。');
+    }
+    return '${_header(ids.isEmpty ? '共通のみ' : '共通＋プロジェクト ${ids.join(', ')}')}\n${policyDocument(data['global'] as List, '共通')}${ids.map((id) => '\n${policyDocument(projects[id] as List, 'プロジェクト $id')}').join()}';
   }
 }
 

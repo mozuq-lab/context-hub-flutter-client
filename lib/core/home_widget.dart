@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'models.dart';
 import 'parser.dart' show clip;
 import 'repository.dart';
 import 'secrets.dart';
@@ -50,9 +51,11 @@ const homeWidgetMaxBytes = 4096;
 ///
 /// 表示用の文字列まで組み立てて渡し、ネイティブ側は並べるだけにする。
 /// 本文を出す場合も、秘密情報らしい文字列は伏せる。
+/// 「次の一手」の画面と同じく、期日が近い項目を先に並べ、見直す日が先の項目は数えず出さない。
 Map<String, Object?> homeWidgetContent(
   HubRepository repo, {
   HomeWidgetSettings settings = const HomeWidgetSettings(),
+  DateTime? now,
 }) {
   final active = repo.actionableProjects;
   final review = repo.review.pending.length;
@@ -62,10 +65,37 @@ Map<String, Object?> homeWidgetContent(
       : null;
   // 選んだプロジェクトが進行中でなくなったら、ほかのプロジェクトへ広げずに何も出さない。
   final projects = scoped ? [?chosen] : active;
-  final entries = [
-    for (final p in projects)
-      for (final e in p.entriesWithSource('next')) (p, e),
-  ];
+  final today = hubToday(now);
+  final soon = <(HubProject, NowEntry, String, int)>[],
+      rest = <(HubProject, NowEntry)>[];
+  for (final p in projects) {
+    var order = 0;
+    for (final e in p.entriesWithSource('next')) {
+      order++;
+      final item = e.itemKey == null
+          ? null
+          : p.nowItems.where((i) => i.key == e.itemKey).firstOrNull;
+      if (item == null || !item.scheduled) {
+        rest.add((p, e));
+        continue;
+      }
+      final b = scheduleBucket(item.due, item.reviewAfter, today);
+      if (b.hidden) continue;
+      if (scheduleBucketLabels.containsKey(b.bucket)) {
+        soon.add((p, e, item.due!, order));
+      } else {
+        rest.add((p, e));
+      }
+    }
+  }
+  soon.sort(
+    (a, b) => a.$3.compareTo(b.$3) != 0
+        ? a.$3.compareTo(b.$3)
+        : a.$1.id.compareTo(b.$1.id) != 0
+        ? a.$1.id.compareTo(b.$1.id)
+        : a.$4.compareTo(b.$4),
+  );
+  final entries = [for (final e in soon) (e.$1, e.$2), ...rest];
   String line(String title, String text) {
     final flat = redactSecrets(text).replaceAll(RegExp(r'\s+'), ' ').trim();
     final body = flat.length > homeWidgetLineChars

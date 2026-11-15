@@ -8,10 +8,12 @@ import '../core/models.dart';
 import '../core/repository.dart';
 import '../core/secrets.dart';
 import '../storage/capture_service.dart';
+import '../storage/basket_store.dart';
 import '../storage/draft_store.dart';
 import 'markdown_view.dart';
 import 'review_view.dart';
 import 'guided_view.dart';
+import 'shortcuts.dart';
 
 void notice(BuildContext context, String text) =>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -90,10 +92,14 @@ class HubView extends StatefulWidget {
     required this.controller,
     required this.page,
     required this.onNavigate,
+    this.searchFocus,
   });
   final HubController controller;
   final String page;
   final void Function(String) onNavigate;
+
+  /// 検索欄のフォーカス。キーボード操作（⌘F）で検索を開いたときに入力欄へ移る。
+  final FocusNode? searchFocus;
   @override
   State<HubView> createState() => _HubViewState();
 }
@@ -332,7 +338,14 @@ class _HubViewState extends State<HubView> {
           ],
         ),
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (HubRepository.bundleKinds.contains(r.kind))
+            BasketToggle(controller: c, record: r),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
       onTap: () => open(r.id),
     ),
   );
@@ -561,6 +574,8 @@ class _HubViewState extends State<HubView> {
       );
     } else if (page == 'search') {
       children.addAll(searchView());
+    } else if (page == 'basket') {
+      children.addAll(basketView());
     } else if (page == 'intake') {
       children.add(
         title(
@@ -685,6 +700,174 @@ class _HubViewState extends State<HubView> {
     );
   }
 
+  /// 文脈かご。選んだ記録を並べ、出典・方針付きの1つの文章としてコピーする。
+  List<Widget> basketView() {
+    final ids = c.basket.ids, missing = c.missingInBasket.toSet();
+    final out = <Widget>[
+      title(
+        'CONTEXT BASKET',
+        '文脈かご',
+        '別のAIに渡したい記録を、検索・最近のメモ・アイデア・記録の詳細から入れます。プロジェクトをまたいで選べます。まとめてコピーすると、選んだ順に、出典・訂正の注意・AI推定の区別と、関わるプロジェクトの方針を付けた1つの文章になります。かごの中身はこの端末だけに残し、Vaultには書きません。',
+      ),
+    ];
+    if (ids.isEmpty) {
+      out.add(
+        const Text(
+          'かごは空です。記録の一覧や詳細で ⊕ を押すと、ここに入ります。',
+          key: Key('basket-empty'),
+        ),
+      );
+      return out;
+    }
+    out.add(
+      Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          FilledButton.icon(
+            key: const Key('copy-bundle'),
+            onPressed: c.loading || missing.isNotEmpty
+                ? null
+                : () async {
+                    try {
+                      final result = await c.bundleContext();
+                      await Clipboard.setData(ClipboardData(text: result.text));
+                      if (mounted) {
+                        notice(
+                          context,
+                          result.omitted.isEmpty
+                              ? '${result.included.length}件をまとめてコピーしました'
+                              : '${result.included.length}件をコピーしました。上限に収まらない${result.omitted.length}件は省き、末尾にIDを示しています',
+                        );
+                      }
+                    } catch (e) {
+                      if (mounted) notice(context, HubController.message(e));
+                    }
+                  },
+            icon: const Icon(Icons.copy, size: 18),
+            label: Text('${ids.length}件をまとめてコピー'),
+          ),
+          SegmentedButton<int>(
+            key: const Key('basket-limit'),
+            segments: [
+              for (final limit in Basket.limits)
+                ButtonSegment(value: limit, label: Text('$limit字')),
+            ],
+            selected: {c.basket.maxChars},
+            onSelectionChanged: (v) => c.setBasketLimit(v.first),
+          ),
+          TextButton(
+            key: const Key('basket-clear'),
+            onPressed: () async {
+              final yes = await showDialog<bool>(
+                context: context,
+                builder: (dialog) => AlertDialog(
+                  title: const Text('かごを空にしますか'),
+                  content: Text('${ids.length}件をかごから外します。記録そのものは消えません。'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialog, false),
+                      child: const Text('やめる'),
+                    ),
+                    FilledButton(
+                      key: const Key('basket-clear-confirm'),
+                      onPressed: () => Navigator.pop(dialog, true),
+                      child: const Text('空にする'),
+                    ),
+                  ],
+                ),
+              );
+              if (yes == true) await c.clearBasket();
+            },
+            child: const Text('かごを空にする'),
+          ),
+        ],
+      ),
+    );
+    out.add(const SizedBox(height: 8));
+    out.add(
+      Text(
+        '上限（${c.basket.maxChars}字）に収まらない記録は、本文の途中で切らずに丸ごと省きます。方針は必ず含めます。',
+        style: const TextStyle(fontSize: 12, height: 1.7),
+      ),
+    );
+    if (missing.isNotEmpty) {
+      out.add(
+        const Padding(
+          padding: EdgeInsets.only(top: 12),
+          child: NoticeBox(
+            'このVaultで見つからない記録があります。同期を待つか、かごから外してからコピーしてください。',
+            error: true,
+          ),
+        ),
+      );
+    }
+    out.add(const SizedBox(height: 16));
+    for (var i = 0; i < ids.length; i++) {
+      final id = ids[i], record = repo.records[id];
+      out.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Card(
+            key: Key('basket-item-$i'),
+            child: ListTile(
+              contentPadding: const EdgeInsets.fromLTRB(20, 8, 8, 8),
+              leading: Text(
+                '${i + 1}',
+                style: const TextStyle(
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+              title: Text(
+                record == null || missing.contains(id)
+                    ? '見つからない記録'
+                    : record.title,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: record == null || missing.contains(id)
+                  ? const Text('同期で消えたか、まだ届いていません。')
+                  : Text(
+                      '${searchKindLabels[HubRepository.searchKindOf(record)] ?? record.kind} · ${originLabel(record.origin)} · ${timeLabel(record.at ?? record.generatedAt)}'
+                      '${(repo.correctionChainOf(id)?.length ?? 1) > 1 ? '\n訂正あり（最新の訂正の本文を渡します）' : ''}',
+                      style: const TextStyle(fontSize: 12, height: 1.7),
+                    ),
+              onTap: record == null || missing.contains(id)
+                  ? null
+                  : () => open(id),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    key: Key('basket-up-$i'),
+                    tooltip: '上へ',
+                    onPressed: i == 0 ? null : () => c.moveInBasket(i, i - 1),
+                    icon: const Icon(Icons.arrow_upward),
+                  ),
+                  IconButton(
+                    key: Key('basket-down-$i'),
+                    tooltip: '下へ',
+                    onPressed: i == ids.length - 1
+                        ? null
+                        : () => c.moveInBasket(i, i + 1),
+                    icon: const Icon(Icons.arrow_downward),
+                  ),
+                  IconButton(
+                    key: Key('basket-remove-$i'),
+                    tooltip: 'かごから外す',
+                    onPressed: () => c.removeFromBasket(id),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return out;
+  }
+
   /// 検索画面。検索語と、プロジェクト・種類・期間・並び順の絞り込み。
   List<Widget> searchView() {
     // 同期で消えたプロジェクトが選ばれたままにならないようにする。
@@ -702,6 +885,7 @@ class _HubViewState extends State<HubView> {
       TextField(
         key: const Key('search-query'),
         controller: queryController,
+        focusNode: widget.searchFocus,
         decoration: const InputDecoration(
           hintText: '思い出したいことを入力',
           prefixIcon: Icon(Icons.search),
@@ -1081,6 +1265,178 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  Future<void> scheduleItem(HubProject project, NowItemRef item) async {
+    final value = await showDialog<({String? due, String? reviewAfter})>(
+      context: context,
+      builder: (_) => ScheduleDialog(item: item),
+    );
+    if (value == null || !mounted) return;
+    try {
+      final result = await c.requestItemSchedule(
+        project.id,
+        item.key,
+        value.due,
+        value.reviewAfter,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '日付を依頼しました。Miniで受け付けられるとNOWと一覧に反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 本体が生成するプロジェクトの経緯（HISTORY.md）を開く。
+  void showHistory(HubProject project) {
+    final history = project.history;
+    if (history == null) return;
+    // 本文と同じ読込の時刻を示す（開いたまま再読込しても、本文は開いたときのもの）。
+    final loadedAt = repo.snapshot.loadedAt;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text('${project.title}の経緯')),
+          body: ListView(
+            key: const Key('history-view'),
+            padding: const EdgeInsets.all(24),
+            children: [
+              Text(
+                '生成: ${timeLabel(history.generatedAt)}\n読込: ${timeLabel(loadedAt)}（同期完了の確認ではありません）',
+                style: const TextStyle(fontSize: 12, height: 1.6),
+              ),
+              const SizedBox(height: 12),
+              for (final warning in history.warnings)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: NoticeBox(warning),
+                ),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: SafeMarkdown(
+                    key: const Key('history-body'),
+                    text: history.body,
+                    sourcePath: '10_projects/${project.id}/HISTORY.md',
+                    controller: c,
+                    onRecord: open,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 「片付いたかも」が違うときに、そのメモからの候補を見送る。項目は未解決のまま残る。
+  Future<void> dismissHint(
+    HubProject project,
+    NowItemRef item,
+    NowItemHint hint,
+  ) async {
+    if (!await confirmAction(
+          '「片付いたかも」を見送る',
+          '${item.display}\n\n根拠のメモ: 「${hint.quote}」\n\nこのメモからの候補を見送るよう依頼します。項目は${item.section == 'next' ? '次の一手' : '未解決'}に残ります。',
+          '見送る',
+        ) ||
+        !mounted) {
+      return;
+    }
+    try {
+      final result = await c.requestHintDismiss(
+        project.id,
+        item.key,
+        hint.inputId,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '見送りを保存しました。Miniで受け付けられるとNOWに反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// AIが「片付いたかも」と示した根拠。完了にするかは本人が決める。
+  Widget hintBox(HubProject project, NowItemRef item, NowItemHint hint) {
+    final scheme = Theme.of(context).colorScheme,
+        memo = repo.inputRecord(hint.inputId),
+        pending = repo.hintDismissRequestIdFor(item.key, hint.inputId) != null,
+            // 完了・解決を報告済みなら、見送りは不要。
+            reported =
+            repo.itemRequestIdFor(item.key) != null;
+    return Container(
+      key: Key('hint-${item.key.substring(0, 12)}-${hint.inputId}'),
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '片付いたかも（AIの推定・未確認）',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: scheme.onSecondaryContainer,
+            ),
+          ),
+          const SizedBox(height: 2),
+          SelectableText(
+            '「${hint.quote}」',
+            style: const TextStyle(fontSize: 13),
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              if (memo != null)
+                TextButton.icon(
+                  key: const Key('hint-memo'),
+                  onPressed: () => open(memo.id),
+                  icon: const Icon(Icons.article_outlined, size: 15),
+                  label: Text(
+                    memo.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              if (reported)
+                const SizedBox.shrink()
+              else if (pending)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  child: Text('見送り済み（反映待ち）', style: TextStyle(fontSize: 12)),
+                )
+              else
+                TextButton.icon(
+                  key: Key('dismiss-hint-${item.key.substring(0, 12)}'),
+                  onPressed: busy
+                      ? null
+                      : () => dismissHint(project, item, hint),
+                  icon: const Icon(Icons.close, size: 15),
+                  label: const Text('違う'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> dismissDraft(GitDraft draft) async {
     if (!await confirmAction(
           '下書きを見送る',
@@ -1148,6 +1504,10 @@ class _HubViewState extends State<HubView> {
               color: Theme.of(context).colorScheme.error,
             ),
           ),
+        if (entry.itemKey case final key?)
+          if (project.nowItems.where((i) => i.key == key).firstOrNull
+              case final item?)
+            for (final hint in item.hints) hintBox(project, item, hint),
         Wrap(
           spacing: 8,
           children: [
@@ -1169,6 +1529,36 @@ class _HubViewState extends State<HubView> {
                       icon: const Icon(Icons.check_circle_outline, size: 15),
                       label: Text(section == 'next' ? '完了にする' : '解決にする'),
                     ),
+            // 完了・解決の報告が反映待ちの間は、日付を依頼させない（本体が断るため）。
+            if (entry.itemKey case final key?
+                when repo.itemRequestIdFor(key) == null)
+              repo.scheduleRequestIdFor(key) != null
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Text(
+                        '日付を依頼済み（反映待ち）',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    )
+                  : TextButton.icon(
+                      key: Key('schedule-${key.substring(0, 12)}'),
+                      onPressed: busy
+                          ? null
+                          : () => scheduleItem(
+                              project,
+                              project.nowItems.firstWhere((i) => i.key == key),
+                            ),
+                      icon: const Icon(Icons.event_outlined, size: 15),
+                      label: Text(
+                        project.nowItems
+                                    .where((i) => i.key == key)
+                                    .firstOrNull
+                                    ?.scheduled ==
+                                true
+                            ? '日付を変える'
+                            : '日付を付ける',
+                      ),
+                    ),
             for (final id in entry.references)
               TextButton.icon(
                 key: const Key('source-record'),
@@ -1187,8 +1577,10 @@ class _HubViewState extends State<HubView> {
   );
 
   /// 進行中のプロジェクトの「次の一手」（または未解決）を、最新の根拠が新しい順にまとめる。
+  /// 本人が付けた期日が過ぎた・今日・7日以内の項目はプロジェクトをまたいで先頭に出し、見直す日が先の項目はたたむ。
   List<Widget> nextView() {
     final now = DateTime.now(),
+        today = hubToday(now),
         projects = repo.actionableProjects,
         section = nextSection,
         count = {
@@ -1208,11 +1600,70 @@ class _HubViewState extends State<HubView> {
             c.changesSince(p)?.added.map((i) => i.id).toSet() ??
             const <String>{},
     };
+    // 末尾の番号はNOWでの並び順。期日とプロジェクトが同じ項目の順を保つために使う。
+    final front =
+            <ScheduleBucket, List<(HubProject, NowEntry, NowItemRef, int)>>{},
+        resting = <(HubProject, NowEntry, NowItemRef, int)>[],
+        listed = <String, List<NowEntry>>{};
+    for (final project in projects) {
+      final rest = <NowEntry>[];
+      var order = 0;
+      for (final entry in project.entriesWithSource(section)) {
+        order++;
+        final item = entry.itemKey == null
+            ? null
+            : project.nowItems.where((i) => i.key == entry.itemKey).firstOrNull;
+        if (item == null || !item.scheduled) {
+          rest.add(entry);
+          continue;
+        }
+        final b = scheduleBucket(item.due, item.reviewAfter, today);
+        if (b.hidden) {
+          resting.add((project, entry, item, order));
+        } else if (scheduleBucketLabels.containsKey(b.bucket)) {
+          front.putIfAbsent(b.bucket, () => []).add((
+            project,
+            entry,
+            item,
+            order,
+          ));
+        } else {
+          rest.add(entry);
+        }
+      }
+      listed[project.id] = rest;
+    }
+    for (final list in front.values) {
+      list.sort(
+        (a, b) => a.$3.due!.compareTo(b.$3.due!) != 0
+            ? a.$3.due!.compareTo(b.$3.due!)
+            : a.$1.id.compareTo(b.$1.id) != 0
+            ? a.$1.id.compareTo(b.$1.id)
+            : a.$4.compareTo(b.$4),
+      );
+    }
+    Widget crossEntry((HubProject, NowEntry, NowItemRef, int) e) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () => widget.onNavigate('project:${e.$1.id}'),
+          child: Text(
+            e.$1.title,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+        nowEntry(e.$1, section, e.$2, added[e.$1.id]!),
+      ],
+    );
     return [
       title(
         'NEXT ACTIONS',
         '次の一手',
-        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
       Align(
         alignment: Alignment.centerLeft,
@@ -1236,9 +1687,37 @@ class _HubViewState extends State<HubView> {
               ? '進行中のプロジェクトに次の一手はありません。'
               : '進行中のプロジェクトに未解決はありません。',
         ),
+      for (final bucket in [
+        ScheduleBucket.overdue,
+        ScheduleBucket.today,
+        ScheduleBucket.week,
+      ])
+        if (front[bucket] case final entries?) ...[
+          Text(
+            '${scheduleBucketLabels[bucket]}（${entries.length}件）',
+            key: Key('next-bucket-${bucket.name}'),
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+              color: bucket == ScheduleBucket.overdue
+                  ? Theme.of(context).colorScheme.error
+                  : null,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [for (final e in entries) crossEntry(e)],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
       for (final project in projects)
-        if (project.entriesWithSource(section) case final entries
-            when entries.isNotEmpty) ...[
+        if (listed[project.id]! case final entries when entries.isNotEmpty) ...[
           InkWell(
             key: Key('next-project-${project.id}'),
             onTap: () => widget.onNavigate('project:${project.id}'),
@@ -1285,11 +1764,28 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
+      if (resting.isNotEmpty)
+        Card(
+          child: ExpansionTile(
+            key: const Key('next-resting'),
+            title: Text('見直す日まで休ませている項目（${resting.length}件）'),
+            subtitle: const Text(
+              '見直す日が来ると元の一覧に戻ります。',
+              style: TextStyle(fontSize: 12),
+            ),
+            childrenPadding: const EdgeInsets.fromLTRB(22, 0, 22, 6),
+            expandedCrossAxisAlignment: CrossAxisAlignment.start,
+            children: [for (final e in resting) crossEntry(e)],
+          ),
+        ),
       if (empty.isNotEmpty && count[section] != 0)
-        Text(
-          '${sectionLabels[section]}がないプロジェクト: ${empty.map((p) => p.title).join('、')}',
-          key: const Key('next-empty-projects'),
-          style: const TextStyle(fontSize: 12),
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Text(
+            '${sectionLabels[section]}がないプロジェクト: ${empty.map((p) => p.title).join('、')}',
+            key: const Key('next-empty-projects'),
+            style: const TextStyle(fontSize: 12),
+          ),
         ),
     ];
   }
@@ -1378,6 +1874,14 @@ class _HubViewState extends State<HubView> {
             onPressed: editable ? () => changeDefinition(project) : null,
             icon: const Icon(Icons.label_outline, size: 18),
             label: const Text('呼び名とキーワード'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('project-history'),
+            onPressed: project.history == null
+                ? null
+                : () => showHistory(project),
+            icon: const Icon(Icons.timeline, size: 18),
+            label: Text(project.history == null ? '経緯（未生成）' : 'これまでの経緯'),
           ),
           OutlinedButton.icon(
             key: const Key('project-guided'),
@@ -1551,6 +2055,62 @@ class _HubViewState extends State<HubView> {
         ),
     ];
   }
+}
+
+/// 記録を文脈かごに入れる・外すボタン。かごの変化に合わせて表示を変える。
+class BasketToggle extends StatelessWidget {
+  const BasketToggle({
+    super.key,
+    required this.controller,
+    required this.record,
+    this.labeled = false,
+  });
+  final HubController controller;
+  final HubRecord record;
+
+  /// 記録の詳細では文字付きのボタンにする。
+  final bool labeled;
+
+  Future<void> _toggle(BuildContext context) async {
+    try {
+      final added = await controller.toggleBasket(record.id);
+      if (context.mounted) {
+        notice(
+          context,
+          added
+              ? '文脈かごに入れました（${controller.basket.ids.length}件）'
+              : '文脈かごから外しました',
+        );
+      }
+    } catch (e) {
+      if (context.mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final inside = controller.inBasket(record.id);
+      if (labeled) {
+        return TextButton.icon(
+          key: const Key('record-basket'),
+          onPressed: () => _toggle(context),
+          icon: Icon(
+            inside ? Icons.check_circle : Icons.add_circle_outline,
+            size: 18,
+          ),
+          label: Text(inside ? 'かごから外す' : '文脈かごに入れる'),
+        );
+      }
+      return IconButton(
+        key: Key('basket-toggle-${record.id}'),
+        tooltip: inside ? '文脈かごから外す' : '文脈かごに入れる',
+        onPressed: () => _toggle(context),
+        icon: Icon(inside ? Icons.check_circle : Icons.add_circle_outline),
+      );
+    },
+  );
 }
 
 class RecordView extends StatelessWidget {
@@ -1744,7 +2304,20 @@ class RecordView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('記録の詳細')),
+    appBar: AppBar(
+      title: const Text('記録の詳細'),
+      actions: [
+        if (HubRepository.bundleKinds.contains(record.kind))
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: BasketToggle(
+              controller: controller,
+              record: record,
+              labeled: true,
+            ),
+          ),
+      ],
+    ),
     body: Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 900),
@@ -2031,85 +2604,111 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
   @override
   Widget build(BuildContext context) {
     final locked = result != null;
-    return PopScope(
-      canPop: !busy,
-      child: AlertDialog(
-        title: const Text('メモを訂正する'),
-        content: SizedBox(
-          width: 620,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  '訂正対象: ${widget.latest.sourceId}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
-                  style: TextStyle(fontSize: 12, height: 1.6),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  key: const Key('correction-text'),
-                  controller: text,
-                  readOnly: locked || busy,
-                  minLines: 5,
-                  maxLines: 12,
-                  maxLength: 8000,
-                  decoration: const InputDecoration(alignLabelWithHint: true),
-                ),
-                if (error != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: NoticeBox(error!, error: true),
-                  ),
-                if (result != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: NoticeBox(
-                      result!.saved
-                          ? 'この端末のInputに訂正を保存しました'
-                          : '保存確認待ちです。再送せず同じ操作を確認してください。',
+    // ⌘Return（Ctrl+Enter）で「訂正を保存」と同じ操作をする。
+    return CallbackShortcuts(
+      bindings: {
+        saveFormActivator: () {
+          if (!busy && !locked && !targetChanged) submit();
+        },
+        // Escは、訂正文を書き換えていない（変換中でもない）ときだけ「フォームを閉じる」と同じ操作をする。
+        // 書きかけの訂正を誤って捨てないため。
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (!busy &&
+              !text.value.composing.isValid &&
+              text.text == widget.latest.body.trimRight()) {
+            Navigator.pop(context);
+          }
+        },
+      },
+      // Mac以外では入力欄が自動で選ばれないため、開いた直後からキーが届くよう受け口を置く（ソフトキーボードは開かない）。
+      child: Focus(
+        autofocus: !usesCommandKey,
+        skipTraversal: true,
+        child: PopScope(
+          canPop: !busy,
+          child: AlertDialog(
+            title: const Text('メモを訂正する'),
+            content: SizedBox(
+              width: 620,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '訂正対象: ${widget.latest.sourceId}',
+                      style: const TextStyle(fontSize: 12),
                     ),
-                  ),
-                if (locked)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: SelectableText(
-                      '操作ID: $operation',
-                      style: const TextStyle(fontSize: 10),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
+                      style: TextStyle(fontSize: 12, height: 1.6),
                     ),
-                  ),
-              ],
+                    const SizedBox(height: 16),
+                    TextField(
+                      key: const Key('correction-text'),
+                      controller: text,
+                      // Macではキーボードで開いたまま書けるよう、本文へ移る。
+                      autofocus: usesCommandKey,
+                      readOnly: locked || busy,
+                      minLines: 5,
+                      maxLines: 12,
+                      maxLength: 8000,
+                      decoration: const InputDecoration(
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                    if (error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: NoticeBox(error!, error: true),
+                      ),
+                    if (result != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: NoticeBox(
+                          result!.saved
+                              ? 'この端末のInputに訂正を保存しました'
+                              : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                        ),
+                      ),
+                    if (locked)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: SelectableText(
+                          '操作ID: $operation',
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
+            actions: [
+              TextButton(
+                onPressed: busy ? null : () => Navigator.pop(context),
+                child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
+              ),
+              if (!locked && !targetChanged)
+                FilledButton(
+                  key: const Key('save-correction'),
+                  onPressed: busy ? null : submit,
+                  child: const Text('訂正を保存'),
+                ),
+              if (locked && result?.saved != true)
+                FilledButton(
+                  onPressed: busy ? null : confirm,
+                  child: const Text('同じ操作を確認'),
+                ),
+              if (busy)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: busy ? null : () => Navigator.pop(context),
-            child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
-          ),
-          if (!locked && !targetChanged)
-            FilledButton(
-              key: const Key('save-correction'),
-              onPressed: busy ? null : submit,
-              child: const Text('訂正を保存'),
-            ),
-          if (locked && result?.saved != true)
-            FilledButton(
-              onPressed: busy ? null : confirm,
-              child: const Text('同じ操作を確認'),
-            ),
-          if (busy)
-            const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-        ],
       ),
     );
   }
@@ -2365,190 +2964,356 @@ class _CaptureDialogState extends State<CaptureDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: !busy,
-    child: AlertDialog(
-      title: Text(widget.draft == null ? '思いつきを、そのまま。' : '下書きから入力を作る'),
-      content: SizedBox(
-        width: 620,
-        child: !_ready
-            ? const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            : SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '保存先: ${widget.controller.location?.name ?? ''}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    if (_restoredAt != null && result?.saved != true) ...[
-                      const SizedBox(height: 12),
-                      NoticeBox(
-                        locked
-                            ? '前回、保存結果を確かめられないまま閉じた書きかけです（${timeLabel(_restoredAt)}）。同じ内容を送り直さず、「同じ操作を確認」を押してください。'
-                            : '前回の書きかけを戻しました（${timeLabel(_restoredAt)}）。',
-                        key: const Key('draft-restored'),
-                      ),
-                      // 保存結果が不明なまま閉じた書きかけは、同じ操作を確かめてからでないと閉じられない。
-                      // 先に閉じると新しい操作IDで同じ内容を送り直しやすくなるため。
-                      if (!locked || _confirmedOnce)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            key: const Key('draft-discard'),
-                            onPressed: busy ? null : _discard,
-                            child: Text(
-                              locked ? '書きかけを閉じて新しく書く' : '書きかけを破棄して新しく書く',
+  // ⌘Return（Ctrl+Enter）で「Inputへ保存」と同じ操作をする。
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      saveFormActivator: () {
+        if (!busy && _ready && !locked) submit();
+      },
+      // Escは、本文が空（変換中でもない）ときだけ「フォームを閉じる」と同じ操作をする。書きかけを誤って捨てないため。
+      const SingleActivator(LogicalKeyboardKey.escape): () {
+        if (!busy &&
+            !text.value.composing.isValid &&
+            text.text.trim().isEmpty) {
+          Navigator.pop(context);
+        }
+      },
+    },
+    // Mac以外では入力欄が自動で選ばれないため、開いた直後からキーが届くよう受け口を置く（ソフトキーボードは開かない）。
+    child: Focus(
+      autofocus: !usesCommandKey,
+      skipTraversal: true,
+      child: PopScope(
+        canPop: !busy,
+        child: AlertDialog(
+          title: Text(widget.draft == null ? '思いつきを、そのまま。' : '下書きから入力を作る'),
+          content: SizedBox(
+            width: 620,
+            child: !_ready
+                ? const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                : SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '保存先: ${widget.controller.location?.name ?? ''}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        if (_restoredAt != null && result?.saved != true) ...[
+                          const SizedBox(height: 12),
+                          NoticeBox(
+                            locked
+                                ? '前回、保存結果を確かめられないまま閉じた書きかけです（${timeLabel(_restoredAt)}）。同じ内容を送り直さず、「同じ操作を確認」を押してください。'
+                                : '前回の書きかけを戻しました（${timeLabel(_restoredAt)}）。',
+                            key: const Key('draft-restored'),
+                          ),
+                          // 保存結果が不明なまま閉じた書きかけは、同じ操作を確かめてからでないと閉じられない。
+                          // 先に閉じると新しい操作IDで同じ内容を送り直しやすくなるため。
+                          if (!locked || _confirmedOnce)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton(
+                                key: const Key('draft-discard'),
+                                onPressed: busy ? null : _discard,
+                                child: Text(
+                                  locked ? '書きかけを閉じて新しく書く' : '書きかけを破棄して新しく書く',
+                                ),
+                              ),
                             ),
+                        ],
+                        const SizedBox(height: 16),
+                        TextField(
+                          key: const Key('memo-text'),
+                          controller: text,
+                          // Macではキーボードで開いたまま書けるよう、本文へ移る。
+                          autofocus: usesCommandKey,
+                          readOnly: locked,
+                          minLines: 5,
+                          maxLines: 10,
+                          maxLength: 8000,
+                          decoration: const InputDecoration(
+                            hintText: '断片的なメモ、疑問、あとで考えたいこと…',
+                            alignLabelWithHint: true,
                           ),
                         ),
-                    ],
-                    const SizedBox(height: 16),
-                    TextField(
-                      key: const Key('memo-text'),
-                      controller: text,
-                      readOnly: locked,
-                      minLines: 5,
-                      maxLines: 10,
-                      maxLength: 8000,
-                      decoration: const InputDecoration(
-                        hintText: '断片的なメモ、疑問、あとで考えたいこと…',
-                        alignLabelWithHint: true,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('memo-kind-$_formGeneration'),
-                      initialValue: kind,
-                      decoration: const InputDecoration(labelText: '種類'),
-                      items: const [
-                        DropdownMenuItem(value: 'memo', child: Text('メモ')),
-                        DropdownMenuItem(
-                          value: 'work-summary',
-                          child: Text('AIの作業要約・未検証'),
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          key: ValueKey('memo-kind-$_formGeneration'),
+                          initialValue: kind,
+                          decoration: const InputDecoration(labelText: '種類'),
+                          items: const [
+                            DropdownMenuItem(value: 'memo', child: Text('メモ')),
+                            DropdownMenuItem(
+                              value: 'work-summary',
+                              child: Text('AIの作業要約・未検証'),
+                            ),
+                          ],
+                          onChanged: locked
+                              ? null
+                              : (v) {
+                                  setState(() => kind = v!);
+                                  _schedulePersist();
+                                },
                         ),
-                      ],
-                      onChanged: locked
-                          ? null
-                          : (v) {
-                              setState(() => kind = v!);
-                              _schedulePersist();
-                            },
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('memo-project-$_formGeneration'),
-                      initialValue: project ?? '',
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'プロジェクト（任意）',
-                      ),
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('指定しない')),
-                        for (final p
-                            in widget.controller.repository?.projects.values ??
-                                const <HubProject>[])
-                          DropdownMenuItem(
-                            value: p.id,
-                            child: Text(
-                              p.title,
-                              overflow: TextOverflow.ellipsis,
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          key: ValueKey('memo-project-$_formGeneration'),
+                          initialValue: project ?? '',
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'プロジェクト（任意）',
+                          ),
+                          items: [
+                            const DropdownMenuItem(
+                              value: '',
+                              child: Text('指定しない'),
+                            ),
+                            for (final p
+                                in widget
+                                        .controller
+                                        .repository
+                                        ?.projects
+                                        .values ??
+                                    const <HubProject>[])
+                              DropdownMenuItem(
+                                value: p.id,
+                                child: Text(
+                                  p.title,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                          ],
+                          // 下書きは同じプロジェクトの入力でだけ使用済みになるため、プロジェクトを固定する。
+                          onChanged: locked || widget.draft != null
+                              ? null
+                              : (v) {
+                                  setState(() => project = v == '' ? null : v);
+                                  _schedulePersist();
+                                },
+                        ),
+                        if (widget.draft != null && kind == 'work-summary')
+                          const Padding(
+                            padding: EdgeInsets.only(top: 12),
+                            child: NoticeBox(
+                              '作業要約として保存すると、NOWの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
+                            ),
+                          ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
+                          style: TextStyle(fontSize: 12, height: 1.6),
+                        ),
+                        if (_draftKey != null)
+                          CheckboxListTile(
+                            key: const Key('keep-drafts'),
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            dense: true,
+                            value: _keepDrafts,
+                            onChanged: (v) => _setKeepDrafts(v ?? true),
+                            title: const Text(
+                              '書きかけをこの端末に残す',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            subtitle: const Text(
+                              'フォームを閉じたりアプリが終了したりしても、次に開いたときに続きから書けます。保存が確かめられたら消します。Vaultには書きません。',
+                              style: TextStyle(fontSize: 11, height: 1.5),
+                            ),
+                          ),
+                        if (error != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: NoticeBox(error!, error: true),
+                          ),
+                        if (result != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: NoticeBox(
+                              result!.saved
+                                  ? 'この端末のInputに保存しました'
+                                  : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                            ),
+                          ),
+                        if (locked)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: SelectableText(
+                              '操作ID: $operation',
+                              style: const TextStyle(fontSize: 10),
                             ),
                           ),
                       ],
-                      // 下書きは同じプロジェクトの入力でだけ使用済みになるため、プロジェクトを固定する。
-                      onChanged: locked || widget.draft != null
-                          ? null
-                          : (v) {
-                              setState(() => project = v == '' ? null : v);
-                              _schedulePersist();
-                            },
                     ),
-                    if (widget.draft != null && kind == 'work-summary')
-                      const Padding(
-                        padding: EdgeInsets.only(top: 12),
-                        child: NoticeBox(
-                          '作業要約として保存すると、NOWの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
-                      style: TextStyle(fontSize: 12, height: 1.6),
-                    ),
-                    if (_draftKey != null)
-                      CheckboxListTile(
-                        key: const Key('keep-drafts'),
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        dense: true,
-                        value: _keepDrafts,
-                        onChanged: (v) => _setKeepDrafts(v ?? true),
-                        title: const Text(
-                          '書きかけをこの端末に残す',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                        subtitle: const Text(
-                          'フォームを閉じたりアプリが終了したりしても、次に開いたときに続きから書けます。保存が確かめられたら消します。Vaultには書きません。',
-                          style: TextStyle(fontSize: 11, height: 1.5),
-                        ),
-                      ),
-                    if (error != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: NoticeBox(error!, error: true),
-                      ),
-                    if (result != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: NoticeBox(
-                          result!.saved
-                              ? 'この端末のInputに保存しました'
-                              : '保存確認待ちです。再送せず同じ操作を確認してください。',
-                        ),
-                      ),
-                    if (locked)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: SelectableText(
-                          '操作ID: $operation',
-                          style: const TextStyle(fontSize: 10),
-                        ),
-                      ),
-                  ],
-                ),
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.pop(context),
+              child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
+            ),
+            if (!locked)
+              FilledButton(
+                key: const Key('save-memo'),
+                onPressed: busy || !_ready ? null : submit,
+                child: const Text('Inputへ保存'),
               ),
+            if (locked && result?.saved != true)
+              FilledButton(
+                key: const Key('confirm-same'),
+                onPressed: busy ? null : confirmSame,
+                child: const Text('同じ操作を確認'),
+              ),
+            if (busy)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// NOWの項目に期日と次に見直す日を付ける画面。日付は本人が選び、AIは推測しない。
+class ScheduleDialog extends StatefulWidget {
+  const ScheduleDialog({super.key, required this.item});
+  final NowItemRef item;
+  @override
+  State<ScheduleDialog> createState() => _ScheduleDialogState();
+}
+
+class _ScheduleDialogState extends State<ScheduleDialog> {
+  late final due = TextEditingController(text: widget.item.due ?? ''),
+      review = TextEditingController(text: widget.item.reviewAfter ?? '');
+
+  @override
+  void dispose() {
+    due.dispose();
+    review.dispose();
+    super.dispose();
+  }
+
+  String? value(TextEditingController c) =>
+      c.text.trim().isEmpty ? null : c.text.trim();
+  String? problem(TextEditingController c) {
+    final v = value(c);
+    return v == null || validScheduleDate(v)
+        ? null
+        : 'YYYY-MM-DDの実在する日で入力してください（2000〜2099年）。';
+  }
+
+  Widget field(String key, String label, String help, TextEditingController c) {
+    final today = hubToday();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          key: Key('schedule-$key'),
+          controller: c,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: 'YYYY-MM-DD',
+            helperText: help,
+            helperMaxLines: 2,
+            errorText: problem(c),
+            suffixIcon: c.text.isEmpty
+                ? null
+                : IconButton(
+                    key: Key('schedule-$key-clear'),
+                    tooltip: '外す',
+                    icon: const Icon(Icons.clear),
+                    onPressed: () => setState(c.clear),
+                  ),
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final (label, days) in [
+              ('今日', 0),
+              ('明日', 1),
+              ('3日後', 3),
+              ('1週間後', 7),
+              ('2週間後', 14),
+              ('30日後', 30),
+            ])
+              ActionChip(
+                key: Key('schedule-$key-$days'),
+                label: Text(label),
+                onPressed: () =>
+                    setState(() => c.text = addScheduleDays(today, days)),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final nextDue = value(due), nextReview = value(review);
+    final valid = problem(due) == null && problem(review) == null,
+        changed =
+            nextDue != widget.item.due || nextReview != widget.item.reviewAfter,
+        clearing = nextDue == null && nextReview == null;
+    return AlertDialog(
+      title: const Text('期日と次に見直す日'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.item.display,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 16),
+              field('due', '期日（任意）', '過ぎた・今日・7日以内になると「次の一手」の先頭に出ます。', due),
+              const SizedBox(height: 18),
+              field(
+                'review',
+                '次に見直す日（任意）',
+                'その日までは「次の一手」の末尾にたたみます。期日が近ければたたみません。',
+                review,
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                '日付はMiniが受け付けるとNOWとHOMEに反映されます。原文と整理結果は変わりません。',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
       ),
       actions: [
         TextButton(
-          onPressed: busy ? null : () => Navigator.pop(context),
-          child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
         ),
-        if (!locked)
-          FilledButton(
-            key: const Key('save-memo'),
-            onPressed: busy || !_ready ? null : submit,
-            child: const Text('Inputへ保存'),
-          ),
-        if (locked && result?.saved != true)
-          FilledButton(
-            key: const Key('confirm-same'),
-            onPressed: busy ? null : confirmSame,
-            child: const Text('同じ操作を確認'),
-          ),
-        if (busy)
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
+        FilledButton(
+          key: const Key('schedule-save'),
+          onPressed: valid && changed
+              ? () => Navigator.pop(context, (
+                  due: nextDue,
+                  reviewAfter: nextReview,
+                ))
+              : null,
+          child: Text(clearing ? '日付を外す' : '依頼する'),
+        ),
       ],
-    ),
-  );
+    );
+  }
 }
 
 class ProjectStatusDialog extends StatefulWidget {

@@ -97,15 +97,33 @@ class NowItemRef {
     required this.inputId,
     this.resolutionId,
     this.resolvedAt,
+    this.scheduleId,
+    this.due,
+    this.reviewAfter,
+    this.hints = const [],
   });
   final String key, section, label, text, inputId;
   final String? resolutionId;
   final DateTime? resolvedAt;
+
+  /// 本人が付けた期日・次に見直す日（YYYY-MM-DD）。古い本体や日付のない項目ではnull。
+  final String? scheduleId, due, reviewAfter;
+
+  /// 本人がプロジェクトを指定したメモから、本体の整理でAIが「片付いたかも」と示したもの。未確認で、完了・解決ではない。
+  final List<NowItemHint> hints;
   bool get resolved => resolutionId != null;
+  bool get scheduled => due != null || reviewAfter != null;
 
   /// 本体のNOWの行と同じ表示文（views.tsのplainと同じ置換）。
   String get display =>
       '$label${text.replaceAll(RegExp(r'[\r\n]+'), ' ').replaceAll('<!--', '&lt;!--')}';
+}
+
+/// 「片付いたかも」の根拠。メモのIDと、メモの原文からの引用。
+class NowItemHint {
+  const NowItemHint({required this.inputId, required this.quote, this.at});
+  final String inputId, quote;
+  final DateTime? at;
 }
 
 /// 本人が設定したリポジトリのコミット履歴から本体が作った、作業記録の下書き。
@@ -148,6 +166,9 @@ class HubProject {
   };
   final List<String> warnings = ['AIによる整理・自己報告を含む、未検証の要約です。'], references = [];
 
+  /// 本体が生成するプロジェクトの経緯（HISTORY.md）。古い本体や未生成ならnull。
+  HubDigest? history;
+
   /// 本体のNOW項目一覧。古い本体では空。
   final List<NowItemRef> nowItems = [];
   DateTime? nowItemsGeneratedAt;
@@ -186,6 +207,67 @@ class HubProject {
       lifecycle == 'active' &&
       lastEvidenceAt != null &&
       now.difference(lastEvidenceAt!) > const Duration(days: projectStaleDays);
+}
+
+/// 期日・見直す日に使う暦日（YYYY-MM-DD）。本体と同じく2000〜2099年の実在する日だけ。
+final scheduleDatePattern = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
+bool validScheduleDate(Object? value) {
+  if (value is! String) return false;
+  final m = scheduleDatePattern.firstMatch(value);
+  if (m == null) return false;
+  final y = int.parse(m[1]!), mo = int.parse(m[2]!), d = int.parse(m[3]!);
+  if (y < 2000 || y > 2099) return false;
+  final date = DateTime.utc(y, mo, d);
+  return date.year == y && date.month == mo && date.day == d;
+}
+
+/// 日時の年月日をそのまま暦日（YYYY-MM-DD）にする。
+String scheduleDate(DateTime t) =>
+    '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+
+/// 本体と同じ「今日」。本体の設定はタイムゾーンをAsia/Tokyo（UTC+9、夏時間なし）に固定しているため、
+/// 端末のタイムゾーンに関わらず日本時間の暦日で決める。
+String hubToday([DateTime? now]) =>
+    scheduleDate((now ?? DateTime.now()).toUtc().add(const Duration(hours: 9)));
+String addScheduleDays(String date, int days) {
+  final m = scheduleDatePattern.firstMatch(date)!;
+  return scheduleDate(
+    DateTime.utc(
+      int.parse(m[1]!),
+      int.parse(m[2]!),
+      int.parse(m[3]!),
+    ).add(Duration(days: days)),
+  );
+}
+
+/// 本体のHOMEと同じ区分。期日が今日〜6日後までなら「7日以内」。見直す日が先の項目は、期日が近くなければたたむ。
+enum ScheduleBucket { overdue, today, week, later, none }
+
+const scheduleBucketLabels = {
+  ScheduleBucket.overdue: '期限切れ',
+  ScheduleBucket.today: '今日',
+  ScheduleBucket.week: '7日以内',
+};
+({ScheduleBucket bucket, bool hidden}) scheduleBucket(
+  String? due,
+  String? reviewAfter,
+  String today,
+) {
+  final weekEnd = addScheduleDays(today, 6);
+  final bucket = due == null
+      ? ScheduleBucket.none
+      : due.compareTo(today) < 0
+      ? ScheduleBucket.overdue
+      : due == today
+      ? ScheduleBucket.today
+      : due.compareTo(weekEnd) <= 0
+      ? ScheduleBucket.week
+      : ScheduleBucket.later;
+  final hidden =
+      reviewAfter != null &&
+      reviewAfter.compareTo(today) > 0 &&
+      (bucket == ScheduleBucket.none || bucket == ScheduleBucket.later);
+  return (bucket: bucket, hidden: hidden);
 }
 
 class HubDigest {
