@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12以降は android:allowBackup="false" でも端末間の転送（device-transfer）が行われるため、
+  アプリ専用領域（保存先の権限・操作journal・書きかけ・選んで深掘りの途中の状態・暗号化したAPIキーなど）を
+  クラウドのバックアップと端末間の転送のどちらからも除く。Android 11以前は allowBackup="false" で止まる。
+  操作journalを別の端末へ移すと、同じREQ IDの確認や二重保存の防止が端末とずれるため、移さない。
+  暗号化したAPIキーはAndroid Keystoreの鍵が端末の外へ出ないため、移しても読めない。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>
