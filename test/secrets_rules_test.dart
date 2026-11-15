@@ -14,8 +14,8 @@ void main() {
     (
       "assignment-comma",
       "password=ab,cdefghij",
-      "password=[伏せ字:パスワード等]",
-      <String>["パスワード等"],
+      "password=ab,cdefghij",
+      <String>[],
     ),
     (
       "assignment-comma-list",
@@ -47,8 +47,51 @@ void main() {
       "パスワードはGoogleDriveに置いた",
       <String>[],
     ),
+    (
+      "not-pass-sentence",
+      "First pass: refactoring the parser",
+      "First pass: refactoring the parser",
+      <String>[],
+    ),
+    ("not-pass-status", "CI pass: succeeded", "CI pass: succeeded", <String>[]),
+    (
+      "not-token-count",
+      "input token: 120,000",
+      "input token: 120,000",
+      <String>[],
+    ),
+    (
+      "assignment-comma-nospace",
+      "password=hunter22,user=bob",
+      "password=[伏せ字:パスワード等],user=bob",
+      <String>["パスワード等"],
+    ),
+    (
+      "assignment-pass-short",
+      "pass: hunter22",
+      "pass: [伏せ字:パスワード等]",
+      <String>["パスワード等"],
+    ),
+    (
+      "assignment-pass-equals",
+      "pass=s3cret!x",
+      "pass=[伏せ字:パスワード等]",
+      <String>["パスワード等"],
+    ),
+    (
+      "ja-particle-fullwidth-space",
+      "パスワードは　hunter22",
+      "パスワードは　[伏せ字:パスワード等]",
+      <String>["パスワード等"],
+    ),
+    (
+      "ja-particle-bracket",
+      "パスワードは「hunter22」",
+      "パスワードは「[伏せ字:パスワード等]」",
+      <String>["パスワード等"],
+    ),
   ];
-  test('本体と同じく、空白の多い代入・値の途中のカンマ・pass・「パスワードは」を伏せる', () {
+  test('本体と同じく、空白の多い代入・pass・「パスワードは」を伏せ、普通の英文や数の区切りは伏せない', () {
     for (final (name, text, redacted, labels) in cases) {
       expect(redactSecrets(text), redacted, reason: name);
       expect(
@@ -60,9 +103,10 @@ void main() {
   });
 
   test('鍵の名前の後に長い空白が続いても、伏せ字の検出に時間がかからない', () {
+    // 後戻りが二乗に増えると5万字で数十秒かかる。混んだ環境でも誤って落ちないよう余裕を持たせる。
     final text = 'password${' ' * 50000}x';
     final watch = Stopwatch()..start();
     findSecrets(text);
-    expect(watch.elapsedMilliseconds, lessThan(1000));
+    expect(watch.elapsedMilliseconds, lessThan(5000));
   });
 }

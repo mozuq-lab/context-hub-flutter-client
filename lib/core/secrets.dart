@@ -27,19 +27,19 @@ const _placeholderHead = '[伏せ字:';
 /// 代入の形で値を伏せる鍵の名前。英数字に続く位置では始めないため、DB_PASSWORDのように
 /// 前に語が付いた環境変数名にも当たり、passwordlessのような語の途中には当たらない。
 const _keys =
-    r'(?:(?<![A-Za-z0-9])(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?key|access[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|signature|sig|pass)(?![A-Za-z0-9])|パスワード|暗証番号|合言葉)';
+    r'(?:(?<![A-Za-z0-9])(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?key|access[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|signature|sig)(?![A-Za-z0-9])|パスワード|暗証番号|合言葉)';
 
-/// 鍵の名前と区切り（: = ：）の間。空白、引用符1つ、空白の順だけを認める。
+/// 鍵の名前と区切り（: = ：）の間。空白、続けて（あれば）引用符1つとその後の空白、最後に区切りを認める。
 /// 「空白*・引用符?・空白*」と書くと引用符がないときに空白の分け方が二乗に増えて後戻りするため、
 /// 引用符の後の空白を引用符と組にする（本体のKEY_GAPと同じ）。
 const _keyGap = r'''[ \t]*(?:["'][ \t]*)?[:=：]''';
 
-/// 代入の値。読点や句点・括弧で終わる。半角のカンマ・セミコロンは、直後に空白や区切りが続かない
-/// 値の途中（ab,cdef）だけ値に含める（本体のVALUE_CHARと同じ）。
+/// 代入の値の1文字。空白・引用符・バッククォート・半角のカンマとセミコロン・読点・句点・閉じ括弧で
+/// 値が終わる（120,000 や a,user=b を値に含めない。本体のVALUE_CHARと同じ）。
 const _valueChar = r'''[^\s"'`,;、。，；）」』]''';
 
-/// 日本語の「パスワードは …」。語の続きと区別するため、英数字・記号の6文字以上で、
-/// 数字か記号を含む値だけを伏せる（本体のPARTICLE_VALUEと同じ）。
+/// 「パスワードは …」と英語の pass の値。語の続き（GoogleDriveに置いた、refactoring）と区別するため、
+/// 英数字・記号の6文字以上で、数字か記号を含む値だけを伏せる（本体のPARTICLE_VALUEと同じ）。
 const _particleValue =
     r'(?=[A-Za-z]*[0-9!#$%&*+?@^_~-])[A-Za-z0-9!#$%&*+.?@^_~-]{6,}';
 
@@ -109,8 +109,20 @@ final List<SecretRule> secretRules = [
     'パスワード等',
     RegExp(
       '$_keys$_keyGap'
-      r'''[ \t]*["']?(?!\[伏せ字)((?:'''
-      '$_valueChar|[,;](?=$_valueChar)){6,})',
+      r'''[ \t]*["']?(?!\[伏せ字)('''
+      '$_valueChar{6,})',
+      caseSensitive: false,
+    ),
+    group: 1,
+  ),
+  // pass: … は「First pass: refactoring」のような普通の英文と区別するため、数字か記号を含む値だけを伏せる。
+  SecretRule(
+    'assignment-pass',
+    'パスワード等',
+    RegExp(
+      '(?<![A-Za-z0-9])pass$_keyGap'
+      r'''[ \t]*["']?(?!\[伏せ字)('''
+      '$_particleValue)',
       caseSensitive: false,
     ),
     group: 1,
@@ -119,7 +131,7 @@ final List<SecretRule> secretRules = [
   SecretRule(
     'assignment-particle',
     'パスワード等',
-    RegExp('(?:パスワード|暗証番号|合言葉)は[ \\t]*(?!\\[伏せ字)($_particleValue)'),
+    RegExp('(?:パスワード|暗証番号|合言葉)は[ \\t\u3000]*「?(?!\\[伏せ字)($_particleValue)'),
     group: 1,
   ),
 ];
