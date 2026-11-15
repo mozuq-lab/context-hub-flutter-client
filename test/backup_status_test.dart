@@ -52,10 +52,10 @@ void main() {
     );
     final repo = HubRepository(fixture({...fixtureFiles(), ok.key: ok.value}));
     expect(repo.warnings, isEmpty);
-    // 日付は日本時間の暦日、日数は経過した24時間の数で示す。
+    // 日時は日本時間、日数は経過した24時間の数で示す（本体のHOMEと同じ1行）。
     expect(
       repo.backup.line(DateTime.utc(2026, 11, 4)),
-      '最後に確かめた復元点: 2026-11-01のバックアップ（3日前 / 今日復元できることを確認）',
+      '最後に確かめた復元点: 2026-11-01 03:30のバックアップ（3日前 / 今日復元できることを確認）',
     );
     expect(repo.backup.warnings(DateTime.utc(2026, 11, 4)), isEmpty);
     expect(
@@ -85,6 +85,23 @@ void main() {
       contains('復元できませんでした（1件の問題）'),
     );
     expect(both.backup.line(DateTime.utc(2026, 11, 4)), contains('2026-11-01'));
+    // 古いアーカイブを後から確かめても、復元点はいちばん新しいバックアップのまま。
+    final older = check(
+      'C',
+      archivedAt: '2026-10-20T18:30:00.000Z',
+      checkedAt: '2026-11-03T21:00:00.000Z',
+    );
+    final three = HubRepository(
+      fixture({
+        ...fixtureFiles(),
+        ok.key: ok.value,
+        failed.key: failed.value,
+        older.key: older.value,
+      }),
+    );
+    expect(three.backup.latest!.id, endsWith('C' * 22));
+    expect(three.backup.restorePoint!.id, endsWith('A' * 22));
+    expect(three.backup.warnings(DateTime.utc(2026, 11, 4)), isEmpty);
     // 一度も復元できていなければ、復元点の行は出さない。
     final only = HubRepository(
       fixture({...fixtureFiles(), failed.key: failed.value}),

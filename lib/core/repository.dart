@@ -12,6 +12,8 @@ typedef _Unit = ({
   List<HubRecord> chain,
   Map<String, dynamic>? receipt,
   Set<String> related,
+  // 有効な要約。本体が読み直しを重ねていれば、読み直した要約。
+  String? summary,
 });
 
 class HubRepository {
@@ -284,7 +286,7 @@ class HubRepository {
     _readBackupChecks();
   }
 
-  /// バックアップの確認結果を読む。最後の確認と、最後に復元できた確認だけを使う。
+  /// バックアップの確認結果を読む。最後の確認と、確かめた復元点（復元できたいちばん新しいバックアップ）だけを使う。
   void _readBackupChecks() {
     final pattern = RegExp(
       r'^90_system/backup-checks/(BKC-[0-9A-HJKMNP-TV-Z]{26})\.json$',
@@ -330,10 +332,7 @@ class HubRepository {
     }
     if (checks.isEmpty) return;
     checks.sort((a, b) => a.id.compareTo(b.id));
-    backup = BackupStatus(
-      latest: checks.last,
-      restorePoint: checks.where((c) => c.ok).lastOrNull,
-    );
+    backup = BackupStatus.of(checks);
   }
 
   /// 完了・解決の報告と、誤りとして外した記録を読む。依頼の反映を確かめる時刻、項目ごとの最新の記録ID、
@@ -998,9 +997,11 @@ class HubRepository {
     }
   }
 
-  /// 本体が重ねている読み直し（item-rereads）の関連候補。本体のappliedRereadと同じ条件で、
-  /// 同じ根拠・同じ処理記録・同じ「外す」記録の組に対する読み直しだけを使う。なければnull。
-  ({Object? candidates, DateTime at})? _appliedReread(
+  /// 本体が重ねている読み直し（item-rereads）の関連候補と要約。本体のappliedRereadと同じ条件で、
+  /// 同じ根拠・同じ処理記録に対する読み直しのうち、もとになった「外す」記録がすべて今も有効なものだけを使う。
+  /// その後に外す記録が増えても、次の読み直しが保存されるまでは今の読み直しを使う。なければnull。
+  ({Object? candidates, DateTime at, Object? summary, Object? category})?
+  _appliedReread(
     HubRecord root,
     HubRecord latest,
     Map<String, dynamic> receipt,
@@ -1017,6 +1018,8 @@ class HubRepository {
           j['input_id'] != root.sourceId ||
           !['reread', 'failed'].contains(j['status']) ||
           ids is! List ||
+          ids.isEmpty ||
+          ids.any((id) => id is! String) ||
           at == null) {
         throw const FormatException();
       }
@@ -1031,7 +1034,7 @@ class HubRepository {
         return null;
       }
       // 今の処理記録より後に外した、読み直しを求める記録（読み違い、AIが推定した関連への「別のプロジェクトの話」）。
-      final wanted = [
+      final wanted = {
         for (final x in _exclusions.values)
           if (x.inputId == root.sourceId &&
               !x.at.isBefore(organized) &&
@@ -1039,9 +1042,14 @@ class HubRepository {
                   (x.reason == 'wrong-project' &&
                       x.projectId != root.metadata['project'])))
             x.id,
-      ]..sort();
-      if (jsonEncode(ids) != jsonEncode(wanted)) return null;
-      return (candidates: result['project_candidates'], at: at);
+      };
+      if (!ids.every(wanted.contains)) return null;
+      return (
+        candidates: result['project_candidates'],
+        at: at,
+        summary: result['summary'],
+        category: result['category'],
+      );
     } catch (_) {
       _problem(path);
       return null;
@@ -1108,8 +1116,13 @@ class HubRepository {
         if (root.metadata['project'] is String)
           root.metadata['project'] as String,
       };
+      String? summary;
       if (receipt != null) {
-        var candidates = (receipt['result'] as Map)['project_candidates'];
+        final organizedResult = receipt['result'] as Map;
+        if (organizedResult['summary'] is String) {
+          summary = organizedResult['summary'] as String;
+        }
+        var candidates = organizedResult['project_candidates'];
         final defs = projects.values.toList()
           ..sort((a, b) => a.id.compareTo(b.id));
         final registry = digest(
@@ -1139,7 +1152,15 @@ class HubRepository {
           receipt,
           digest(evidence),
         );
-        if (reread != null) candidates = reread.candidates;
+        if (reread != null) {
+          candidates = reread.candidates;
+          // 本体のoverlayRereadと同じく、アイデアとして保存した入力と、読み直しでアイデアへ変わった入力は要約を変えない。
+          if (organizedResult['category'] != 'idea' &&
+              reread.category != 'idea' &&
+              reread.summary is String) {
+            summary = reread.summary as String;
+          }
+        }
         final associationPath =
             '90_system/associations/${root.sourceId}/${digest(evidence)}.$registry.json';
         if (snapshot.files.containsKey(associationPath)) {
@@ -1188,6 +1209,7 @@ class HubRepository {
         chain: chain,
         receipt: receipt,
         related: related,
+        summary: summary,
       ));
       if (chain.length == 1) continue;
       final pending = receipt?['input_id'] != chain.last.sourceId;
@@ -2172,9 +2194,7 @@ class HubRepository {
         out.writeln(
           '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecretsHead(r.body, 300), 300).replaceAll('\n', ' ')}',
         );
-        if (u.receipt?['result'] is Map) {
-          out.writeln('  有効解釈: ${(u.receipt!['result'] as Map)['summary']}');
-        }
+        if (u.summary != null) out.writeln('  有効解釈: ${u.summary}');
         if (u.chain.length > 1) {
           for (final c in u.chain.skip(1)) {
             out.writeln('  訂正原文: [${c.sourceId}](${c.path})');
@@ -2327,9 +2347,9 @@ class HubRepository {
             '${pending ? '訂正未反映（旧解釈を表示・最新とは限りません）' : '訂正反映済み'}: ${unit.chain.map((r) => '[${r.sourceId}](${r.path})').join(' → ')}',
           );
         }
-        if (unit.receipt?['result'] is Map) {
+        if (unit.summary != null) {
           out.writeln(
-            '有効解釈（AI整理・未検証）: ${_oneLine(redactSecrets('${(unit.receipt!['result'] as Map)['summary']}'))}',
+            '有効解釈（AI整理・未検証）: ${_oneLine(redactSecrets(unit.summary!))}',
           );
         }
         out.writeln(

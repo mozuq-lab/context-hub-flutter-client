@@ -15,6 +15,8 @@ import 'fixtures.dart';
 const ideaInput = 'IN-01M2DSFVQMH65989604KSVE1PV';
 const resA = 'RES-01M9AAAAAAAAAAAAAAAAAAAAAA';
 const resB = 'RES-01M9BBBBBBBBBBBBBBBBBBBBBB';
+const resC = 'RES-01M9CCCCCCCCCCCCCCCCCCCCCC';
+const questionInput = 'IN-01M2DSFVSNCJSF7XKRPW29TM7M';
 
 /// 本体が残す形の、項目への報告の記録。
 String resolutionJson(
@@ -313,9 +315,120 @@ void main() {
       }, 'side-app'),
       isNull,
     );
-    // 壊れた読み直しの記録は使わず、知らせる。
+    // 読み直した後でさらに外した項目があっても、次の読み直しまでは今の読み直しを使う。
+    final another = NowItemRef(
+      key: 'b' * 64,
+      section: 'next',
+      label: '',
+      text: '読み直した後の別の話',
+      inputId: ideaInput,
+    );
+    final later = {
+      '90_system/item-resolutions/$resC.json': resolutionJson(
+        resC,
+        another,
+        'exclude',
+        reason: 'misread',
+        at: '2026-11-11T00:00:00.000Z',
+      ),
+    };
+    expect(relation({...applied, ...later}, 'side-app'), 'estimated');
+    // もとになった記録の1つが今は有効でない読み直しは使わない。
+    expect(
+      relation({
+        ...exclusion,
+        path: jsonEncode(reread(ids: [resA, resC])),
+      }, 'side-app'),
+      isNull,
+    );
+    // 壊れた読み直しの記録、もとになった記録のない読み直しは使わず、知らせる。
     final broken = HubRepository(fixture({...files, ...exclusion, path: '{'}));
     expect(broken.warnings, isNotEmpty);
+    final empty = HubRepository(
+      fixture({...files, ...exclusion, path: jsonEncode(reread(ids: []))}),
+    );
+    expect(empty.warnings, isNotEmpty);
+    expect(
+      empty.projectRelation(empty.inputRecord(ideaInput)!, 'side-app'),
+      isNull,
+    );
+  });
+
+  test('本体が読み直したメモは、コンテキストにも読み直した要約を出す。アイデアの要約は変えない', () {
+    final files = fixtureFiles();
+    Map<String, String> rereadOf(String input, String category) {
+      final receipt =
+          jsonDecode(files['90_system/receipts/$input.json']!) as Map;
+      final raw = files.entries
+          .firstWhere((e) => e.key.contains(input) && e.key.startsWith('00'))
+          .value;
+      final id = input == ideaInput ? resA : resC;
+      return {
+        '90_system/item-resolutions/$id.json': resolutionJson(
+          id,
+          NowItemRef(
+            key: (input == ideaInput ? 'a' : 'c') * 64,
+            section: 'open',
+            label: '',
+            text: '読み違えた項目',
+            inputId: input,
+          ),
+          'exclude',
+          reason: 'misread',
+        ),
+        '90_system/item-rereads/$input.json': jsonEncode({
+          'schema_version': 1,
+          'input_id': input,
+          'latest_input_id': input,
+          'evidence_hash': digest('$input:${digest(raw)}'),
+          'receipt_organized_at': receipt['organized_at'],
+          'resolution_ids': [id],
+          'status': 'reread',
+          'attempts': 1,
+          'result': {
+            'category': category,
+            'summary': '読み直した要約（$category）',
+            'project_candidates': [
+              {'id': projectId, 'confidence': 0.9},
+            ],
+            'next_action_suggestions': [],
+            'extracted': {'current': [], 'next': [], 'open': []},
+          },
+          'error': null,
+          'reread_at': '2026-11-10T01:00:00.000Z',
+          'model': 'mock',
+          'views_complete': true,
+        }),
+      };
+    }
+
+    const original = '同期とバックアップを分けるにはどうする？';
+    final base = HubRepository(fixture(files));
+    expect(base.context(projectId), contains('有効解釈: $original'));
+    final repo = HubRepository(
+      fixture({
+        ...files,
+        ...rereadOf(questionInput, 'question'),
+        ...rereadOf(ideaInput, 'question'),
+      }),
+    );
+    expect(repo.warnings, isEmpty);
+    final context = repo.context(projectId);
+    expect(context, contains('有効解釈: 読み直した要約（question）'));
+    expect(context, isNot(contains('有効解釈: $original')));
+    // アイデアとして保存した入力は、アイデアの本文と食い違わないよう要約を変えない。
+    expect(context, contains('有効解釈: 数日ぶりの開発再開を助ける仕組み、面白そう。'));
+    final bundle = repo.bundleContext([
+      repo.inputRecord(questionInput)!.id,
+      repo.inputRecord(ideaInput)!.id,
+    ], maxChars: 20000).text;
+    expect(bundle, contains('有効解釈（AI整理・未検証）: 読み直した要約（question）'));
+    expect(bundle, contains('有効解釈（AI整理・未検証）: 数日ぶりの開発再開を助ける仕組み、面白そう。'));
+    // 読み直しでアイデアへ変わった入力も、要約は元のままにする。
+    final toIdea = HubRepository(
+      fixture({...files, ...rereadOf(questionInput, 'idea')}),
+    );
+    expect(toIdea.context(projectId), contains('有効解釈: $original'));
   });
 
   test('Dartの「誤りとして外す」報告を本体が受理し、読み直しの後も一覧に残って未解決へ戻せる', () async {
@@ -469,6 +582,16 @@ void main() {
     await tester.tap(find.byKey(const Key('exclude-reason-misread')));
     await tester.pumpAndSettle();
     expect(submit().onPressed, isNotNull);
+    // 文字数は本体の検査と同じ数え方で示す。絵文字は2文字と数え、200文字を超えると依頼できない。
+    expect(find.text('0 / 200'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('exclude-note')), '😀' * 100);
+    await tester.pumpAndSettle();
+    expect(find.text('200 / 200'), findsOneWidget);
+    expect(submit().onPressed, isNotNull);
+    await tester.enterText(find.byKey(const Key('exclude-note')), '😀' * 101);
+    await tester.pumpAndSettle();
+    expect(find.text('202 / 200'), findsOneWidget);
+    expect(submit().onPressed, isNull);
     await tester.enterText(
       find.byKey(const Key('exclude-note')),
       '  まだ決めていない ',
@@ -508,12 +631,31 @@ void main() {
     expect(find.text('解決済み・完了（本人報告）'), findsNothing);
     await tester.tap(find.byKey(Key('reopen-$short')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('読み直しと、プロジェクトとの関連の変更も元に戻ります'), findsOneWidget);
+    // 読み違いで外した項目は、読み直しが元に戻ると伝える（プロジェクトとの関連は変えていないので触れない）。
+    expect(find.textContaining('メモの読み直しも元に戻ります'), findsOneWidget);
+    expect(find.textContaining('関連の変更'), findsNothing);
     await tester.tap(find.byKey(const Key('confirm-action')));
     await tester.pumpAndSettle();
     final reopen = parseMarkdown(access.requests.values.last).meta;
     expect(reopen['action'], 'reopen');
     expect(reopen.containsKey('reason'), isFalse);
+    // 「もう古い」で外した項目は、読み直しも関連の変更もないので、戻すことだけを伝える。
+    access.requests.clear();
+    access.current = VaultSnapshot(
+      withExcluded(files, item.key, reason: 'outdated')
+        ..['90_system/item-resolutions/$resA.json'] = resolutionJson(
+          resA,
+          item,
+          'exclude',
+          reason: 'outdated',
+        ),
+    );
+    await c.reload();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('reopen-$short')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('この項目をNOWの元の欄へ戻すよう依頼します。'), findsOneWidget);
+    expect(find.textContaining('元に戻ります'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

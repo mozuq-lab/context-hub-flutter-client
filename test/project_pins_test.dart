@@ -7,6 +7,7 @@ import 'package:context_hub_client/core/models.dart';
 import 'package:context_hub_client/core/repository.dart';
 import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
+import 'package:context_hub_client/ui/views.dart';
 import 'widget_test.dart' show MemoryUIAccess;
 import 'next_actions_test.dart' show multiProjectFiles, withProject;
 import 'fixtures.dart';
@@ -25,7 +26,52 @@ class FailingStateAccess extends MemoryUIAccess {
   }
 }
 
+/// Vaultの読取を1回だけ失敗させる端末。
+class FlakySnapshotAccess extends MemoryUIAccess {
+  bool failSnapshot = false;
+  @override
+  Future<VaultSnapshot> readSnapshot(VaultLocation location) {
+    if (failSnapshot) {
+      failSnapshot = false;
+      throw StateError('一時的に読めません');
+    }
+    return super.readSnapshot(location);
+  }
+}
+
 void main() {
+  test('Vaultを開けなかった後の再読込でも、端末に残したピン留め・ウィジェット・既読の設定を消さない', () async {
+    final access = FlakySnapshotAccess();
+    final files = multiProjectFiles();
+    access.current = fixture(files);
+    final first = HubController(access, sampleLoader: () async => files);
+    await first.useSample();
+    await first.setPinned('old-plan', true);
+    await first.setHomeWidget(const HomeWidgetSettings(showText: true));
+    final target = first.location!;
+    final before = jsonDecode(access.states['settings.json']!) as Map;
+    expect(before['seen'], isNotEmpty);
+    first.dispose();
+
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    access.failSnapshot = true;
+    await c.activate(target);
+    expect(c.error, isNotNull);
+    await c.reload();
+    expect(c.error, isNull);
+    expect(c.pinnedProjectIds, ['old-plan']);
+    expect(c.homeWidget, const HomeWidgetSettings(showText: true));
+    await c.setPinned('context-hub', true);
+    expect(c.pinnedProjectIds, ['old-plan', 'context-hub']);
+    final after = jsonDecode(access.states['settings.json']!) as Map;
+    expect(after['pins'], {
+      'sample': ['old-plan', 'context-hub'],
+    });
+    expect(after['homeWidget'], before['homeWidget']);
+    expect(after['seen'], before['seen']);
+  });
+
   test('ピン留めしたプロジェクトを本人が決めた順で先頭に、残りは今までの順に並べる', () {
     final repo = HubRepository(fixture(multiProjectFiles()));
     // ピン留めがなければ、進行中→休止・完了の順のまま。
@@ -221,6 +267,41 @@ void main() {
       lessThan(top('next-project-side-app')),
     );
     expect(access.requests, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('幅の狭い端末でも、並び替えの画面で題名を読めて操作できる', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = multiProjectFiles();
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(() async {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await c.useSample();
+    await c.setPinned('old-plan', true);
+    await c.setPinned('context-hub', true);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: PinOrderDialog(controller: c)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    // 題名は画面の幅をほぼ使える（ボタンの列に押し出されない）。
+    for (final id in ['old-plan', 'context-hub']) {
+      final title = tester.getSize(find.byKey(Key('pin-title-$id')));
+      expect(title.width, greaterThan(180));
+      expect(title.width, tester.getSize(find.byKey(Key('pin-row-$id'))).width);
+    }
+    await tester.tap(find.byKey(const Key('pin-up-context-hub')));
+    await tester.pumpAndSettle();
+    expect(c.pinnedProjectIds, ['context-hub', 'old-plan']);
     expect(tester.takeException(), isNull);
   });
 

@@ -179,8 +179,22 @@ class BackupCheck {
 class BackupStatus {
   const BackupStatus({this.latest, this.restorePoint});
 
-  /// 最後の確認と、最後に復元できた確認（確かめた復元点）。確認がなければnull。
+  /// 最後の確認と、確かめた復元点（復元できた確認のうち、いちばん新しいバックアップ）。確認がなければnull。
   final BackupCheck? latest, restorePoint;
+
+  /// 本体のrestorePointOfと同じく、復元できたいちばん新しいバックアップ（同じなら後の確認）を復元点にする。
+  /// 古いアーカイブを後から確かめても、復元点は古くならない。[checks]は確認した順。
+  factory BackupStatus.of(List<BackupCheck> checks) {
+    BackupCheck? point;
+    for (final c in checks) {
+      if (c.ok &&
+          (point == null ||
+              !c.archiveCreatedAt.isBefore(point.archiveCreatedAt))) {
+        point = c;
+      }
+    }
+    return BackupStatus(latest: checks.lastOrNull, restorePoint: point);
+  }
   bool get isEmpty => latest == null;
   static int _days(DateTime from, DateTime now) {
     final d = now.toUtc().difference(from.toUtc()).inDays;
@@ -196,10 +210,12 @@ class BackupStatus {
     final point = restorePoint;
     if (point == null) return null;
     final checked = _days(point.checkedAt, now);
-    return '最後に確かめた復元点: ${hubToday(point.archiveCreatedAt)}のバックアップ（${ageDays(now)}日前 / ${checked == 0 ? '今日' : '$checked日前に'}復元できることを確認）';
+    final t = point.archiveCreatedAt.toUtc().add(const Duration(hours: 9));
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '最後に確かめた復元点: ${hubToday(point.archiveCreatedAt)} ${two(t.hour)}:${two(t.minute)}のバックアップ（${ageDays(now)}日前 / ${checked == 0 ? '今日' : '$checked日前に'}復元できることを確認）';
   }
 
-  /// 本人に知らせる注意。最後の確認が失敗した、復元点がまだない、または目安より古い。
+  /// 本人に知らせる注意。最後の確認が失敗した、または復元点が目安より古い。
   List<String> warnings(DateTime now) {
     final last = latest, point = restorePoint;
     if (last == null) return const [];

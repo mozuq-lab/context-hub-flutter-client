@@ -1301,13 +1301,16 @@ class _HubViewState extends State<HubView> {
   ) async {
     final resolve = action == 'resolve',
         verb = item.section == 'next' ? '完了' : '解決';
+    // 外したときに起きたこと（読み直し・関連の変更）だけを、元に戻ると伝える。
+    final undo = switch (item.exclusionReason) {
+      'misread' => '誤りとして外したときのメモの読み直しも元に戻ります。',
+      'wrong-project' when !repo.itemOwnedByProject(project.id, item) =>
+        '誤りとして外したときのメモの読み直しと、このプロジェクトとの関連の変更も元に戻ります。',
+      _ => '',
+    };
     if (!await confirmAction(
           resolve ? '$verbにする' : '未解決に戻す',
-          '${item.display}\n\n${resolve
-              ? 'この項目をNOWの「解決済み・完了」へ移すよう依頼します。原文と整理結果は変わりません。'
-              : item.excluded
-              ? 'この項目をNOWの元の欄へ戻すよう依頼します。誤りとして外したときの読み直しと、プロジェクトとの関連の変更も元に戻ります。'
-              : 'この項目をNOWの元の欄へ戻すよう依頼します。'}',
+          '${item.display}\n\n${resolve ? 'この項目をNOWの「解決済み・完了」へ移すよう依頼します。原文と整理結果は変わりません。' : 'この項目をNOWの元の欄へ戻すよう依頼します。$undo'}',
           resolve ? '$verbにする' : '戻す',
         ) ||
         !mounted) {
@@ -3363,7 +3366,6 @@ class _CaptureDialogState extends State<CaptureDialog> {
   );
 }
 
-/// NOWの項目に期日と次に見直す日を付ける画面。日付は本人が選び、AIは推測しない。
 /// ピン留めしたプロジェクトの並びを変える。並びはこの端末にだけ保存し、Vaultには書かない。
 class PinOrderDialog extends StatelessWidget {
   const PinOrderDialog({super.key, required this.controller});
@@ -3402,51 +3404,60 @@ class PinOrderDialog extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 if (projects.isEmpty) const Text('ピン留めしたプロジェクトはありません。'),
+                // 幅の狭い端末でも題名を読めるよう、題名を1行使い、操作のボタンはその下に置く。
                 for (final (index, project) in projects.indexed)
-                  ListTile(
+                  Padding(
                     key: Key('pin-row-${project.id}'),
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                      project.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: project.lifecycle == 'active'
-                        ? null
-                        : Text('${project.lifecycleLabel}（「次の一手」には出ません）'),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        IconButton(
-                          key: Key('pin-up-${project.id}'),
-                          tooltip: '前へ',
-                          onPressed: index == 0
-                              ? null
-                              : () => _run(
-                                  context,
-                                  () => controller.movePin(project.id, -1),
-                                ),
-                          icon: const Icon(Icons.arrow_upward, size: 18),
+                        Text(
+                          project.title,
+                          key: Key('pin-title-${project.id}'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        IconButton(
-                          key: Key('pin-down-${project.id}'),
-                          tooltip: '後ろへ',
-                          onPressed: index == projects.length - 1
-                              ? null
-                              : () => _run(
-                                  context,
-                                  () => controller.movePin(project.id, 1),
-                                ),
-                          icon: const Icon(Icons.arrow_downward, size: 18),
-                        ),
-                        IconButton(
-                          key: Key('pin-remove-${project.id}'),
-                          tooltip: 'ピン留めを外す',
-                          onPressed: () => _run(
-                            context,
-                            () => controller.setPinned(project.id, false),
+                        if (project.lifecycle != 'active')
+                          Text(
+                            '${project.lifecycleLabel}（「次の一手」には出ません）',
+                            style: const TextStyle(fontSize: 12, height: 1.6),
                           ),
-                          icon: const Icon(Icons.close, size: 18),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            IconButton(
+                              key: Key('pin-up-${project.id}'),
+                              tooltip: '前へ',
+                              onPressed: index == 0
+                                  ? null
+                                  : () => _run(
+                                      context,
+                                      () => controller.movePin(project.id, -1),
+                                    ),
+                              icon: const Icon(Icons.arrow_upward, size: 18),
+                            ),
+                            IconButton(
+                              key: Key('pin-down-${project.id}'),
+                              tooltip: '後ろへ',
+                              onPressed: index == projects.length - 1
+                                  ? null
+                                  : () => _run(
+                                      context,
+                                      () => controller.movePin(project.id, 1),
+                                    ),
+                              icon: const Icon(Icons.arrow_downward, size: 18),
+                            ),
+                            IconButton(
+                              key: Key('pin-remove-${project.id}'),
+                              tooltip: 'ピン留めを外す',
+                              onPressed: () => _run(
+                                context,
+                                () => controller.setPinned(project.id, false),
+                              ),
+                              icon: const Icon(Icons.close, size: 18),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -3536,11 +3547,12 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
               TextField(
                 key: const Key('exclude-note'),
                 controller: note,
-                maxLength: exclusionNoteChars,
                 maxLines: 1,
                 decoration: InputDecoration(
                   labelText: '一言（任意）',
                   helperText: '例: 検討しただけで、まだ決めていない',
+                  // 本体の検査と同じ数え方（UTF-16の単位。絵文字などは2文字と数える）で示す。
+                  counterText: '${text.length} / $exclusionNoteChars',
                   errorText: valid
                       ? null
                       : '1行・$exclusionNoteChars文字以内で入力してください。',
@@ -3576,6 +3588,7 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
   }
 }
 
+/// NOWの項目に期日と次に見直す日を付ける画面。日付は本人が選び、AIは推測しない。
 class ScheduleDialog extends StatefulWidget {
   const ScheduleDialog({super.key, required this.item});
   final NowItemRef item;

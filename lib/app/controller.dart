@@ -118,6 +118,7 @@ class HubController extends ChangeNotifier {
   Future<void> _savePins(List<String> ids) async {
     final target = location, repo = repository;
     if (target == null || repo == null) throw StateError('先にVaultを選んでください。');
+    // 呼び出し側が端末の設定を読んでから並びを作る。ここでは待たずに並びを置き、続けて押された操作と入れ違わないようにする。
     final before = _pins[target.identity];
     // いま使っているVaultを最後に置き、古いVaultの分から手放す。
     _pins.remove(target.identity);
@@ -149,6 +150,7 @@ class HubController extends ChangeNotifier {
     if (pinned && !repo.projects.containsKey(projectId)) {
       throw StateError('このVaultにプロジェクトがありません。');
     }
+    await _loadSeen();
     // 読めていない記録があるときは、見えないプロジェクトのピン留めを捨てない。
     final ids = _storedPins()
         .where(
@@ -170,6 +172,7 @@ class HubController extends ChangeNotifier {
   Future<void> movePin(String projectId, int delta) async {
     final repo = repository;
     if (repo == null) throw StateError('先にVaultを選んでください。');
+    await _loadSeen();
     final ids = _storedPins();
     // 画面に見えている並び（Vaultにあるもの）の中で入れ替える。
     final shown = ids.where(repo.projects.containsKey).toList();
@@ -217,6 +220,7 @@ class HubController extends ChangeNotifier {
   Future<void> setHomeWidget(HomeWidgetSettings settings) async {
     final target = location;
     if (target == null) throw StateError('先にVaultを選んでください。');
+    await _loadSeen();
     if (settings == const HomeWidgetSettings()) {
       _homeWidgets.remove(target.identity);
     } else {
@@ -344,6 +348,9 @@ class HubController extends ChangeNotifier {
       repository = HubRepository(data);
       // Vaultを開くのに失敗した後の再読込でも、残したかごを読んでから使う（空のかごで上書きしない）。
       await _ensureBasket(target);
+      // 最初に開けなかった後の再読込でも、端末に残した既読・ピン留め・ウィジェットの設定を読んでから書く。
+      await _loadSeen();
+      if (epoch != _epoch) return;
       if (_initializeSeen()) {
         try {
           await _writeSettings();
@@ -1190,9 +1197,11 @@ class HubController extends ChangeNotifier {
   }
 
   /// 保存先の設定を書く。既読の記録は容量内に収め、書けなくても保存先の設定は残す。
+  /// 端末に残した設定を読む前には書かない（読む前に書くと、既読・ピン留め・ウィジェットの設定を消してしまう）。
   Future<void> _writeSettings() async {
     final target = location;
     if (target == null) return;
+    await _loadSeen();
     String encoded;
     try {
       encoded = _encodeSettings(target);
@@ -1326,6 +1335,7 @@ class HubController extends ChangeNotifier {
   Future<void> beginVisit(String projectId) async {
     final project = repository?.projects[projectId];
     if (project == null || project.nowRecordId == null) return;
+    await _loadSeen();
     _visits[projectId] = _stored(projectId);
     _store(project);
     try {
@@ -1340,6 +1350,7 @@ class HubController extends ChangeNotifier {
   Future<void> markAllSeen() async {
     final repo = repository;
     if (repo == null) return;
+    await _loadSeen();
     for (final project in repo.projects.values) {
       if (project.nowRecordId != null) _store(project);
     }
