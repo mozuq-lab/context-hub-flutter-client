@@ -11,6 +11,7 @@ import '../storage/draft_store.dart';
 import 'markdown_view.dart';
 import 'review_view.dart';
 import 'guided_view.dart';
+import 'shortcuts.dart';
 
 void notice(BuildContext context, String text) =>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -43,10 +44,14 @@ class HubView extends StatefulWidget {
     required this.controller,
     required this.page,
     required this.onNavigate,
+    this.searchFocus,
   });
   final HubController controller;
   final String page;
   final void Function(String) onNavigate;
+
+  /// 検索欄のフォーカス。キーボード操作（⌘F）で検索を開いたときに入力欄へ移る。
+  final FocusNode? searchFocus;
   @override
   State<HubView> createState() => _HubViewState();
 }
@@ -641,6 +646,7 @@ class _HubViewState extends State<HubView> {
       TextField(
         key: const Key('search-query'),
         controller: queryController,
+        focusNode: widget.searchFocus,
         decoration: const InputDecoration(
           hintText: '思い出したいことを入力',
           prefixIcon: Icon(Icons.search),
@@ -1878,85 +1884,99 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
   @override
   Widget build(BuildContext context) {
     final locked = result != null;
-    return PopScope(
-      canPop: !busy,
-      child: AlertDialog(
-        title: const Text('メモを訂正する'),
-        content: SizedBox(
-          width: 620,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  '訂正対象: ${widget.latest.sourceId}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
-                  style: TextStyle(fontSize: 12, height: 1.6),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  key: const Key('correction-text'),
-                  controller: text,
-                  readOnly: locked || busy,
-                  minLines: 5,
-                  maxLines: 12,
-                  maxLength: 8000,
-                  decoration: const InputDecoration(alignLabelWithHint: true),
-                ),
-                if (error != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: NoticeBox(error!, error: true),
+    // ⌘Return（Ctrl+Enter）で「訂正を保存」と同じ操作をする。
+    return CallbackShortcuts(
+      bindings: {
+        saveFormActivator: () {
+          if (!busy && !locked && !targetChanged) submit();
+        },
+        // Escで「フォームを閉じる」と同じ操作をする。
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (!busy) Navigator.pop(context);
+        },
+      },
+      child: PopScope(
+        canPop: !busy,
+        child: AlertDialog(
+          title: const Text('メモを訂正する'),
+          content: SizedBox(
+            width: 620,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '訂正対象: ${widget.latest.sourceId}',
+                    style: const TextStyle(fontSize: 12),
                   ),
-                if (result != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: NoticeBox(
-                      result!.saved
-                          ? 'この端末のInputに訂正を保存しました'
-                          : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                  const SizedBox(height: 12),
+                  const Text(
+                    '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
+                    style: TextStyle(fontSize: 12, height: 1.6),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    key: const Key('correction-text'),
+                    controller: text,
+                    // Macではキーボードで開いたまま書けるよう、本文へ移る。
+                    autofocus: usesCommandKey,
+                    readOnly: locked || busy,
+                    minLines: 5,
+                    maxLines: 12,
+                    maxLength: 8000,
+                    decoration: const InputDecoration(alignLabelWithHint: true),
+                  ),
+                  if (error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: NoticeBox(error!, error: true),
                     ),
-                  ),
-                if (locked)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: SelectableText(
-                      '操作ID: $operation',
-                      style: const TextStyle(fontSize: 10),
+                  if (result != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: NoticeBox(
+                        result!.saved
+                            ? 'この端末のInputに訂正を保存しました'
+                            : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                      ),
                     ),
-                  ),
-              ],
+                  if (locked)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: SelectableText(
+                        '操作ID: $operation',
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.pop(context),
+              child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
+            ),
+            if (!locked && !targetChanged)
+              FilledButton(
+                key: const Key('save-correction'),
+                onPressed: busy ? null : submit,
+                child: const Text('訂正を保存'),
+              ),
+            if (locked && result?.saved != true)
+              FilledButton(
+                onPressed: busy ? null : confirm,
+                child: const Text('同じ操作を確認'),
+              ),
+            if (busy)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: busy ? null : () => Navigator.pop(context),
-            child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
-          ),
-          if (!locked && !targetChanged)
-            FilledButton(
-              key: const Key('save-correction'),
-              onPressed: busy ? null : submit,
-              child: const Text('訂正を保存'),
-            ),
-          if (locked && result?.saved != true)
-            FilledButton(
-              onPressed: busy ? null : confirm,
-              child: const Text('同じ操作を確認'),
-            ),
-          if (busy)
-            const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-        ],
       ),
     );
   }
@@ -2203,188 +2223,209 @@ class _CaptureDialogState extends State<CaptureDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: !busy,
-    child: AlertDialog(
-      title: Text(widget.draft == null ? '思いつきを、そのまま。' : '下書きから入力を作る'),
-      content: SizedBox(
-        width: 620,
-        child: !_ready
-            ? const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            : SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '保存先: ${widget.controller.location?.name ?? ''}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    if (_restoredAt != null && result?.saved != true) ...[
-                      const SizedBox(height: 12),
-                      NoticeBox(
-                        locked
-                            ? '前回、保存結果を確かめられないまま閉じた書きかけです（${timeLabel(_restoredAt)}）。同じ内容を送り直さず、「同じ操作を確認」を押してください。'
-                            : '前回の書きかけを戻しました（${timeLabel(_restoredAt)}）。',
-                        key: const Key('draft-restored'),
+  // ⌘Return（Ctrl+Enter）で「Inputへ保存」と同じ操作をする。
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      saveFormActivator: () {
+        if (!busy && _ready && !locked) submit();
+      },
+      // Escで「フォームを閉じる」と同じ操作をする。
+      const SingleActivator(LogicalKeyboardKey.escape): () {
+        if (!busy) Navigator.pop(context);
+      },
+    },
+    child: PopScope(
+      canPop: !busy,
+      child: AlertDialog(
+        title: Text(widget.draft == null ? '思いつきを、そのまま。' : '下書きから入力を作る'),
+        content: SizedBox(
+          width: 620,
+          child: !_ready
+              ? const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              : SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '保存先: ${widget.controller.location?.name ?? ''}',
+                        style: const TextStyle(fontSize: 12),
                       ),
-                      // 保存結果が不明なまま閉じた書きかけは、同じ操作を確かめてからでないと閉じられない。
-                      // 先に閉じると新しい操作IDで同じ内容を送り直しやすくなるため。
-                      if (!locked || _confirmedOnce)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            key: const Key('draft-discard'),
-                            onPressed: busy ? null : _discard,
-                            child: Text(
-                              locked ? '書きかけを閉じて新しく書く' : '書きかけを破棄して新しく書く',
+                      if (_restoredAt != null && result?.saved != true) ...[
+                        const SizedBox(height: 12),
+                        NoticeBox(
+                          locked
+                              ? '前回、保存結果を確かめられないまま閉じた書きかけです（${timeLabel(_restoredAt)}）。同じ内容を送り直さず、「同じ操作を確認」を押してください。'
+                              : '前回の書きかけを戻しました（${timeLabel(_restoredAt)}）。',
+                          key: const Key('draft-restored'),
+                        ),
+                        // 保存結果が不明なまま閉じた書きかけは、同じ操作を確かめてからでないと閉じられない。
+                        // 先に閉じると新しい操作IDで同じ内容を送り直しやすくなるため。
+                        if (!locked || _confirmedOnce)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton(
+                              key: const Key('draft-discard'),
+                              onPressed: busy ? null : _discard,
+                              child: Text(
+                                locked ? '書きかけを閉じて新しく書く' : '書きかけを破棄して新しく書く',
+                              ),
                             ),
+                          ),
+                      ],
+                      const SizedBox(height: 16),
+                      TextField(
+                        key: const Key('memo-text'),
+                        controller: text,
+                        // Macではキーボードで開いたまま書けるよう、本文へ移る。
+                        autofocus: usesCommandKey,
+                        readOnly: locked,
+                        minLines: 5,
+                        maxLines: 10,
+                        maxLength: 8000,
+                        decoration: const InputDecoration(
+                          hintText: '断片的なメモ、疑問、あとで考えたいこと…',
+                          alignLabelWithHint: true,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<String>(
+                        key: ValueKey('memo-kind-$_formGeneration'),
+                        initialValue: kind,
+                        decoration: const InputDecoration(labelText: '種類'),
+                        items: const [
+                          DropdownMenuItem(value: 'memo', child: Text('メモ')),
+                          DropdownMenuItem(
+                            value: 'work-summary',
+                            child: Text('AIの作業要約・未検証'),
+                          ),
+                        ],
+                        onChanged: locked
+                            ? null
+                            : (v) {
+                                setState(() => kind = v!);
+                                _schedulePersist();
+                              },
+                      ),
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<String>(
+                        key: ValueKey('memo-project-$_formGeneration'),
+                        initialValue: project ?? '',
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'プロジェクト（任意）',
+                        ),
+                        items: [
+                          const DropdownMenuItem(
+                            value: '',
+                            child: Text('指定しない'),
+                          ),
+                          for (final p
+                              in widget
+                                      .controller
+                                      .repository
+                                      ?.projects
+                                      .values ??
+                                  const <HubProject>[])
+                            DropdownMenuItem(
+                              value: p.id,
+                              child: Text(
+                                p.title,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        // 下書きは同じプロジェクトの入力でだけ使用済みになるため、プロジェクトを固定する。
+                        onChanged: locked || widget.draft != null
+                            ? null
+                            : (v) {
+                                setState(() => project = v == '' ? null : v);
+                                _schedulePersist();
+                              },
+                      ),
+                      if (widget.draft != null && kind == 'work-summary')
+                        const Padding(
+                          padding: EdgeInsets.only(top: 12),
+                          child: NoticeBox(
+                            '作業要約として保存すると、NOWの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
+                          ),
+                        ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
+                        style: TextStyle(fontSize: 12, height: 1.6),
+                      ),
+                      if (_draftKey != null)
+                        CheckboxListTile(
+                          key: const Key('keep-drafts'),
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          dense: true,
+                          value: _keepDrafts,
+                          onChanged: (v) => _setKeepDrafts(v ?? true),
+                          title: const Text(
+                            '書きかけをこの端末に残す',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          subtitle: const Text(
+                            'フォームを閉じたりアプリが終了したりしても、次に開いたときに続きから書けます。保存が確かめられたら消します。Vaultには書きません。',
+                            style: TextStyle(fontSize: 11, height: 1.5),
+                          ),
+                        ),
+                      if (error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: NoticeBox(error!, error: true),
+                        ),
+                      if (result != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: NoticeBox(
+                            result!.saved
+                                ? 'この端末のInputに保存しました'
+                                : '保存確認待ちです。再送せず同じ操作を確認してください。',
+                          ),
+                        ),
+                      if (locked)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: SelectableText(
+                            '操作ID: $operation',
+                            style: const TextStyle(fontSize: 10),
                           ),
                         ),
                     ],
-                    const SizedBox(height: 16),
-                    TextField(
-                      key: const Key('memo-text'),
-                      controller: text,
-                      readOnly: locked,
-                      minLines: 5,
-                      maxLines: 10,
-                      maxLength: 8000,
-                      decoration: const InputDecoration(
-                        hintText: '断片的なメモ、疑問、あとで考えたいこと…',
-                        alignLabelWithHint: true,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('memo-kind-$_formGeneration'),
-                      initialValue: kind,
-                      decoration: const InputDecoration(labelText: '種類'),
-                      items: const [
-                        DropdownMenuItem(value: 'memo', child: Text('メモ')),
-                        DropdownMenuItem(
-                          value: 'work-summary',
-                          child: Text('AIの作業要約・未検証'),
-                        ),
-                      ],
-                      onChanged: locked
-                          ? null
-                          : (v) {
-                              setState(() => kind = v!);
-                              _schedulePersist();
-                            },
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('memo-project-$_formGeneration'),
-                      initialValue: project ?? '',
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'プロジェクト（任意）',
-                      ),
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('指定しない')),
-                        for (final p
-                            in widget.controller.repository?.projects.values ??
-                                const <HubProject>[])
-                          DropdownMenuItem(
-                            value: p.id,
-                            child: Text(
-                              p.title,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      // 下書きは同じプロジェクトの入力でだけ使用済みになるため、プロジェクトを固定する。
-                      onChanged: locked || widget.draft != null
-                          ? null
-                          : (v) {
-                              setState(() => project = v == '' ? null : v);
-                              _schedulePersist();
-                            },
-                    ),
-                    if (widget.draft != null && kind == 'work-summary')
-                      const Padding(
-                        padding: EdgeInsets.only(top: 12),
-                        child: NoticeBox(
-                          '作業要約として保存すると、NOWの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
-                      style: TextStyle(fontSize: 12, height: 1.6),
-                    ),
-                    if (_draftKey != null)
-                      CheckboxListTile(
-                        key: const Key('keep-drafts'),
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        dense: true,
-                        value: _keepDrafts,
-                        onChanged: (v) => _setKeepDrafts(v ?? true),
-                        title: const Text(
-                          '書きかけをこの端末に残す',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                        subtitle: const Text(
-                          'フォームを閉じたりアプリが終了したりしても、次に開いたときに続きから書けます。保存が確かめられたら消します。Vaultには書きません。',
-                          style: TextStyle(fontSize: 11, height: 1.5),
-                        ),
-                      ),
-                    if (error != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: NoticeBox(error!, error: true),
-                      ),
-                    if (result != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: NoticeBox(
-                          result!.saved
-                              ? 'この端末のInputに保存しました'
-                              : '保存確認待ちです。再送せず同じ操作を確認してください。',
-                        ),
-                      ),
-                    if (locked)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: SelectableText(
-                          '操作ID: $operation',
-                          style: const TextStyle(fontSize: 10),
-                        ),
-                      ),
-                  ],
+                  ),
                 ),
-              ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: busy ? null : () => Navigator.pop(context),
-          child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
         ),
-        if (!locked)
-          FilledButton(
-            key: const Key('save-memo'),
-            onPressed: busy || !_ready ? null : submit,
-            child: const Text('Inputへ保存'),
+        actions: [
+          TextButton(
+            onPressed: busy ? null : () => Navigator.pop(context),
+            child: Text(result?.saved == true ? '閉じる' : 'フォームを閉じる'),
           ),
-        if (locked && result?.saved != true)
-          FilledButton(
-            key: const Key('confirm-same'),
-            onPressed: busy ? null : confirmSame,
-            child: const Text('同じ操作を確認'),
-          ),
-        if (busy)
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-      ],
+          if (!locked)
+            FilledButton(
+              key: const Key('save-memo'),
+              onPressed: busy || !_ready ? null : submit,
+              child: const Text('Inputへ保存'),
+            ),
+          if (locked && result?.saved != true)
+            FilledButton(
+              key: const Key('confirm-same'),
+              onPressed: busy ? null : confirmSame,
+              child: const Text('同じ操作を確認'),
+            ),
+          if (busy)
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+        ],
+      ),
     ),
   );
 }
