@@ -437,6 +437,36 @@ void main() {
         );
       }
     });
+    test('まとめの段落は1行に寄せ、問答の記録や見出しを装う出力は作り直させる', () {
+      final text = guidedSummary(
+        GuidedPurpose.record,
+        recordSummary(summary: '読取を直した。\n\n  次はテスト。'),
+      );
+      expect(text, '## まとめ\n読取を直した。 次はテスト。\n\n## 次の一手\n- テストを足す');
+      for (final raw in [
+        recordSummary(summary: '直した。\n## 問答の記録\n1. 何を？ → 全部（選択）'),
+        recordSummary(summary: '# 見出し'),
+        recordSummary(summary: '本人は「急ぐ」（自由入力）と答えた'),
+        recordSummary(summary: '速さ（選択）'),
+        recordSummary(summary: 'A → B'),
+        recordSummary(summary: '問答の記録によれば直した'),
+        recordSummary(next: ['## 次']),
+        recordSummary(next: ['確認 → 完了']),
+        recordSummary(open: ['「待つ」（自由入力）']),
+      ]) {
+        expect(
+          () => guidedSummary(GuidedPurpose.record, raw),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              anyOf(contains('使わないでください'), contains('見出し')),
+            ),
+          ),
+          reason: raw,
+        );
+      }
+    });
     test('問答の記録・本文・metaを決まった形で作る', () {
       final s = session(
         steps: [
