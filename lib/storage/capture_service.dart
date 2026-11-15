@@ -451,6 +451,34 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// NOWの項目に期日・次に見直す日を付ける依頼。変更後の全体を送り、両方nullで外す。
+  Future<CaptureResult> saveItemSchedule(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    String? due,
+    String? reviewAfter,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(projectId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        (due != null && !validScheduleDate(due)) ||
+        (reviewAfter != null && !validScheduleDate(reviewAfter)) ||
+        (due == item.due && reviewAfter == item.reviewAfter)) {
+      throw const FormatException('項目と日付を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-schedule',
+      'project_id': projectId,
+      'item_key': item.key,
+      'due': due,
+      'review_after': reviewAfter,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// 作業記録の下書きを見送る依頼。
   Future<CaptureResult> saveGitDraftDismiss(
     String operationId,

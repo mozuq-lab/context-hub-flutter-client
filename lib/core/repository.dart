@@ -29,6 +29,8 @@ class HubRepository {
   final Map<String, DateTime> _resolutionTimes = {};
   final Map<String, String> _latestResolutions = {};
   final Map<String, String> _outstandingItems = {};
+  final Map<String, DateTime> _scheduleTimes = {};
+  final Map<String, String> _outstandingSchedules = {};
   final Map<String, String> _outstandingDrafts = {};
 
   /// プロジェクトID → 反映待ちの「NOWを生成版に戻す」依頼のREQ ID。
@@ -250,6 +252,7 @@ class HubRepository {
     _readStatusChanges();
     _readDefinitionChanges();
     _readNowItems();
+    _readHistories();
     _readGitDrafts();
     _readIntake();
     _readDigest();
@@ -283,6 +286,30 @@ class HubRepository {
         _problem(e.key);
       }
     }
+    // 期日・見直す日の記録。依頼の反映を確かめるため、記録の時刻だけを読む（有効な日付は項目一覧のscheduleを使う）。
+    final schedule = RegExp(
+      r'^90_system/item-schedules/(SCH-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in snapshot.files.entries) {
+      final match = schedule.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']);
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['item_key'] is! String ||
+            (j['due'] != null && !validScheduleDate(j['due'])) ||
+            (j['review_after'] != null &&
+                !validScheduleDate(j['review_after'])) ||
+            at == null) {
+          throw const FormatException();
+        }
+        _scheduleTimes[j['id'] as String] = at;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
     for (final project in projects.values) {
       final path = '90_system/now-items/${project.id}.json',
           raw = snapshot.files[path];
@@ -296,7 +323,9 @@ class HubRepository {
         }
         final items = <NowItemRef>[];
         for (final raw in j['items'] as List) {
-          final i = raw as Map<String, dynamic>, r = i['resolution'];
+          final i = raw as Map<String, dynamic>,
+              r = i['resolution'],
+              sc = i['schedule'];
           if (i['key'] is! String ||
               !RegExp(r'^[a-f0-9]{64}$').hasMatch(i['key']) ||
               !['next', 'open'].contains(i['section']) ||
@@ -309,7 +338,17 @@ class HubRepository {
                       r['id'] is! String ||
                       !RegExp(
                         r'^RES-[0-9A-HJKMNP-TV-Z]{26}$',
-                      ).hasMatch(r['id'])))) {
+                      ).hasMatch(r['id']))) ||
+              (sc != null &&
+                  (sc is! Map ||
+                      sc['id'] is! String ||
+                      !RegExp(
+                        r'^SCH-[0-9A-HJKMNP-TV-Z]{26}$',
+                      ).hasMatch(sc['id']) ||
+                      (sc['due'] != null && !validScheduleDate(sc['due'])) ||
+                      (sc['review_after'] != null &&
+                          !validScheduleDate(sc['review_after'])) ||
+                      (sc['due'] == null && sc['review_after'] == null)))) {
             throw const FormatException();
           }
           items.add(
@@ -321,6 +360,9 @@ class HubRepository {
               inputId: i['input_id'],
               resolutionId: r is Map ? r['id'] as String : null,
               resolvedAt: r is Map ? timestamp(r['at']) : null,
+              scheduleId: sc is Map ? sc['id'] as String : null,
+              due: sc is Map ? sc['due'] as String? : null,
+              reviewAfter: sc is Map ? sc['review_after'] as String? : null,
             ),
           );
         }
@@ -341,6 +383,31 @@ class HubRepository {
         }
       } catch (_) {
         project.nowItems.clear();
+        _problem(path);
+      }
+    }
+  }
+
+  /// 本体が生成するプロジェクトの経緯（`10_projects/<id>/HISTORY.md`）。
+  void _readHistories() {
+    for (final project in projects.values) {
+      final path = '10_projects/${project.id}/HISTORY.md',
+          raw = snapshot.files[path];
+      if (raw == null) continue;
+      try {
+        final doc = parseMarkdown(raw), m = doc.meta;
+        if (m['schema_version'] != 1 || m['project'] != project.id) {
+          throw const FormatException();
+        }
+        final result = HubDigest(
+          body: doc.body,
+          generatedAt: timestamp(m['generated_at']),
+        );
+        if (!generatedIntact(raw, m)) {
+          result.warnings.add('経緯の整合性を確認できません。手動変更や同期の途中の可能性があります。');
+        }
+        project.history = result;
+      } catch (_) {
         _problem(path);
       }
     }
@@ -402,6 +469,10 @@ class HubRepository {
 
   /// 反映を待っている、この項目への完了・解決（または再開）の報告。
   String? itemRequestIdFor(String itemKey) => _outstandingItems[itemKey];
+
+  /// 反映を待っている、この項目への期日・見直す日の依頼。
+  String? scheduleRequestIdFor(String itemKey) =>
+      _outstandingSchedules[itemKey];
 
   /// この項目の最新の解決・再開記録のID。記録がなければnull。
   String? latestResolutionIdFor(String itemKey) => _latestResolutions[itemKey];
@@ -870,6 +941,7 @@ class HubRepository {
               'project-status',
               'project-definition',
               'item-resolution',
+              'item-schedule',
               'git-draft-dismiss',
               'project-create',
               'conflict-resolve',
@@ -914,6 +986,21 @@ class HubRepository {
                 m['item_key'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !['resolve', 'reopen'].contains(m['action']))) {
+          throw const FormatException();
+        }
+        final itemSchedule = m['operation'] == 'item-schedule';
+        if (itemSchedule &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('due') ||
+                !m.containsKey('review_after') ||
+                (m['due'] != null && !validScheduleDate(m['due'])) ||
+                (m['review_after'] != null &&
+                    !validScheduleDate(m['review_after'])))) {
           throw const FormatException();
         }
         if (draftDismiss &&
@@ -971,7 +1058,7 @@ class HubRepository {
         final usedDraft = m['operation'] == 'capture' && m['meta'] is Map
             ? (m['meta'] as Map)['git_draft']
             : null;
-        String? resolutionId;
+        String? resolutionId, scheduleId;
         final decision = [
           'project-approve',
           'project-reject',
@@ -1030,6 +1117,8 @@ class HubRepository {
               ? '呼び名とキーワードの変更依頼: ${m['title']}'
               : itemReport
               ? '${m['action'] == 'resolve' ? '完了・解決' : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemSchedule
+              ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
               ? '下書きの見送り: ${gitDrafts[m['draft_id']]?.repo ?? m['draft_id']}'
               : retiring
@@ -1102,6 +1191,19 @@ class HubRepository {
                 throw const FormatException();
               }
               resolutionId = r['resolutionId'] as String;
+            }
+            if (itemSchedule) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['scheduleId'] is! String ||
+                  !RegExp(
+                    r'^SCH-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['scheduleId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              scheduleId = r['scheduleId'] as String;
             }
             if (creation) {
               final r = ack['result'] as Map, memo = r['firstMemoInputId'];
@@ -1257,6 +1359,16 @@ class HubRepository {
           }
         }
         if (itemReport) _itemRequest(item, m, resolutionId);
+        if (itemSchedule) {
+          _itemRequest(
+            item,
+            m,
+            scheduleId,
+            times: _scheduleTimes,
+            outstanding: _outstandingSchedules,
+            what: '日付',
+          );
+        }
         if (draftDismiss &&
             ['waiting', 'accepted'].contains(item.state) &&
             gitDrafts.containsKey(m['draft_id'])) {
@@ -1329,26 +1441,30 @@ class HubRepository {
   }
 
   /// 完了・解決の報告の反映状況。記録の作成後にNOWが再生成され、同期されていれば反映済みとする。
+  /// 期日・見直す日の依頼にも使う（記録の時刻と反映待ちの置き場所だけが異なる）。
   void _itemRequest(
     IntakeStatus item,
     Map<String, dynamic> m,
-    String? resolutionId,
-  ) {
+    String? recordId, {
+    Map<String, DateTime>? times,
+    Map<String, String>? outstanding,
+    String what = '報告',
+  }) {
     final key = m['item_key'] as String, project = projects[m['project_id']];
-    var outstanding = false;
+    var waiting = false;
     if (item.state == 'accepted') {
-      final at = _resolutionTimes[resolutionId],
+      final at = (times ?? _resolutionTimes)[recordId],
           generated = project?.nowItemsGeneratedAt;
       if (at == null || generated == null || generated.isBefore(at)) {
-        outstanding = true;
+        waiting = true;
         item.detail = 'Mini受領済み。NOWの同期を待っています。';
       } else {
-        item.detail = '報告をMiniが反映しました。';
+        item.detail = '$whatをMiniが反映しました。';
       }
     } else if (item.state == 'waiting') {
-      outstanding = true;
+      waiting = true;
     }
-    if (outstanding) _outstandingItems[key] = item.id;
+    if (waiting) (outstanding ?? _outstandingItems)[key] = item.id;
   }
 
   /// 進行中のプロジェクトを、最新の根拠が新しい順に並べる。根拠のないものは後ろへ置き、同じ日時ならID順。

@@ -637,6 +637,42 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// NOWの項目に期日・次に見直す日を付ける（両方nullで外す）依頼を保存する。
+  Future<CaptureResult> requestItemSchedule(
+    String projectId,
+    String itemKey,
+    String? due,
+    String? reviewAfter,
+  ) {
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId]?.nowItems
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null || found.resolved) {
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (found.due == due && found.reviewAfter == reviewAfter) {
+          throw StateError('日付は変わっていません。');
+        }
+        if (parsed.scheduleRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の日付は依頼済みです。受付状況を確認してください。');
+        }
+        item = found;
+        // 現在の日付と依頼する日付を含め、同じ内容の再試行だけを同じ操作として扱う。
+        return 'schedule/$projectId/$itemKey/${found.scheduleId ?? '-'}/${due ?? '-'}/${reviewAfter ?? '-'}';
+      },
+      (service, parsed, operation) => service.saveItemSchedule(
+        operation,
+        projectId,
+        item,
+        due,
+        reviewAfter,
+      ),
+    );
+  }
+
   /// 新しいプロジェクトの作成を依頼する。操作IDとプロジェクトIDは入力フォームが持ち、
   /// 保存結果が不明なときは同じ操作IDで確認する。
   Future<CaptureResult> requestProjectCreate(NewProjectRequest request) async {
