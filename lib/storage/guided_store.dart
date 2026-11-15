@@ -28,11 +28,21 @@ class GuidedUsage {
   static String monthOf(DateTime time) =>
       '${time.year.toString().padLeft(4, '0')}-${time.month.toString().padLeft(2, '0')}';
 
-  /// [now]の月の利用。月が進めば0から数える。端末の時計が過去の月へ戻ったときは数え直さない
-  /// （時計を戻して上限を外せないようにする）。
+  /// [now]の月の利用。月が進めば0から数える。記録した月が[now]より先のとき（時計を過去の月へ
+  /// 戻した・一度先の月に進んだ時計を直した）は、回数とトークンをそのまま[now]の月に引き継ぐ。
+  /// 時計を戻して上限を外せず、先の月のまま止まって数え直されないこともない。
   GuidedUsage current(DateTime now) {
     final m = monthOf(now);
-    return m.compareTo(month) <= 0 ? this : GuidedUsage(m);
+    if (m == month) return this;
+    if (m.compareTo(month) > 0) return GuidedUsage(m);
+    return GuidedUsage(
+      m,
+      calls: calls,
+      input: input,
+      output: output,
+      models: models,
+      uncertain: uncertain,
+    );
   }
 
   /// 呼び出しは送る前に数え（失敗しても回数に入れる）、トークンは応答を受け取ってから足す。

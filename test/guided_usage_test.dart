@@ -126,9 +126,21 @@ void main() {
   test('端末の時計を過去の月へ戻しても、今月の回数を数え直さない', () {
     const usage = GuidedUsage('2026-11', calls: 5);
     final back = usage.current(DateTime(2026, 10, 30));
-    expect(back.month, '2026-11');
     expect(back.calls, 5);
     expect(usage.add(DateTime(2025, 1, 1), calls: 1).calls, 6);
     expect(usage.current(DateTime(2026, 12, 1)).calls, 0);
   });
+
+  test('時計が一度先の月になっても、直したあとの月で数え、次の月には0から数える', () {
+    // 誤って2027-05に進んだ時計で記録し、正しい2026-11に直した。
+    const usage = GuidedUsage('2027-05', calls: 5, input: 100);
+    final fixed = usage.current(DateTime(2026, 11, 20));
+    expect(fixed.month, '2026-11');
+    expect(fixed.calls, 5);
+    expect(fixed.input, 100);
+    final next = fixed.add(DateTime(2026, 11, 21), calls: 1);
+    expect(next.month, '2026-11');
+    expect(next.current(DateTime(2026, 12, 1)).calls, 0);
+  });
+
 }
