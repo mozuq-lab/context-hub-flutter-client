@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/ai/claude_client.dart';
 import 'package:context_hub_client/ai/guided_services.dart';
@@ -11,6 +12,7 @@ import 'package:context_hub_client/storage/capture_service.dart';
 import 'package:context_hub_client/storage/guided_store.dart';
 import 'package:context_hub_client/storage/secret_store.dart';
 import 'package:context_hub_client/storage/vault_access.dart';
+import 'package:context_hub_client/ui/guided_view.dart' show usageLines;
 import 'capture_test.dart' show TempAccess, location;
 import 'controller_test.dart' show UIAccess;
 import 'fixtures.dart';
@@ -74,27 +76,113 @@ class MemorySecrets implements SecretStore {
   Future<void> delete() async => value = null;
 }
 
+/// 実際の通信の代わり。成功（200）の応答は、Messages APIの応答をSSEのイベントに直して
+/// 少しずつ渡す。[failAfter]があれば、渡し終えた後にその失敗で終える（途中で途切れた通信）。
 class FakeTransport implements HttpTransport {
-  FakeTransport(this.reply);
+  FakeTransport(this.reply, {this.failAfter});
   HttpReply reply;
+  ModelException? failAfter;
   Uri? url;
   Map<String, String>? headers;
   String? body;
+  Duration? idle, total;
   @override
   Future<HttpReply> post(
     Uri url,
     Map<String, String> headers,
-    String body,
-    Duration timeout,
-  ) async {
+    String body, {
+    required Duration idle,
+    required Duration total,
+    void Function(String chunk)? onData,
+  }) async {
     this.url = url;
     this.headers = headers;
     this.body = body;
-    return reply;
+    this.idle = idle;
+    this.total = total;
+    if (reply.status != 200 || onData == null) {
+      if (failAfter != null) throw failAfter!;
+      return reply;
+    }
+    Object? message;
+    try {
+      message = jsonDecode(reply.body);
+    } on FormatException {
+      message = null;
+    }
+    final text = message is Map ? sse(message) : reply.body;
+    // 行やUTF-8の区切りと関係なく分けて渡す。
+    for (var i = 0; i < text.length; i += 7) {
+      onData(text.substring(i, i + 7 > text.length ? text.length : i + 7));
+    }
+    if (failAfter != null) throw failAfter!;
+    return HttpReply(200, '', headers: reply.headers);
   }
 
   @override
   void abort() {}
+}
+
+/// Messages APIの応答（stream: falseの形）を、stream: trueで届くイベントの並びに直す。
+/// 入力の使用量はmessage_startに、出力・試行ごとの内訳はmessage_deltaに載せる。
+/// [cut]がtrueなら、message_deltaより前で途切れさせる。
+String sse(Map message, {bool cut = false}) {
+  final usage = (message['usage'] as Map?) ?? const {};
+  final out = StringBuffer();
+  void event(String type, Map<String, Object?> data) {
+    out.write('event: $type\ndata: ${jsonEncode({'type': type, ...data})}\n\n');
+  }
+
+  event('message_start', {
+    'message': {
+      'id': 'msg_test',
+      'type': 'message',
+      'role': 'assistant',
+      'model': ?message['model'],
+      'content': [],
+      'stop_reason': null,
+      'usage': {
+        for (final k in [
+          'input_tokens',
+          'cache_creation_input_tokens',
+          'cache_read_input_tokens',
+        ])
+          if (usage.containsKey(k)) k: usage[k],
+        'output_tokens': 1,
+      },
+    },
+  });
+  out.write('event: ping\ndata: {"type": "ping"}\n\n');
+  final content = (message['content'] as List?) ?? const [];
+  for (var i = 0; i < content.length; i++) {
+    final block = content[i] as Map;
+    if (block['type'] == 'text') {
+      event('content_block_start', {
+        'index': i,
+        'content_block': {'type': 'text', 'text': ''},
+      });
+      event('content_block_delta', {
+        'index': i,
+        'delta': {'type': 'text_delta', 'text': block['text']},
+      });
+    } else {
+      event('content_block_start', {'index': i, 'content_block': block});
+    }
+    event('content_block_stop', {'index': i});
+  }
+  if (cut) return out.toString();
+  event('message_delta', {
+    'delta': {
+      'stop_reason': message['stop_reason'],
+      'stop_details': ?message['stop_details'],
+    },
+    'usage': {
+      'output_tokens': usage['output_tokens'] ?? 0,
+      'iterations': ?usage['iterations'],
+    },
+  });
+  event('message_stop', {});
+  return out.toString();
 }
 
 String question(
@@ -508,6 +596,18 @@ void main() {
       final body = jsonDecode(transport.body!) as Map;
       expect(body['model'], guidedModel);
       expect(body['fallbacks'], 'default');
+      // 応答は少しずつ受け取り、何も届かない時間と全体の時間を別々に区切る。
+      expect(body['stream'], isTrue);
+      expect(transport.idle, const Duration(seconds: 90));
+      expect(transport.total, const Duration(seconds: 240));
+      expect(reply.usage, {
+        'answered-model': const TokenUsage(
+          input: 10,
+          cacheWrite: 200,
+          cacheRead: 300,
+          output: 40,
+        ),
+      });
       expect(body['output_config']['effort'], 'low');
       expect(body['output_config']['format']['type'], 'json_schema');
       for (final key in ['temperature', 'top_p', 'top_k', 'thinking']) {
@@ -548,6 +648,11 @@ void main() {
       ).send(prompt(), apiKey: 'sk-ant-test-key-0000000000');
       expect(reply.inputTokens, 157);
       expect(reply.outputTokens, 3);
+      // 断られた試行は依頼したモデル、代わりの試行は応答したモデルの分として分ける。
+      expect(reply.usage, {
+        guidedModel: const TokenUsage(input: 100),
+        'fallback-model': const TokenUsage(input: 7, cacheRead: 50, output: 3),
+      });
       await expectLater(
         ClaudeClient(
           transport: FakeTransport(
@@ -608,6 +713,463 @@ void main() {
           reason: '${entry.key.status} ${entry.key.body}',
         );
       }
+    });
+  });
+
+  group('Claude APIの応答の途切れと失敗', () {
+    GuidedPrompt prompt() => guidedQuestionPrompt(session());
+    const key = 'sk-ant-secret-key-1234567890';
+    final started = {
+      'model': guidedModel,
+      'stop_reason': 'end_turn',
+      'content': [
+        {'type': 'text', 'text': '{"a":'},
+      ],
+      'usage': {
+        'input_tokens': 30,
+        'cache_creation_input_tokens': 900,
+        'output_tokens': 0,
+      },
+    };
+
+    test('応答が途中で途切れたら、届いた分の使用量を返し、費用が発生した可能性を示す', () async {
+      // 通信が途中で切れた（応答なし・切断）。
+      final cut = ClaudeClient(
+        transport: FakeTransport(
+          HttpReply(200, jsonEncode(started)),
+          failAfter: const ModelException(
+            'Claudeからの応答が途中で途切れました。',
+            retryable: true,
+            costUncertain: true,
+          ),
+        ),
+      ).send(prompt(), apiKey: key);
+      await expectLater(
+        cut,
+        throwsA(
+          isA<ModelException>()
+              .having((e) => e.retryable, 'retryable', isTrue)
+              .having((e) => e.costUncertain, 'costUncertain', isTrue)
+              .having((e) => e.message, 'message', contains('費用'))
+              .having((e) => e.usage, 'usage', {
+                guidedModel: const TokenUsage(input: 30, cacheWrite: 900),
+              }),
+        ),
+      );
+      // 通信は終わったが、message_stopまで届かなかった。
+      final transport = FakeTransport(const HttpReply(200, ''));
+      final client = ClaudeClient(transport: transport);
+      transport.reply = HttpReply(200, '');
+      await expectLater(
+        ClaudeClient(
+          transport: _RawTransport(sse(started, cut: true)),
+        ).send(prompt(), apiKey: key),
+        throwsA(
+          isA<ModelException>()
+              .having((e) => e.costUncertain, 'costUncertain', isTrue)
+              .having((e) => e.inputTokens, 'input', 930),
+        ),
+      );
+      // 依頼を送る前の失敗（接続できない）は、費用の可能性を示さない。
+      transport.failAfter = const ModelException('接続できません', retryable: true);
+      transport.reply = const HttpReply(503, '');
+      await expectLater(
+        client.send(prompt(), apiKey: key),
+        throwsA(
+          isA<ModelException>()
+              .having((e) => e.costUncertain, 'costUncertain', isFalse)
+              .having((e) => e.message, 'message', isNot(contains('費用'))),
+        ),
+      );
+    });
+
+    test('応答の途中で届いた失敗（混雑）は、やり直せる失敗として使用量とともに返す', () async {
+      final events = '${sse(started, cut: true)}'
+          'event: error\n'
+          'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n';
+      await expectLater(
+        ClaudeClient(
+          transport: _RawTransport(events),
+        ).send(prompt(), apiKey: key),
+        throwsA(
+          isA<ModelException>()
+              .having((e) => e.retryable, 'retryable', isTrue)
+              .having((e) => e.message, 'message', contains('overloaded_error'))
+              .having((e) => e.inputTokens, 'input', 930),
+        ),
+      );
+    });
+
+    test('代わりのモデルが混雑して断られたときは、言い方ではなく時間をおくよう案内する', () async {
+      Future<ModelException> refused(Map<String, Object?> details) async {
+        try {
+          await ClaudeClient(
+            transport: FakeTransport(
+              HttpReply(
+                200,
+                jsonEncode({
+                  'model': guidedModel,
+                  'stop_reason': 'refusal',
+                  'stop_details': details,
+                  'content': [],
+                  'usage': {'input_tokens': 40, 'output_tokens': 0},
+                }),
+              ),
+            ),
+          ).send(prompt(), apiKey: key);
+        } on ModelException catch (e) {
+          return e;
+        }
+        fail('断られるはず');
+      }
+
+      final busy = await refused({
+        'type': 'refusal',
+        'recommended_model': 'claude-opus-4-8',
+      });
+      expect(busy.retryable, isTrue);
+      expect(busy.message, contains('混み合って'));
+      expect(busy.message, isNot(contains('言い方')));
+      expect(busy.inputTokens, 40);
+      final plain = await refused({'type': 'refusal'});
+      expect(plain.retryable, isFalse);
+      expect(plain.message, contains('言い方'));
+    });
+
+    test('待つ秒数と依頼IDを示し、408・409もやり直せる失敗にする', () async {
+      Future<ModelException> failed(HttpReply reply) async {
+        try {
+          await ClaudeClient(
+            transport: FakeTransport(reply),
+          ).send(prompt(), apiKey: key);
+        } on ModelException catch (e) {
+          return e;
+        }
+        fail('失敗するはず');
+      }
+
+      final limited = await failed(
+        const HttpReply(
+          429,
+          '{"type":"error","error":{"type":"rate_limit_error","message":"x"}}',
+          headers: {'retry-after': '30', 'request-id': 'req_011CTEST'},
+        ),
+      );
+      expect(limited.retryable, isTrue);
+      expect(limited.message, contains('約30秒'));
+      expect(limited.message, contains('req_011CTEST'));
+      final overloaded = await failed(
+        const HttpReply(
+          529,
+          '{"type":"error","error":{"type":"overloaded_error","message":"x"},"request_id":"req_body"}',
+          headers: {'retry-after': 'あとで'},
+        ),
+      );
+      expect(overloaded.retryable, isTrue);
+      expect(overloaded.message, contains('req_body'));
+      expect(overloaded.message, contains('少し待って'));
+      for (final status in [408, 409]) {
+        expect((await failed(HttpReply(status, ''))).retryable, isTrue);
+      }
+      final missing = await failed(
+        const HttpReply(
+          404,
+          '{"type":"error","error":{"type":"not_found_error","message":"model"}}',
+        ),
+      );
+      expect(missing.retryable, isFalse);
+      expect(missing.message, contains(guidedModel));
+      expect(missing.message, contains('アプリを更新'));
+    });
+
+    test('400の理由は、キーらしい文字列と送ったAPIキーを伏せ、1行に短くして示す', () async {
+      const other = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd';
+      try {
+        await ClaudeClient(
+          transport: FakeTransport(
+            HttpReply(
+              400,
+              jsonEncode({
+                'type': 'error',
+                'error': {
+                  'type': 'invalid_request_error',
+                  'message':
+                      'output_config.format: bad schema\nkey=$key other=$other ${'x' * 400}',
+                },
+                'request_id': 'req_400',
+              }),
+            ),
+          ),
+        ).send(prompt(), apiKey: key);
+        fail('失敗するはず');
+      } on ModelException catch (e) {
+        expect(e.retryable, isFalse);
+        expect(e.message, contains('invalid_request_error'));
+        expect(e.message, contains('req_400'));
+        expect(e.message, contains('output_config.format: bad schema'));
+        expect(e.message, isNot(contains(key)));
+        expect(e.message, isNot(contains(other)));
+        expect(e.message, isNot(contains('\n')));
+        expect(e.message.length, lessThan(400));
+      }
+    });
+
+    test('dart:ioの送受信は少しずつ受け取り、応答ヘッダーを読み、止まった応答を打ち切る', () async {
+      // dart:ioのHttpServerは、送った分をすぐには相手へ出さないことがあるため、HTTPを手で書く。
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      final stall = Completer<void>();
+      final sockets = <Socket>[];
+      addTearDown(() {
+        if (!stall.isCompleted) stall.complete();
+        for (final s in sockets) {
+          s.destroy();
+        }
+      });
+      String chunk(List<int> bytes) =>
+          '${bytes.length.toRadixString(16)}\r\n${latin1.decode(bytes)}\r\n';
+      const stream =
+          'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n';
+      server.listen((socket) {
+        sockets.add(socket);
+        final head = <int>[];
+        var answered = false;
+        socket.listen((data) async {
+          head.addAll(data);
+          if (answered || !latin1.decode(head).contains('\r\n\r\n')) return;
+          answered = true;
+          final path = latin1.decode(head).split(' ')[1];
+          switch (path) {
+            case '/ok':
+              final bytes = utf8.encode(
+                sse({
+                  'model': guidedModel,
+                  'stop_reason': 'end_turn',
+                  'content': [
+                    {'type': 'text', 'text': '{"問い":"日本語"}'},
+                  ],
+                  'usage': {'input_tokens': 12, 'output_tokens': 5},
+                }),
+              );
+              socket.add(latin1.encode(stream));
+              // UTF-8の文字の途中でも分けて送る。
+              for (var i = 0; i < bytes.length; i += 5) {
+                final end = i + 5 > bytes.length ? bytes.length : i + 5;
+                socket.add(latin1.encode(chunk(bytes.sublist(i, end))));
+                await socket.flush();
+              }
+              socket.add(latin1.encode('0\r\n\r\n'));
+              await socket.close();
+            case '/limited':
+              const body =
+                  '{"type":"error","error":{"type":"rate_limit_error","message":"x"}}';
+              socket.add(
+                latin1.encode(
+                  'HTTP/1.1 429 Too Many Requests\r\nretry-after: 12\r\nrequest-id: req_local\r\n'
+                  'content-length: ${body.length}\r\nconnection: close\r\n\r\n$body',
+                ),
+              );
+              await socket.close();
+            case '/stall':
+              // 入力の使用量まで送って止まる。
+              socket.add(latin1.encode(stream));
+              socket.add(
+                latin1.encode(
+                  chunk(
+                    utf8.encode(
+                      sse({
+                        'model': guidedModel,
+                        'content': [],
+                        'usage': {'input_tokens': 8},
+                      }, cut: true),
+                    ),
+                  ),
+                ),
+              );
+              await socket.flush();
+              await stall.future;
+          }
+        });
+      });
+      Uri at(String path) => Uri.parse('http://127.0.0.1:${server.port}$path');
+
+      final ok = await ClaudeClient(
+        transport: _Redirect(at('/ok')),
+      ).send(prompt(), apiKey: key);
+      expect(ok.text, '{"問い":"日本語"}');
+      expect(ok.usage, {guidedModel: const TokenUsage(input: 12, output: 5)});
+
+      final limited = await IoHttpTransport().post(
+        at('/limited'),
+        const {},
+        '{}',
+        idle: const Duration(seconds: 5),
+        total: const Duration(seconds: 5),
+        onData: (_) => fail('失敗の本文は少しずつ渡さない'),
+      );
+      expect(limited.status, 429);
+      expect(limited.headers, {
+        'retry-after': '12',
+        'request-id': 'req_local',
+      });
+      expect(limited.body, contains('rate_limit_error'));
+
+      final stalled = ClaudeClient(
+        transport: _Redirect(
+          at('/stall'),
+          idle: const Duration(milliseconds: 300),
+        ),
+      ).send(prompt(), apiKey: key);
+      await expectLater(
+        stalled,
+        throwsA(
+          isA<ModelException>()
+              .having((e) => e.retryable, 'retryable', isTrue)
+              .having((e) => e.costUncertain, 'costUncertain', isTrue)
+              .having((e) => e.usage, 'usage', {
+                // message_startの出力の数（途中までの値）も数える。
+                guidedModel: const TokenUsage(input: 8, output: 1),
+              }),
+        ),
+      );
+    });
+  });
+
+  group('利用の内訳と概算額', () {
+    test('旧形式の利用も読み、新しい形式では種類別・モデル別の内訳を残す', () {
+      final old = GuidedUsage.fromJson({
+        'month': '2026-11',
+        'calls': 3,
+        'input': 500,
+        'output': 40,
+      })!;
+      expect(old.calls, 3);
+      expect(old.models, isEmpty);
+      expect(old.partial, isTrue);
+      final added = old.add(
+        DateTime(2026, 11, 8),
+        used: {
+          guidedModel: const TokenUsage(
+            input: 10,
+            cacheWrite: 1000,
+            cacheRead: 2000,
+            output: 100,
+          ),
+          'Bad Model!': const TokenUsage(input: 5),
+        },
+        uncertain: true,
+      );
+      expect(added.input, 500 + 3010 + 5);
+      expect(added.output, 140);
+      expect(added.uncertain, 1);
+      expect(added.models.keys, [guidedModel]);
+      final again = GuidedUsage.fromJson(
+        jsonDecode(jsonEncode(added.toJson())),
+      )!;
+      expect(again.models, added.models);
+      expect(again.uncertain, 1);
+      expect(again.input, added.input);
+      // 壊れた内訳は内訳なしとして読み、合計と回数は残す。
+      final broken = GuidedUsage.fromJson({
+        ...added.toJson(),
+        'models': {
+          guidedModel: {'i': -1},
+        },
+        'uncertain': 'x',
+      })!;
+      expect(broken.models, isEmpty);
+      expect(broken.uncertain, 0);
+      expect(broken.calls, 3);
+    });
+
+    test('内訳に残すモデルの数には上限がある', () {
+      var usage = const GuidedUsage('2026-11');
+      for (var i = 0; i < GuidedUsage.maxModels + 5; i++) {
+        usage = usage.add(
+          DateTime(2026, 11, 8),
+          used: {'model-$i': const TokenUsage(input: 1)},
+        );
+      }
+      expect(usage.models, hasLength(GuidedUsage.maxModels));
+      expect(usage.input, GuidedUsage.maxModels + 5);
+      expect(usage.partial, isTrue);
+    });
+
+    test('料金表で概算額を出し、料金表にないモデルは別に示す', () {
+      final cost = estimateCost({
+        guidedModel: const TokenUsage(
+          input: 1000000,
+          cacheWrite: 1000000,
+          cacheRead: 1000000,
+          output: 1000000,
+        ),
+        'claude-opus-4-8': const TokenUsage(output: 100000),
+        'unknown-model': const TokenUsage(input: 10),
+      });
+      expect(cost.usd, closeTo(4 + 5 + 0.2 + 20 + 2.5, 1e-9));
+      expect(cost.unknown, {'unknown-model'});
+      final lines = usageLines(
+        GuidedUsage(
+          '2026-11',
+          calls: 2,
+          input: 3000010,
+          output: 1100000,
+          models: {
+            guidedModel: const TokenUsage(
+              input: 1000000,
+              cacheWrite: 1000000,
+              cacheRead: 1000000,
+              output: 1000000,
+            ),
+            'claude-opus-4-8': const TokenUsage(output: 100000),
+            'unknown-model': const TokenUsage(input: 10),
+          },
+          uncertain: 1,
+        ),
+      );
+      expect(lines.join('\n'), contains(r'約$31.70'));
+      expect(lines.join('\n'), contains('目安'));
+      expect(lines.join('\n'), contains('unknown-model'));
+      expect(lines.join('\n'), contains('途中で途切れ'));
+    });
+
+    test('途中で途切れた呼び出しは、届いた分のトークンと「費用が発生した可能性」を数える', () async {
+      final access = UncertainAccess();
+      await access.init();
+      final model = FakeModel();
+      final hub = HubController(
+        access,
+        sampleLoader: () async => fixture().files,
+        guided: GuidedServices(
+          model: model,
+          secrets: MemorySecrets('sk-ant-test-key-0000000000'),
+          clock: () => DateTime(2026, 11, 7, 10),
+        ),
+      );
+      addTearDown(() async {
+        hub.dispose();
+        await access.directory.delete(recursive: true);
+      });
+      await hub.useSample();
+      final g = GuidedController(hub);
+      addTearDown(g.dispose);
+      await g.load();
+      model.replies.add(
+        const ModelException(
+          'Claudeからの応答が途中で途切れました。',
+          retryable: true,
+          costUncertain: true,
+          usage: {guidedModel: TokenUsage(input: 50, cacheWrite: 700)},
+        ),
+      );
+      await g.start(GuidedPurpose.idea, seed: '案');
+      expect(g.error, contains('途中で途切れ'));
+      expect(g.usage!.calls, 1);
+      expect(g.usage!.input, 750);
+      expect(g.usage!.uncertain, 1);
+      expect(g.usage!.models[guidedModel]!.cacheWrite, 700);
+      final stored = await GuidedStore(access).read(DateTime(2026, 11, 7));
+      expect(stored.usage.uncertain, 1);
     });
   });
 
@@ -1103,4 +1665,52 @@ void main() {
       expect(access.writes, 0);
     });
   });
+}
+
+/// 決まったSSEの文字列をそのまま渡す（途中で途切れた応答・途中の失敗を作る）。
+class _RawTransport implements HttpTransport {
+  _RawTransport(this.events);
+  final String events;
+  @override
+  Future<HttpReply> post(
+    Uri url,
+    Map<String, String> headers,
+    String body, {
+    required Duration idle,
+    required Duration total,
+    void Function(String chunk)? onData,
+  }) async {
+    onData!(events);
+    return const HttpReply(200, '');
+  }
+
+  @override
+  void abort() {}
+}
+
+/// dart:ioの送受信を、手元のテスト用サーバーへ向ける（実際のClaude APIには接続しない）。
+class _Redirect implements HttpTransport {
+  _Redirect(this.to, {this.idle});
+  final Uri to;
+  final Duration? idle;
+  final inner = IoHttpTransport();
+  @override
+  Future<HttpReply> post(
+    Uri url,
+    Map<String, String> headers,
+    String body, {
+    required Duration idle,
+    required Duration total,
+    void Function(String chunk)? onData,
+  }) => inner.post(
+    to,
+    headers,
+    body,
+    idle: this.idle ?? idle,
+    total: total,
+    onData: onData,
+  );
+
+  @override
+  void abort() => inner.abort();
 }

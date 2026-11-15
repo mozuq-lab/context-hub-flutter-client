@@ -1034,11 +1034,13 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
                   child: const Text('上限を保存'),
                 ),
               ),
-              if (usage != null)
+              if (usage != null) ...[
                 Text(
                   '今月（${usage.month}）: ${usage.calls}回・入力${usage.input}トークン・出力${usage.output}トークン',
                   style: _small,
                 ),
+                for (final line in usageLines(usage)) Text(line, style: _small),
+              ],
               const SizedBox(height: 8),
               const Text(
                 'モデル: $guidedModel（アプリで固定）。安全上の理由でこのモデルが応答を控えたときは、Anthropic側で別のモデルが代わりに答えることがあります。実際に応答したモデルはメモに記録します。',
@@ -1061,4 +1063,30 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
       ],
     );
   }
+}
+
+/// 今月の利用の内訳（モデル別・種類別）と、料金表による概算額の行。
+List<String> usageLines(GuidedUsage usage) {
+  final lines = <String>[
+    for (final e in usage.models.entries)
+      '${e.key}: 入力${e.value.input}・キャッシュ書込${e.value.cacheWrite}・キャッシュ読取${e.value.cacheRead}・出力${e.value.output}トークン',
+  ];
+  final cost = estimateCost(usage.models);
+  if (usage.models.isNotEmpty) {
+    lines.add(
+      '概算: 約\$${cost.usd.toStringAsFixed(2)}（$claudePricesAsOf時点の料金表による目安。請求額とは異なることがあります）',
+    );
+  }
+  if (cost.unknown.isNotEmpty) {
+    lines.add('料金表にないモデル（${cost.unknown.join('、')}）の分は概算に含みません。');
+  }
+  if (usage.partial) {
+    lines.add('内訳のない以前の記録の分は、概算に含みません。');
+  }
+  if (usage.uncertain > 0) {
+    lines.add(
+      '応答が途中で途切れ、使ったトークンを数え切れなかった呼び出しが${usage.uncertain}回あります（その分の費用が発生している可能性があります）。',
+    );
+  }
+  return lines;
 }

@@ -5,6 +5,103 @@ import 'parser.dart' show clip;
 /// 選んで深掘りで問いとまとめを作るモデル。MVPではモデルの切り替え画面を作らない。
 const guidedModel = 'claude-opus-5-5';
 
+/// 1回の呼び出しで使ったトークンの種類別の数。入力は、キャッシュに当たらなかった分（[input]）、
+/// キャッシュへ書いた分（[cacheWrite]）、キャッシュから読んだ分（[cacheRead]）で料金が違う。
+class TokenUsage {
+  const TokenUsage({
+    this.input = 0,
+    this.cacheWrite = 0,
+    this.cacheRead = 0,
+    this.output = 0,
+  });
+  final int input, cacheWrite, cacheRead, output;
+
+  /// 入力の合計（キャッシュの書込・読取を含む）。
+  int get allInput => input + cacheWrite + cacheRead;
+  bool get isEmpty => allInput == 0 && output == 0;
+
+  TokenUsage operator +(TokenUsage o) => TokenUsage(
+    input: input + o.input,
+    cacheWrite: cacheWrite + o.cacheWrite,
+    cacheRead: cacheRead + o.cacheRead,
+    output: output + o.output,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is TokenUsage &&
+      other.input == input &&
+      other.cacheWrite == cacheWrite &&
+      other.cacheRead == cacheRead &&
+      other.output == output;
+
+  @override
+  int get hashCode => Object.hash(input, cacheWrite, cacheRead, output);
+
+  @override
+  String toString() =>
+      'TokenUsage(input: $input, cacheWrite: $cacheWrite, cacheRead: $cacheRead, output: $output)';
+
+  Map<String, int> toJson() => {
+    'i': input,
+    'cw': cacheWrite,
+    'cr': cacheRead,
+    'o': output,
+  };
+
+  static TokenUsage? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final n = [value['i'], value['cw'], value['cr'], value['o']];
+    if (n.any((v) => v is! int || v < 0)) return null;
+    return TokenUsage(
+      input: n[0] as int,
+      cacheWrite: n[1] as int,
+      cacheRead: n[2] as int,
+      output: n[3] as int,
+    );
+  }
+}
+
+/// モデル名 → 種類別のトークン数を足し合わせる。
+Map<String, TokenUsage> addUsage(
+  Map<String, TokenUsage> a,
+  Map<String, TokenUsage> b,
+) => {
+  ...a,
+  for (final e in b.entries) e.key: (a[e.key] ?? const TokenUsage()) + e.value,
+};
+
+/// AnthropicのClaude APIの料金（米ドル／100万トークン、2026-11時点）。キャッシュの書込は5分の保持
+/// （入力の1.25倍）。深掘りで使うモデルと、安全上の理由で断られたときに代わりに答えうるモデル。
+/// 料金が変わると目安がずれるため、画面では「目安」として示す。
+const claudePricesAsOf = '2026-11';
+const claudePrices = <String, ({double input, double cacheWrite, double cacheRead, double output})>{
+  'claude-opus-5-5': (input: 4, cacheWrite: 5, cacheRead: 0.2, output: 20),
+  'claude-opus-5': (input: 5, cacheWrite: 6.25, cacheRead: 0.5, output: 25),
+  'claude-opus-4-8': (input: 5, cacheWrite: 6.25, cacheRead: 0.5, output: 25),
+};
+
+/// 概算額（米ドル）。料金表にないモデルの分は数えず、[unknown]にそのモデルを返す。
+({double usd, Set<String> unknown}) estimateCost(Map<String, TokenUsage> usage) {
+  var usd = 0.0;
+  final unknown = <String>{};
+  for (final e in usage.entries) {
+    final price = claudePrices[e.key];
+    if (price == null) {
+      if (!e.value.isEmpty) unknown.add(e.key);
+      continue;
+    }
+    final u = e.value;
+    usd +=
+        (u.input * price.input +
+            u.cacheWrite * price.cacheWrite +
+            u.cacheRead * price.cacheRead +
+            u.output * price.output) /
+        1000000;
+  }
+  return (usd: usd, unknown: unknown);
+}
+
 /// 1回の深掘りで聞く問いの上限。
 const guidedMaxQuestions = 10;
 
@@ -438,11 +535,15 @@ class GuidedPrompt {
     required this.effort,
     required this.maxTokens,
     required this.timeout,
+    this.idleTimeout = const Duration(seconds: 90),
   });
   final String system, context, turn, effort;
   final Map<String, Object?> schema;
   final int maxTokens;
-  final Duration timeout;
+
+  /// 1回の呼び出し全体の上限。応答は少しずつ受け取り（ストリーミング）、[idleTimeout]の間
+  /// 何も届かなければ途切れたとみなす。
+  final Duration timeout, idleTimeout;
 }
 
 const _questionSystem = '''
@@ -602,7 +703,7 @@ GuidedPrompt guidedQuestionPrompt(
     schema: _questionSchema,
     effort: 'low',
     maxTokens: 16000,
-    timeout: const Duration(seconds: 90),
+    timeout: const Duration(seconds: 240),
   );
 }
 
@@ -631,7 +732,7 @@ GuidedPrompt guidedSummaryPrompt(
     schema: _summarySchema(s.purpose),
     effort: 'medium',
     maxTokens: 16000,
-    timeout: const Duration(seconds: 150),
+    timeout: const Duration(seconds: 360),
   );
 }
 

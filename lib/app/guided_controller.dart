@@ -261,6 +261,11 @@ class GuidedController extends ChangeNotifier {
     int epoch,
   ) async {
     final st = state!;
+    if (st.unreadable) {
+      throw const ModelException(
+        '端末内の深掘りの状態（今月の利用回数など）を読み出せませんでした。画面を開き直してください。',
+      );
+    }
     final secrets = secretPolicy;
     if (!secrets.usable) throw ModelException(secrets.problem!);
     final prompt = build(secrets);
@@ -277,24 +282,33 @@ class GuidedController extends ChangeNotifier {
       throw const ModelException('APIキーが設定されていません。AIの設定で登録してください。');
     }
     st.usage = usage.add(services.clock(), calls: 1);
-    // 強制終了されても回答と回数を失わないよう、送る前に残す。残す間に中止・終了されたら送らない（課金しない）。
-    await _persist();
-    if (epoch != _epoch) throw const ModelException('中止しました。');
+    // 強制終了されても回答と回数を失わないよう、送る前に残す。残せなかったとき、残す間に
+    // 中止・終了されたときは送らず（課金しない）、送らなかった1回は数えない。
+    final kept = await _persist();
+    if (!kept || epoch != _epoch) {
+      st.usage = st.usage.add(services.clock(), calls: -1);
+      if (kept && !_disposed) await _persist();
+      throw ModelException(
+        kept
+            ? '中止しました。'
+            : '端末に利用回数を残せなかったため、Claudeへ送りませんでした。端末の空き容量を確かめるか、回答やまとめを短くしてください。',
+      );
+    }
     try {
       final reply = await services.model.send(prompt, apiKey: key);
-      st.usage = st.usage.add(
-        services.clock(),
-        input: reply.inputTokens,
-        output: reply.outputTokens,
-      );
+      st.usage = st.usage.add(services.clock(), used: reply.usage);
+      if (epoch != _epoch && !_disposed) _persist();
       return reply;
     } on ModelException catch (e) {
-      // 断られた・途中で止まった応答も、使ったトークンは数える。
+      // 断られた・途中で止まった応答も、使ったトークンは数える。途中で途切れて数え切れない
+      // ときは、費用が発生した可能性がある呼び出しとして別に数える。
       st.usage = st.usage.add(
         services.clock(),
-        input: e.inputTokens,
-        output: e.outputTokens,
+        used: e.usage,
+        uncertain: e.costUncertain,
       );
+      // 中止した後に届いた失敗は画面に出さないが、使った分は残す。
+      if (epoch != _epoch && !_disposed) _persist();
       rethrow;
     }
   }
