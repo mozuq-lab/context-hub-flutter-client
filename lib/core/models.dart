@@ -7,14 +7,13 @@ String digest(String value) => sha256.convert(utf8.encode(value)).toString();
 String recordId(String path) => 'record-${digest(path).substring(0, 24)}';
 
 /// アプリが使わない本体の記録。読取の件数と時間を抑えるため、ネイティブ側で数えず読まない。
-/// 本体の受付・整理の回復用や、再送判定・表示完了の記録で、アプリのどの画面も参照しない。
+/// 本体の受付・整理の回復用や、表示完了の記録で、アプリのどの画面も参照しない。
+/// 確認待ち一覧の依存hashを検証する確認情報・反映記録は読み込む。
 const snapshotSkippedPaths = [
   '90_system/receipts/pending',
   '90_system/receipts/events',
   '90_system/intake/pending',
   '90_system/association-views',
-  '90_system/project-confirmations',
-  '90_system/project-approvals/materialized',
 ];
 
 /// 本体が知らない上位の版（schema_version 2以降）で書いた記録があるときの注意。ファイルごとには出さず1件だけ出す。
