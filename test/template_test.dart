@@ -34,6 +34,53 @@ String json(List<MemoTemplate> list) =>
     jsonEncode([for (final t in list) t.toJson()]);
 
 void main() {
+  test('フェンスの長さと種類を見分け、コードブロックの中の見出しは取り除かない', () {
+    final headings = templateHeadings(defaultTemplates);
+    for (final text in [
+      // 4つのバッククォートで始めたブロックは、3つでは閉じない。
+      '````md\n```\n## 次にやること\n\n## 持ち越し\n````\n本文\n',
+      // 情報文字列の付いた行は閉じるフェンスにならない。
+      '```sh\necho\n```sh\n## 次にやること\n\n## 持ち越し\n```\n',
+      // チルダのブロックはバッククォートでは閉じない。
+      '~~~\n```\n## 持ち越し\n~~~\n',
+    ]) {
+      expect(stripEmptyTemplateHeadings(text, headings), text, reason: text);
+    }
+    // ブロックを閉じた後の空の見出しは取り除く。
+    expect(
+      stripEmptyTemplateHeadings(
+        '## 決まったこと\n````\n## 持ち越し\n`````\n\n## 持ち越し\n',
+        headings,
+      ),
+      '## 決まったこと\n````\n## 持ち越し\n`````\n',
+    );
+  });
+
+  test('ひな形を読めなかった後は、読み直せるまで上書きしない', () async {
+    final access = UnreadableAccess();
+    await access.init();
+    List<String> ids(List<MemoTemplate> list) => [for (final t in list) t.id];
+    const mine = MemoTemplate(id: 't-mine', name: '自作', body: '## 自作\n');
+    await TemplateStore(access).save([mine, ...defaultTemplates]);
+    final store = TemplateStore(access);
+    access.broken = true;
+    final shown = await store.list();
+    expect(ids(shown), ids(defaultTemplates));
+    expect(store.unreadable, isTrue);
+    // 読めるようになっても、最初のひな形をもとにした並びで上書きしない。
+    access.broken = false;
+    await expectLater(
+      store.save(shown.reversed.toList()),
+      throwsA(isA<TemplateStoreError>()),
+    );
+    expect(ids(await TemplateStore(access).list()), ['t-mine', ...ids(shown)]);
+    // 読み直せば、続けて編集できる。
+    expect(ids(await store.list()), ['t-mine', ...ids(shown)]);
+    expect(store.unreadable, isFalse);
+    await store.save(defaultTemplates);
+    expect(ids(await TemplateStore(access).list()), ids(defaultTemplates));
+  });
+
   final meeting = defaultTemplates.first;
   final headings = templateHeadings(defaultTemplates);
 

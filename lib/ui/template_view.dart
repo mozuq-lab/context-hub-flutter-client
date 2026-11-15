@@ -40,7 +40,13 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
   void initState() {
     super.initState();
     widget.controller.templates.list().then((value) {
-      if (mounted) setState(() => templates = value);
+      if (!mounted) return;
+      setState(() {
+        templates = value;
+        if (widget.controller.templates.unreadable) {
+          error = '端末のひな形を読み込めませんでした。最初のひな形を表示しています。開き直すまで変更は保存しません。';
+        }
+      });
     });
   }
 
@@ -64,6 +70,8 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
     final list = templates!;
     final edited = await showDialog<MemoTemplate>(
       context: context,
+      // 外側を押しても、書いた本文を捨てて閉じない。
+      barrierDismissible: false,
       builder: (_) => TemplateEditDialog(
         template: current,
         identity: _identity,
@@ -156,56 +164,80 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
                         child: Text('ひな形はありません。'),
                       ),
                     for (final (index, t) in list.indexed)
-                      ListTile(
+                      Padding(
                         key: Key('template-row-${t.id}'),
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(t.name),
-                        subtitle: Text(
-                          [
-                            templateOutline(t),
-                            if (identity != null &&
-                                _projects[t.projects[identity]] != null)
-                              '既定のプロジェクト: ${_projects[t.projects[identity]]!.title}',
-                          ].join('\n'),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, height: 1.5),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            IconButton(
-                              key: Key('template-up-${t.id}'),
-                              tooltip: '上へ',
-                              visualDensity: VisualDensity.compact,
-                              onPressed: busy || index == 0
-                                  ? null
-                                  : () => _move(index, -1),
-                              icon: const Icon(Icons.arrow_upward, size: 18),
+                            Text(
+                              t.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                            IconButton(
-                              key: Key('template-down-${t.id}'),
-                              tooltip: '下へ',
-                              visualDensity: VisualDensity.compact,
-                              onPressed: busy || index == list.length - 1
-                                  ? null
-                                  : () => _move(index, 1),
-                              icon: const Icon(Icons.arrow_downward, size: 18),
+                            Text(
+                              [
+                                templateOutline(t),
+                                if (identity != null &&
+                                    _projects[t.projects[identity]] != null)
+                                  '既定のプロジェクト: ${_projects[t.projects[identity]]!.title}',
+                              ].join('\n'),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12, height: 1.5),
                             ),
-                            IconButton(
-                              key: Key('template-edit-${t.id}'),
-                              tooltip: '編集',
-                              visualDensity: VisualDensity.compact,
-                              onPressed: busy ? null : () => _edit(t),
-                              icon: const Icon(Icons.edit_outlined, size: 18),
+                            // 幅の狭い画面でも名前と見出しを読めるよう、操作は下に並べる。
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                IconButton(
+                                  key: Key('template-up-${t.id}'),
+                                  tooltip: '上へ',
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: busy || index == 0
+                                      ? null
+                                      : () => _move(index, -1),
+                                  icon: const Icon(
+                                    Icons.arrow_upward,
+                                    size: 18,
+                                  ),
+                                ),
+                                IconButton(
+                                  key: Key('template-down-${t.id}'),
+                                  tooltip: '下へ',
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: busy || index == list.length - 1
+                                      ? null
+                                      : () => _move(index, 1),
+                                  icon: const Icon(
+                                    Icons.arrow_downward,
+                                    size: 18,
+                                  ),
+                                ),
+                                IconButton(
+                                  key: Key('template-edit-${t.id}'),
+                                  tooltip: '編集',
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: busy ? null : () => _edit(t),
+                                  icon: const Icon(
+                                    Icons.edit_outlined,
+                                    size: 18,
+                                  ),
+                                ),
+                                IconButton(
+                                  key: Key('template-delete-${t.id}'),
+                                  tooltip: '削除',
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: busy ? null : () => _delete(t),
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    size: 18,
+                                  ),
+                                ),
+                              ],
                             ),
-                            IconButton(
-                              key: Key('template-delete-${t.id}'),
-                              tooltip: '削除',
-                              visualDensity: VisualDensity.compact,
-                              onPressed: busy ? null : () => _delete(t),
-                              icon: const Icon(Icons.delete_outline, size: 18),
-                            ),
+                            const Divider(height: 1),
                           ],
                         ),
                       ),

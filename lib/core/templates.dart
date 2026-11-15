@@ -123,7 +123,9 @@ String? templateBodyError(String body) {
 }
 
 final _heading = RegExp(r'^(#{1,6})[ \t]+\S');
-final _fence = RegExp(r'^ {0,3}(```|~~~)');
+
+/// コードブロックのフェンス。開いたときと同じ記号で、同じ長さ以上、後ろに文字のない行だけが閉じる。
+final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})(.*)$');
 
 /// 行が見出しなら、その深さ（1〜6）。見出しでなければnull。
 int? _level(String line) => _heading.firstMatch(line)?.group(1)!.length;
@@ -161,8 +163,10 @@ Set<String> templateHeadings(Iterable<MemoTemplate> templates) => {
 ///
 /// 空の見出しをAIが「内容のある項目」と読み違えないようにするためで、取り除くのは
 /// [headings]（この端末のひな形にある見出し）と同じ行で、次の同じ深さ以上の見出しまでに
-/// 文章がないものだけ。本人が自分で書いた見出しと、コードブロックの中は変えない。
-/// 取り除くものがなければ[text]をそのまま返す。
+/// 文章がないものだけ。ひな形にない見出しと、コードブロックの中は変えない。
+/// 本人が自分で打った見出しでも、ひな形の見出しと同じ行で中身がなければ取り除く
+/// （書きかけを開き直した後は、どの見出しが差し込みで入ったかを区別できないため）。
+/// 取り除くものがなければ[text]をそのまま返す。取り除いたときは、改行をLFに揃え、末尾の空行を1つにする。
 String stripEmptyTemplateHeadings(String text, Set<String> headings) {
   if (headings.isEmpty) return text;
   final lines = _lines(text);
@@ -173,10 +177,15 @@ String stripEmptyTemplateHeadings(String text, Set<String> headings) {
   String? fence;
   for (var i = 0; i < lines.length; i++) {
     final line = lines[i];
-    final mark = _fence.firstMatch(line)?.group(1);
+    final match = _fence.firstMatch(line), mark = match?.group(1);
     if (fence != null) {
       content[i] = true;
-      if (mark == fence) fence = null;
+      if (mark != null &&
+          mark[0] == fence[0] &&
+          mark.length >= fence.length &&
+          match!.group(2)!.trim().isEmpty) {
+        fence = null;
+      }
       continue;
     }
     if (mark != null) {

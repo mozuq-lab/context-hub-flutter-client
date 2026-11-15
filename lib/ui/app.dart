@@ -484,7 +484,7 @@ class _HubShellState extends State<HubShell> {
                 ListTile(
                   key: Key('project-${project.id}'),
                   leading: Icon(
-                    project.lifecycle == 'active'
+                    project.active
                         ? Icons.folder_outlined
                         : Icons.folder_off_outlined,
                     size: 20,
@@ -494,7 +494,9 @@ class _HubShellState extends State<HubShell> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  subtitle: project.lifecycle != 'active'
+                  subtitle: project.merged
+                      ? const Text('統合済み')
+                      : project.lifecycle != 'active'
                       ? Text(project.lifecycleLabel)
                       : project.stale(DateTime.now())
                       ? const Text('停滞')

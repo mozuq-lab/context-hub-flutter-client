@@ -878,6 +878,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;
@@ -906,6 +910,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;
@@ -947,6 +955,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;

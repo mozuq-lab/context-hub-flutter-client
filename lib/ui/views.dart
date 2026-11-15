@@ -467,8 +467,9 @@ class _HubViewState extends State<HubView> {
       if (repo.projects.isEmpty) {
         children.add(const Text('プロジェクトはまだありません。メモはproject未指定でも追加できます。'));
       }
+      // 統合済みのプロジェクトは変化の印を出さないので、件数にも数えない。
       final changed = repo.projects.values
-          .where((p) => c.changesSince(p)?.isEmpty == false)
+          .where((p) => !p.merged && c.changesSince(p)?.isEmpty == false)
           .length;
       if (changed > 0) {
         children.add(
@@ -2087,14 +2088,16 @@ class _HubViewState extends State<HubView> {
             label: Text(project.history == null ? '経緯（未生成）' : 'これまでの経緯'),
           ),
           // 資料は、参考資料に分類されたメモがあるプロジェクトにだけ本体が作る。
-          if (project.shelf != null)
+          // 統合済みのプロジェクトの資料は統合先にまとまるので、統合先の資料を開く。
+          if ((mergeTarget ?? project).shelf != null)
             OutlinedButton.icon(
               key: const Key('project-shelf'),
-              onPressed: () => showShelf(project),
+              onPressed: () => showShelf(mergeTarget ?? project),
               icon: const Icon(Icons.bookmarks_outlined, size: 18),
-              label: const Text('資料'),
+              label: Text(mergeTarget == null ? '資料' : '資料（統合先）'),
             ),
-          if (!project.merged)
+          // 手で書いた統合先が見つからない・循環している定義は、直すまで統合を依頼できない（本体が断る）。
+          if (!project.merged && project.mergedInto == null)
             OutlinedButton.icon(
               key: const Key('project-merge'),
               // ほかのプロジェクトの統合先になっているプロジェクトは、統合元にできない（本体と同じ）。

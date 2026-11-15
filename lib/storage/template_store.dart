@@ -21,6 +21,12 @@ class TemplateStore {
   static const budget = 60 * 1024;
 
   List<MemoTemplate>? _templates;
+
+  /// 状態ファイルを読めなかった（壊れた内容ではなく、読み出しそのものの失敗）。
+  /// [list]が最初のひな形を返しているので、それをもとにした並びで本人のひな形を上書きしないよう、
+  /// 読み直せるまで保存しない。
+  bool get unreadable => _unreadable;
+  bool _unreadable = false;
   Future<void> _tail = Future.value();
 
   /// 状態ファイルを読む。読み出しそのものに失敗したときは例外を出す（上書きで消さないため）。
@@ -49,8 +55,12 @@ class TemplateStore {
     if (cached != null) return cached;
     try {
       await _tail;
-      return _templates ??= await _read();
+      // 読んでいる間に保存が済んでいれば、保存した並びを優先する。
+      final read = await _read();
+      _unreadable = false;
+      return _templates ??= read;
     } catch (_) {
+      _unreadable = true;
       return defaultTemplates;
     }
   }
@@ -75,7 +85,13 @@ class TemplateStore {
       throw TemplateStoreError('ひな形の合計が大きすぎます。本文を短くするか、数を減らしてください。');
     }
     // ほかの端末内の記録と同じく、読めない状態のまま上書きしない。
-    _templates ??= await _read();
+    if (_unreadable) {
+      throw TemplateStoreError('ひな形を読み込めなかったため、保存していません。画面を開き直してください。');
+    }
+    if (_templates == null) {
+      final read = await _read();
+      _templates ??= read;
+    }
     await access.writeState(fileName, raw);
     _templates = List.unmodifiable(templates);
   });

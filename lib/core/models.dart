@@ -211,6 +211,9 @@ class HubProject {
       status == 'paused' || status == 'done' ? status : 'active';
   String get lifecycleLabel => projectLifecycleLabels[lifecycle]!;
 
+  /// 進行中として扱うか。統合済みのプロジェクトは、状態が進行中のままでも統合先に含めて扱うので数えない（本体と同じ）。
+  bool get active => lifecycle == 'active' && mergeTarget == null;
+
   /// 最終根拠からの経過日数。NOWが未生成なら不明。
   int? daysSinceEvidence(DateTime now) {
     final at = lastEvidenceAt;
@@ -220,7 +223,7 @@ class HubProject {
   }
 
   bool stale(DateTime now) =>
-      lifecycle == 'active' &&
+      active &&
       lastEvidenceAt != null &&
       now.difference(lastEvidenceAt!) > const Duration(days: projectStaleDays);
 }

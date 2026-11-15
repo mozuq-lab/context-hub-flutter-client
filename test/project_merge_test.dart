@@ -30,7 +30,89 @@ Future<Map<String, String>> run(
   return Map<String, String>.from(jsonDecode(await out.readAsString()) as Map);
 }
 
+Map<String, String>? _before, _merged;
+
+/// 2つ目のプロジェクトを足したVaultと、それを統合して本体が反映した後のVault。
+Future<({Map<String, String> before, Map<String, String> merged})>
+mergeStates() async {
+  if (_before == null || _merged == null) {
+    final access = TempAccess();
+    await access.init();
+    try {
+      File out(String name) => File('${access.directory.path}/$name.json');
+      final before = await run(['prepare', 'assets/sample.json'], out('a'));
+      final repo = HubRepository(fixture(before));
+      final saved = await CaptureService(access, location).saveProjectMerge(
+        'a1111111-2222-4333-8444-555555555555',
+        repo.projects['hub-tool']!,
+        repo.projects['context-hub']!,
+      );
+      _merged = await run([
+        'ingest',
+        access.request(location, saved.requestId).path,
+        out('a').path,
+      ], out('b'));
+      _before = before;
+    } finally {
+      await access.directory.delete(recursive: true);
+    }
+  }
+  return (before: Map.of(_before!), merged: Map.of(_merged!));
+}
+
 void main() {
+  test(
+    '統合済みのプロジェクトは、検索の関連表示・文脈のコピー・かごでも統合先として読む',
+    () async {
+      final repo = HubRepository(fixture((await mergeStates()).merged));
+      // 検索: 統合元で絞っても、AI推定の関連を本人指定の帰属と区別する。
+      final hits = repo.search('', const SearchFilter(project: 'hub-tool'));
+      final relations = [
+        for (final r in hits) repo.projectRelation(r, 'hub-tool'),
+      ];
+      expect(relations, [
+        for (final r in hits) repo.projectRelation(r, 'context-hub'),
+      ]);
+      expect(relations, contains('estimated'));
+      expect(relations, contains('owned'));
+      // 文脈のコピー: 統合先の現在地・方針・関連メモを渡す。
+      String body(String text) => text.split('\n').skip(1).join('\n');
+      final copied = repo.context('hub-tool');
+      expect(copied, contains('# AI Context Hub'));
+      expect(body(copied), body(repo.context('context-hub')));
+      // かご: 統合元のNOWを入れていても、統合先のNOWとして束ねる。
+      final bundled = repo.bundleContext([
+        repo.projects['hub-tool']!.nowRecordId!,
+      ]).text;
+      expect(bundled, contains('プロジェクト: AI Context Hub（context-hub）'));
+      expect(bundled, isNot(contains('プロジェクト: まとめツール')));
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    '統合の反映は統合先の定義も同期されるまで待ち、統合先への依頼を止めておく',
+    () async {
+      final states = await mergeStates();
+      const target = '10_projects/context-hub/project.md';
+      // 統合元の定義と記録だけが先に同期され、統合先の定義がまだ古い。
+      final partial = HubRepository(
+        fixture({...states.merged, target: states.before[target]!}),
+      );
+      final request = partial.projectMergeRequestIdFor('context-hub');
+      expect(request, isNotNull);
+      expect(partial.projectMergeRequestIdFor('hub-tool'), request);
+      expect(
+        partial.intake.firstWhere((i) => i.id == request).detail,
+        contains('同期を待っています'),
+      );
+      final synced = HubRepository(fixture(states.merged));
+      expect(synced.projectMergeRequestIdFor('context-hub'), isNull);
+      expect(synced.projectMergeRequestIdFor('hub-tool'), isNull);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
   test(
     'Dartの統合REQを本体が受理し、資料・帰属・検索を統合先として読み、取り消すと元へ戻る',
     () async {
@@ -46,6 +128,7 @@ void main() {
         expect(from.merged, isFalse);
         // 統合前: 資料は統合元の資料棚に並び、検索の種類「資料」で見つかる。
         expect(from.shelf!.body, contains(specUrl));
+        expect(from.shelf!.warnings, hasLength(1), reason: '整合性の注意は出さない');
         expect(into.shelf, isNull);
         final memo = repo
             .search(
@@ -316,9 +399,42 @@ void main() {
       );
     }
     expect(repo.projects['a1']!.warnings.join(), isNot(contains('統合として')));
-    // 形式が合わない統合先は定義として読まない。
+    // 形式が合わない統合先と、値のない統合先は定義として読まない（本体と同じ）。
     files['10_projects/z1/project.md'] = definition('z1', 'Z', 'Not An Id');
     expect(HubRepository(fixture(files)).projects.containsKey('z1'), isFalse);
+    files['10_projects/z1/project.md'] = encodePacket({
+      'schema_version': 1,
+      'id': 'z1',
+      'title': 'Z',
+      'aliases': <String>[],
+      'keywords': <String>[],
+      'status': 'done',
+      'merged_into': null,
+    }, '# Z\n');
+    expect(HubRepository(fixture(files)).projects.containsKey('z1'), isFalse);
+  });
+
+  test('状態が進行中のまま手で統合先を書いたプロジェクトも、進行中の一覧・停滞・次の一手に数えない', () {
+    final files = fixtureFiles();
+    const path = '10_projects/context-hub/project.md';
+    files['10_projects/keep/project.md'] = encodePacket({
+      'schema_version': 1,
+      'id': 'keep',
+      'title': '残すほう',
+      'aliases': <String>[],
+      'keywords': <String>[],
+      'status': 'active',
+    }, '# 残すほう\n');
+    final doc = parseMarkdown(files[path]!);
+    files[path] = encodePacket({...doc.meta, 'merged_into': 'keep'}, doc.body);
+    final repo = HubRepository(fixture(files));
+    final merged = repo.projects['context-hub']!;
+    expect(merged.status, 'active');
+    expect(merged.merged, isTrue);
+    expect(merged.active, isFalse);
+    expect(merged.stale(DateTime.utc(2026, 11, 2)), isFalse);
+    expect(repo.actionableProjects.map((p) => p.id), ['keep']);
+    expect(repo.orderedProjects.map((p) => p.id), ['keep', 'context-hub']);
   });
 
   testWidgets('資料を開き、統合を依頼し、反映後は統合済みとして表示して取り消しを依頼できる', (tester) async {
@@ -407,6 +523,8 @@ void main() {
     expect(find.byKey(const Key('project-merge-requested')), findsNothing);
     expect(find.byKey(const Key('project-merge')), findsNothing);
     expect(find.textContaining('統合済み（統合先: AI Context Hub）'), findsWidgets);
+    // 統合元の画面からは、統合先にまとまった資料を開く。
+    expect(find.text('資料（統合先）'), findsOneWidget);
     // 先の通知が消えてから次の操作をする。
     await tester.pump(const Duration(seconds: 6));
     await tester.pumpAndSettle();
