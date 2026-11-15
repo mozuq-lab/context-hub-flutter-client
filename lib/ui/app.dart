@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../app/controller.dart';
 import 'views.dart';
 import 'guided_view.dart';
 import '../core/models.dart';
+import '../core/home_widget.dart';
 import '../app_version.dart';
 
 class ContextHubApp extends StatelessWidget {
@@ -45,7 +47,62 @@ class _HubShellState extends State<HubShell> {
   @override
   void initState() {
     super.initState();
-    c.restore();
+    // ショートカットやウィジェットからの起動は、保存先を読み終えてから扱う。
+    c.restore().whenComplete(_launch);
+    c.access.listenLaunchActions(_launch);
+  }
+
+  bool _launching = false;
+
+  /// 読込が終わるまで待つ。
+  Future<void> _idle() {
+    if (!c.loading) return Future.value();
+    final done = Completer<void>();
+    void check() {
+      if (!c.loading && !done.isCompleted) {
+        c.removeListener(check);
+        done.complete();
+      }
+    }
+
+    c.addListener(check);
+    return done.future;
+  }
+
+  /// アイコン長押しのショートカットやウィジェットで選んだ操作を開く。
+  /// 開くだけで、保存や依頼は通常の画面と同じ確認を通る。
+  Future<void> _launch() async {
+    if (_launching || !mounted) return;
+    _launching = true;
+    try {
+      final action = await c.access.takeLaunchAction();
+      if (action == null || !mounted) return;
+      await _idle();
+      if (!mounted) return;
+      // ほかの入力や確認を開いている間は割り込まない。
+      if (!(ModalRoute.of(context)?.isCurrent ?? true)) return;
+      if (c.repository == null) {
+        notice(context, '先にVaultフォルダーを選んでください。');
+        return;
+      }
+      if (action == 'next') {
+        setState(() => page = 'next');
+        return;
+      }
+      if (c.captureWarning != null) {
+        notice(context, '保存の確認情報を読めません。受付状況を確認してください。');
+        return;
+      }
+      if (action == 'capture') {
+        await showCapture(context, c);
+      } else if (action == 'guided') {
+        await showGuided(context, c);
+      }
+    } catch (_) {
+      // 起動時の操作を読めなくても、通常の画面は使える。
+    } finally {
+      _launching = false;
+    }
   }
 
   Future<void> run(Future<void> Function() action) async {
@@ -212,6 +269,18 @@ class _HubShellState extends State<HubShell> {
                   ),
                   label: const Text('Vaultを選び直す'),
                 ),
+                if (c.homeScreenSupported && c.repository != null)
+                  TextButton.icon(
+                    key: const Key('home-widget-settings'),
+                    onPressed: c.loading
+                        ? null
+                        : () async {
+                            if (drawer) Navigator.pop(context);
+                            await showHomeWidgetSettings(context, c);
+                          },
+                    icon: const Icon(Icons.widgets_outlined, size: 18),
+                    label: const Text('ウィジェットの表示'),
+                  ),
               ],
             ),
           ),
@@ -373,4 +442,91 @@ class _HubShellState extends State<HubShell> {
       ),
     ),
   );
+}
+
+/// Androidのホーム画面ウィジェットに何を出すかを選ぶ。
+Future<void> showHomeWidgetSettings(
+  BuildContext context,
+  HubController c,
+) async {
+  final repo = c.repository;
+  if (repo == null) return;
+  final projects = repo.actionableProjects;
+  var showText = c.homeWidget.showText;
+  var project = projects.any((p) => p.id == c.homeWidget.projectId)
+      ? c.homeWidget.projectId
+      : null;
+  final saved = await showDialog<HomeWidgetSettings>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        key: const Key('home-widget-dialog'),
+        title: const Text('ホーム画面ウィジェットの表示'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'ホーム画面は周りの人からも見えます。既定では件数と読込時刻だけを出します。'
+                  '内容はアプリで読み込んだ時点のもので、アプリを開くと更新されます。',
+                  style: TextStyle(fontSize: 13, height: 1.6),
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  key: const Key('home-widget-text'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('次の一手の本文とプロジェクト名を出す'),
+                  subtitle: const Text('3件まで。秘密情報らしい文字列は伏せます'),
+                  value: showText,
+                  onChanged: (v) => setState(() => showText = v),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String?>(
+                  key: const Key('home-widget-project'),
+                  initialValue: project,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: '対象のプロジェクト'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('進行中のすべて'),
+                    ),
+                    for (final p in projects)
+                      DropdownMenuItem<String?>(
+                        value: p.id,
+                        child: Text(p.title, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => project = v),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            key: const Key('home-widget-save'),
+            onPressed: () => Navigator.pop(
+              context,
+              HomeWidgetSettings(showText: showText, projectId: project),
+            ),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (saved == null || !context.mounted) return;
+  try {
+    await c.setHomeWidget(saved);
+  } catch (e) {
+    if (context.mounted) notice(context, HubController.message(e));
+  }
 }

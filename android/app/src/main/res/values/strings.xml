@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_name">ContextHub</string>
+    <string name="widget_description">次の一手と確認待ちの件数を表示し、メモの追加を開きます。</string>
+    <string name="widget_empty">アプリを開いてVaultを読み込むと表示されます</string>
+    <string name="widget_capture">メモを追加</string>
+    <string name="shortcut_capture_short">メモを追加</string>
+    <string name="shortcut_capture_long">メモを追加する</string>
+    <string name="shortcut_guided_short">選んで深掘り</string>
+    <string name="shortcut_guided_long">選んで深掘りを始める</string>
+    <string name="shortcut_next_short">次の一手</string>
+    <string name="shortcut_next_long">次の一手を見る</string>
+</resources>

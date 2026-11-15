@@ -1781,8 +1781,7 @@ class HubRepository {
         }
       }
     }
-    final text = redactSecrets(out.toString()),
-        suffix = '\n…（省略。全文は記録の詳細から確認）';
+    final text = redactSecrets(out.toString()), suffix = '\n…（省略。全文は記録の詳細から確認）';
     return policy +
         (text.length <= optionalMax
             ? text

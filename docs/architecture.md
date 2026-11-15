@@ -32,6 +32,20 @@ MacはNOFOLLOW・排他公開・file/dir fsyncを使います。保存先識別�
 
 まとめは目的ごとの見出しのMarkdownに書き直し、問答の記録（AIの選択肢から選んだ答えと本人の言葉を区別）はアプリが決まった形で付けます。保存は通常のメモ（`operation: capture`、`kind: memo`）で、`meta`に`capture_mode`・`guided_purpose`・`guided_questions`・`guided_model`・`guided_context`を文字列で付けます（本体の入力形式に合わせる）。操作ID・journal・保存結果が不明なときの確認は、メモの追加と同じです。途中の状態は`guided.json`（深掘り1件・今月の利用・月の上限）に残し、操作journalとしては扱いません。APIキーはネイティブの`readSecret`・`writeSecret`・`deleteSecret`（名前は`anthropic-api-key`だけ）で、Macはキーチェーン、AndroidはAndroid Keystoreの鍵で暗号化したファイルに保管します。キーは深掘りの画面を開いたときに読み、閉じるまで`GuidedController`のメモリに持ちます。読み出せないとき（キーチェーンでの拒否など）は、キーがないときと分けて案内します。別のVaultで保存結果が不明な深掘りが残っている間は、本人が破棄を選ぶまで新しく始めません。
 
+## 秘密情報らしい文字列
+
+`lib/core/secrets.dart`は、本体の`packages/core/src/secrets.ts`と同じ規則（既知の形式、`password=`のような代入の値、高エントロピーな文字列）で検出します。同じ結果になることを、本体の試験データ（`vendor/context-hub/packages/core/test/fixtures/secret-cases.json`）で確かめます。本体の規則を変えたときは、この試験が失敗するのでDart側も合わせます。設定で追加した本体の規則（`privacy.patterns`）はアプリには反映されません。保存の前の確認は知らせるだけで、原文を勝手に書き換えません。
+
+## 似ているアイデア
+
+本体が書く`90_system/idea-index.json`（似ている組の候補、束、束を直接つなぐ判断の組）を読みます。束ねる・別の話にする依頼は`operation: idea-link`で、確認した時点の両方のアイデアのhashを付けます。確認した後にアイデアが作り直されていた場合、本体は依頼を受け付けず、受付状況に理由を示します。同じ組への依頼は最新の1件だけを表示に使います。
+
+## ホーム画面ウィジェットとショートカット（Android）
+
+`lib/core/home_widget.dart`が、読込済みの記録から表示用の短い文字列（題名・件数・次の一手の行・読込時刻）を作り、読込のたびにネイティブへ渡します。ネイティブ（`HomeScreen.kt`）はそれをアプリ専用のSharedPreferencesに置いて並べるだけで、Vaultを読みません。定期更新はしないため、表示はアプリで最後に読み込んだ時点の内容です。表示設定（本文を出すか、対象のプロジェクト）は`settings.json`に端末ごとに保存します。
+
+ショートカットとウィジェットは、開く画面（メモを追加・選んで深掘り・次の一手）を指定してアプリを起動するだけです。保存や依頼は通常の画面と同じ確認を通ります。ほかの入力や確認を開いている間に届いた指定は無視します。ショートカットは、開いている画面を作り直さないよう起動時に登録します（Android 7.1以降）。Macには対応する機能がありません。
+
 ## OSと運用の範囲
 
 対象はApple SiliconのmacOS 12以降とAndroidです。Macのsecurity-scoped bookmark、AndroidのローカルExternalStorageProviderのSAF権限を利用します。全ストレージ権限・クラウドprovider・SQLite・新規サーバーは利用しません。

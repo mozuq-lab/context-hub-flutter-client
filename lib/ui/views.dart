@@ -18,7 +18,10 @@ void notice(BuildContext context, String text) =>
 
 /// 秘密情報らしい文字列があれば、保存の前に知らせる。
 /// 保存する本文（伏せ字にしたもの、またはそのまま）を返す。戻って直すならnull。
-Future<String?> checkSecretsBeforeSave(BuildContext context, String text) async {
+Future<String?> checkSecretsBeforeSave(
+  BuildContext context,
+  String text,
+) async {
   final findings = findSecrets(text);
   if (findings.isEmpty) return text;
   final choice = await showDialog<String>(
@@ -267,6 +270,7 @@ class _HubViewState extends State<HubView> {
       ],
     ),
   );
+
   /// アイデア一覧の印。束ねたアイデアと、未確認の似ているアイデアの数。
   String? ideaBadge(HubRecord r) {
     final group = repo.ideaGroupOf(r.sourceId),
@@ -1821,17 +1825,9 @@ Future<void> sendIdeaLink(
   final title = repo?.ideaRecord(other)?.title ?? other;
   final linked = repo?.ideaGroupOf(me)?.linksDirectly(me, other) ?? false;
   final (heading, body, verb) = action == 'link'
-      ? (
-          '同じ話として束ねる',
-          '「$title」と同じ話として束ねるよう依頼します。アイデアと元のメモは変わりません。',
-          '束ねる',
-        )
+      ? ('同じ話として束ねる', '「$title」と同じ話として束ねるよう依頼します。アイデアと元のメモは変わりません。', '束ねる')
       : linked
-      ? (
-          '束から外す',
-          '「$title」との束ねを外すよう依頼します。次からは似ているアイデアの候補にも出しません。',
-          '外す',
-        )
+      ? ('束から外す', '「$title」との束ねを外すよう依頼します。次からは似ているアイデアの候補にも出しません。', '外す')
       : ('別の話にする', '「$title」とは別の話として、次から候補に出さないよう依頼します。', '別の話にする');
   final ok = await showDialog<bool>(
     context: context,

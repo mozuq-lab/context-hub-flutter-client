@@ -6,6 +6,7 @@ import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
 import '../core/repository.dart';
+import '../core/home_widget.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
 import '../core/models.dart';
@@ -78,8 +79,46 @@ class HubController extends ChangeNotifier {
   bool _disposed = false;
   void _changed() {
     if (!_disposed) {
+      _syncHomeWidget();
       notifyListeners();
     }
+  }
+
+  // ---- Androidのホーム画面ウィジェット（端末の表示だけ。Vaultには書かない） ----
+  HomeWidgetSettings homeWidget = const HomeWidgetSettings();
+  bool get homeScreenSupported => access.homeScreenSupported;
+  String? _homeWidgetSent;
+  bool _homeWidgetEverSent = false;
+
+  /// 読込済みの記録が変わったら、ウィジェットに出す内容を渡し直す。
+  /// 読込中と再読込の失敗では前の内容を残し、表示できる記録がなくなったら内容を消す。
+  void _syncHomeWidget() {
+    if (!access.homeScreenSupported) return;
+    final repo = repository;
+    if (repo == null && loading) return;
+    String? content;
+    if (repo != null) {
+      try {
+        content = encodeHomeWidget(
+          homeWidgetContent(repo, settings: homeWidget),
+        );
+      } catch (_) {
+        content = null;
+      }
+    }
+    if (_homeWidgetEverSent && content == _homeWidgetSent) return;
+    _homeWidgetEverSent = true;
+    _homeWidgetSent = content;
+    // 表示の更新に失敗しても、アプリの操作は続ける。
+    access.updateHomeWidget(content).catchError((Object _) {});
+  }
+
+  /// ウィジェットの表示設定を変える。設定は端末に保存する。
+  Future<void> setHomeWidget(HomeWidgetSettings settings) async {
+    if (location == null) throw StateError('先にVaultを選んでください。');
+    homeWidget = settings;
+    await _writeSettings();
+    _changed();
   }
 
   @override
@@ -778,6 +817,9 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['seen'] is Map) {
         _seen = Map<String, dynamic>.from(value['seen'] as Map);
       }
+      if (value is Map) {
+        homeWidget = HomeWidgetSettings.fromJson(value['homeWidget']);
+      }
     } catch (_) {
       // 読めない記録は空として扱う。保存先の設定はrestoreで別に扱う。
     }
@@ -793,14 +835,20 @@ class HubController extends ChangeNotifier {
       encoded = _encodeSettings(target);
     } catch (_) {
       _seen = {};
-      encoded = jsonEncode(target.toJson());
+      encoded = jsonEncode({..._settingsBase(target)});
     }
     await access.writeState('settings.json', encoded);
   }
 
+  Map<String, Object?> _settingsBase(VaultLocation target) => {
+    ...target.toJson(),
+    if (homeWidget != const HomeWidgetSettings())
+      'homeWidget': homeWidget.toJson(),
+  };
+
   /// 既読の記録を容量内に収めて設定を作る。古いVault→本文→古いプロジェクトの順に削る。
   String _encodeSettings(VaultLocation target) {
-    String encode() => jsonEncode({...target.toJson(), 'seen': _seen});
+    String encode() => jsonEncode({..._settingsBase(target), 'seen': _seen});
     bool fits(String v) => utf8.encode(v).length <= _settingsBudget;
     final current = _seen[target.identity];
     final projects = repository?.projects;
