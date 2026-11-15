@@ -1,0 +1,216 @@
+import 'dart:convert';
+import 'models.dart' show digest;
+import 'repository.dart';
+
+/// 本人の判断を待っているもの。確認待ちの候補、作業記録の下書き、手で書き換えて止まったNOW。
+///
+/// 似ているアイデアの組と「片付いたかも」は数が増えやすく急がないため、数えない。
+class AttentionItem {
+  AttentionItem(this.kind, String id, this.page)
+    : key = digest('$kind:$id').substring(0, 12);
+
+  /// candidate（候補）・draft（下書き）・conflict（止まったNOW）。
+  final String kind;
+
+  /// 判断できる画面。`review` または `project:<id>`。
+  final String page;
+
+  /// 端末に残す既読の鍵。IDそのものではなく短いhashにして、設定ファイルの容量を抑える。
+  final String key;
+}
+
+/// 通知と件数の表示に使う種類の順と呼び名。
+const attentionKindLabels = {
+  'candidate': '候補',
+  'draft': '作業記録の下書き',
+  'conflict': '止まったNOW',
+};
+
+/// 読込済みの記録から、判断待ちの一覧を作る。
+///
+/// この端末から依頼済みで反映を待っているものは、もう判断が済んでいるので数えない。
+List<AttentionItem> attentionItems(HubRepository repo) {
+  final items = <AttentionItem>[];
+  for (final c in repo.review.pending) {
+    if (repo.review.requestIdFor(c.id) != null) continue;
+    items.add(AttentionItem('candidate', c.id, 'review'));
+  }
+  for (final p in repo.orderedProjects) {
+    for (final d in p.drafts) {
+      if (repo.draftRequestIdFor(d.id) != null) continue;
+      items.add(AttentionItem('draft', d.id, 'project:${p.id}'));
+    }
+    final conflict = p.nowConflict;
+    if (conflict != null && repo.conflictRequestIdFor(p.id) == null) {
+      // 手で書き換え直すとhashが変わり、新しい判断待ちとして扱う。
+      items.add(
+        AttentionItem(
+          'conflict',
+          '${p.id}:${conflict.nowHash}',
+          'project:${p.id}',
+        ),
+      );
+    }
+  }
+  return items;
+}
+
+/// 端末に残す鍵の上限。超える分は覚えず、新着として扱わない。
+const attentionMaxKeys = 400;
+
+/// 判断待ちの既読の記録。端末ごと・開いているVaultの分だけを持ち、Vaultには書かない。
+///
+/// 鍵ごとに、アプリの画面で見た（true）か、アプリを開いている間に件数として出ただけ（false）かを持つ。
+class AttentionState {
+  const AttentionState({
+    this.identity,
+    this.keys = const {},
+    this.full = false,
+  });
+
+  /// 記録の対象のVault。別のVaultを開いたら記録を作り直す。
+  final String? identity;
+  final Map<String, bool> keys;
+
+  /// 上限を超えて覚えきれなかった。覚えていない鍵は既読として扱う。
+  final bool full;
+
+  /// 判断できる画面を開いて見たか。
+  bool seen(AttentionItem item) => keys[item.key] ?? full;
+
+  /// アプリを開いている間に件数として出たか（通知が要らないか）。
+  bool known(AttentionItem item) => full || keys.containsKey(item.key);
+
+  /// まだ画面で見ていないもの。
+  List<AttentionItem> fresh(Iterable<AttentionItem> items) =>
+      items.where((i) => !seen(i)).toList();
+
+  /// アプリを開いている間に一度も出ていないもの。通知の対象。
+  List<AttentionItem> unknown(Iterable<AttentionItem> items) =>
+      items.where((i) => !known(i)).toList();
+
+  /// 読み込んだ判断待ちを記録へ反映する。
+  ///
+  /// 初めてのVaultでは、いまあるものをすべて既読にする（初回にすべてを新着にしない）。
+  /// [visible]の画面にあるものは見たものとして既読にする。
+  /// [prune]がfalse（読取が途中で終わったなど）のときは、見つからない鍵を消さない。
+  AttentionState sync(
+    String identity,
+    List<AttentionItem> items, {
+    String? visible,
+    bool prune = true,
+  }) {
+    final first = this.identity != identity;
+    final next = <String, bool>{if (!first && !prune) ...keys};
+    for (final item in items) {
+      final before = first ? true : seen(item);
+      next[item.key] = before || item.page == visible;
+    }
+    if (next.length <= attentionMaxKeys) {
+      return AttentionState(
+        identity: identity,
+        keys: next,
+        // 覚えきれなかった後は、いまの判断待ちを覚え直せたときだけ解除する。
+        full: !first && full && !prune,
+      );
+    }
+    final kept = next.keys.toList()..sort();
+    return AttentionState(
+      identity: identity,
+      keys: {for (final k in kept.take(attentionMaxKeys)) k: next[k]!},
+      full: true,
+    );
+  }
+
+  /// [page]にある判断待ちを既読にする。
+  AttentionState markSeen(String page, Iterable<AttentionItem> items) =>
+      AttentionState(
+        identity: identity,
+        keys: {
+          ...keys,
+          for (final i in items)
+            if (i.page == page && keys.containsKey(i.key)) i.key: true,
+        },
+        full: full,
+      );
+
+  Map<String, Object?> toJson() => {
+    if (identity != null) 'vault': identity,
+    'keys': {for (final e in keys.entries) e.key: e.value ? 1 : 0},
+    if (full) 'full': true,
+  };
+
+  /// 読めない値は記録なしとして扱う。
+  static AttentionState fromJson(Object? value) {
+    if (value is! Map || value['vault'] is! String || value['keys'] is! Map) {
+      return const AttentionState();
+    }
+    final keys = <String, bool>{};
+    for (final e in (value['keys'] as Map).entries) {
+      final k = e.key;
+      if (k is! String || !RegExp(r'^[a-f0-9]{12}$').hasMatch(k)) continue;
+      if (keys.length >= attentionMaxKeys) break;
+      keys[k] = e.value == 1;
+    }
+    return AttentionState(
+      identity: value['vault'] as String,
+      keys: keys,
+      full: value['full'] == true,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is AttentionState &&
+      other.identity == identity &&
+      other.full == full &&
+      other.keys.length == keys.length &&
+      keys.entries.every((e) => other.keys[e.key] == e.value);
+  @override
+  int get hashCode => Object.hash(identity, full, keys.length);
+}
+
+/// 端末の設定ファイル（settings.json）の`attention`に残す内容。既読の記録と、通知を使うかどうか。
+class AttentionSettings {
+  const AttentionSettings(this.state, this.notify);
+  final AttentionState state;
+
+  /// アプリを閉じている間の確認待ちの通知を使う（Androidだけ）。
+  final bool notify;
+
+  Map<String, Object?> toJson() => {
+    ...state.toJson(),
+    if (notify) 'notify': true,
+  };
+
+  /// 読めない値は、記録なし・通知なしとして扱う。
+  static AttentionSettings fromJson(Object? value) => AttentionSettings(
+    AttentionState.fromJson(value),
+    value is Map && value['notify'] == true,
+  );
+}
+
+/// 端末の通知に出す内容。件数と種類だけで、候補やメモの本文は入れない。
+class AttentionNotice {
+  const AttentionNotice(this.key, this.title, this.text);
+
+  /// 同じ内容を繰り返し通知しないための鍵。
+  final String key;
+  final String title, text;
+}
+
+/// 通知の文を作る。[items]はアプリを開いている間に出ていない判断待ち。空ならnull。
+AttentionNotice? attentionNotice(List<AttentionItem> items) {
+  if (items.isEmpty) return null;
+  final keys = items.map((i) => i.key).toList()..sort();
+  final parts = [
+    for (final kind in attentionKindLabels.entries)
+      if (items.where((i) => i.kind == kind.key).length case final n when n > 0)
+        '${kind.value} $n件',
+  ];
+  return AttentionNotice(
+    digest(jsonEncode(keys)).substring(0, 16),
+    '確認待ちが${items.length}件増えています',
+    '${parts.join(' · ')}（この端末に同期済みの内容）',
+  );
+}

@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- 選んで深掘りで、本人が設定したAPIキーを使ってClaude APIへ問いとまとめの作成を依頼するため。 -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 確認待ちの通知（任意の設定）。本人が設定を入れたときだけ、端末の許可画面を出す。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="ContextHub Flutter"
         android:allowBackup="false"
@@ -40,6 +42,11 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/home_widget_info" />
         </receiver>
+        <!-- 確認待ちの通知を使う設定のときだけ、数時間おきに端末内の同期済みVaultを読む。ネットワークには接続しない。 -->
+        <service
+            android:name=".AttentionJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

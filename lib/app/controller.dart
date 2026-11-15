@@ -7,6 +7,7 @@ import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
 import '../storage/basket_store.dart';
 import '../core/repository.dart';
+import '../core/attention.dart';
 import '../core/home_widget.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
@@ -81,6 +82,7 @@ class HubController extends ChangeNotifier {
   void _changed() {
     if (!_disposed) {
       _syncHomeWidget();
+      _syncDockBadge();
       notifyListeners();
     }
   }
@@ -128,6 +130,108 @@ class HubController extends ChangeNotifier {
     }
     await _writeSettings();
     _changed();
+  }
+
+  // ---- 判断待ちの件数と既読（端末ごと。Vaultには書かない） ----
+  /// 読込済みの記録にある判断待ち（確認待ちの候補・作業記録の下書き・止まったNOW）。
+  List<AttentionItem> attention = const [];
+  AttentionState _attention = const AttentionState();
+
+  /// アプリを閉じている間の確認待ちの通知を使う設定（Androidだけ）。
+  bool attentionNotify = false;
+  bool get attentionNotificationsSupported =>
+      access.attentionNotificationsSupported;
+  String _visiblePage = 'home';
+  int? _dockBadgeSent;
+  bool _attentionScheduleChecked = false;
+
+  /// [page]で判断できる判断待ちの件数。
+  int attentionCount(String page) =>
+      attention.where((i) => i.page == page).length;
+
+  /// [page]の判断待ちのうち、まだその画面で見ていない件数。
+  int attentionFresh(String page) =>
+      attention.where((i) => i.page == page && !_attention.seen(i)).length;
+
+  /// 通知から開く画面。まだ見ていない判断待ちを判断できる画面で、なければ確認待ちの一覧。
+  String get attentionLanding =>
+      attention.where((i) => !_attention.seen(i)).firstOrNull?.page ?? 'review';
+
+  /// 読み込んだ判断待ちを既読の記録へ反映する。記録が変わったらtrue（設定の保存が要る）。
+  bool _syncAttention() {
+    final repo = repository, target = location;
+    if (repo == null || target == null) return false;
+    try {
+      attention = attentionItems(repo);
+    } catch (_) {
+      // 件数を作れなくても、閲覧と操作は続ける。
+      attention = const [];
+      return false;
+    }
+    // アプリで件数を出したので、端末に出ている通知は消す。失敗しても操作は続ける。
+    if (access.attentionNotificationsSupported) {
+      access.clearAttentionNotification().catchError((Object _) {});
+    }
+    final next = _attention.sync(
+      target.identity,
+      attention,
+      visible: _visiblePage,
+      // 読取が途中で終わったときは候補が欠けて見えるため、見つからない記録を消さない。
+      prune: repo.snapshot.warnings.isEmpty,
+    );
+    if (next == _attention) return false;
+    _attention = next;
+    return true;
+  }
+
+  /// Macのドックのアイコンに判断待ちの件数を出す。読込中と再読込の失敗では前の件数を残す。
+  void _syncDockBadge() {
+    if (!access.dockBadgeSupported) return;
+    if (repository == null && loading) return;
+    final count = repository == null ? 0 : attention.length;
+    if (count == _dockBadgeSent) return;
+    _dockBadgeSent = count;
+    // 表示の更新に失敗しても、アプリの操作は続ける。
+    access.setDockBadge(count).catchError((Object _) {});
+  }
+
+  /// 開いている画面を伝える。その画面で判断できるものは見たものとして既読にする。
+  Future<void> showPage(String page) async {
+    _visiblePage = page;
+    final next = _attention.markSeen(page, attention);
+    if (next == _attention) return;
+    _attention = next;
+    try {
+      await _writeSettings();
+    } catch (_) {
+      // 既読の記録に失敗しても閲覧は続ける。
+    }
+    _changed();
+  }
+
+  /// 確認待ちの通知の設定を変える。有効にできなかった（端末で通知が許可されていない）ときはfalse。
+  Future<bool> setAttentionNotify(bool enabled) async {
+    if (location == null) throw StateError('先にVaultを選んでください。');
+    await _loadSeen();
+    if (enabled &&
+        !await access.setAttentionNotifications(enabled: true, request: true)) {
+      return false;
+    }
+    if (!enabled) await access.setAttentionNotifications(enabled: false);
+    attentionNotify = enabled;
+    await _writeSettings();
+    _changed();
+    return true;
+  }
+
+  /// 起動のたびに一度、設定が有効なら数時間おきの確認を登録し直す（端末の再起動で消えるため）。
+  void _ensureAttentionSchedule() {
+    if (_attentionScheduleChecked) return;
+    _attentionScheduleChecked = true;
+    if (!attentionNotify || !access.attentionNotificationsSupported) return;
+    access.setAttentionNotifications(enabled: true).catchError((Object _) {
+      return false;
+    });
   }
 
   @override
@@ -196,6 +300,7 @@ class HubController extends ChangeNotifier {
     loading = true;
     error = null;
     repository = null;
+    attention = const [];
     location = target;
     pending = [];
     captureWarning = null;
@@ -213,6 +318,7 @@ class HubController extends ChangeNotifier {
       if (epoch != _epoch) return;
       await _loadSeen();
       _initializeSeen();
+      _syncAttention();
       await _writeSettings();
       await _pending(target, epoch);
     } catch (e) {
@@ -248,7 +354,10 @@ class HubController extends ChangeNotifier {
       repository = HubRepository(data);
       // Vaultを開くのに失敗した後の再読込でも、残したかごを読んでから使う（空のかごで上書きしない）。
       await _ensureBasket(target);
-      if (_initializeSeen()) {
+      // Vaultを開くのに失敗した後の再読込でも、残した設定を読んでから書く（空の設定で上書きしない）。
+      await _loadSeen();
+      final seen = _initializeSeen(), attended = _syncAttention();
+      if (seen || attended) {
         try {
           await _writeSettings();
         } catch (_) {
@@ -1062,10 +1171,16 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['homeWidget'] is Map) {
         _homeWidgets = Map<String, dynamic>.from(value['homeWidget'] as Map);
       }
+      if (value is Map) {
+        final settings = AttentionSettings.fromJson(value['attention']);
+        _attention = settings.state;
+        attentionNotify = settings.notify;
+      }
     } catch (_) {
       // 読めない記録は空として扱う。保存先の設定はrestoreで別に扱う。
     }
     _seenLoaded = true;
+    _ensureAttentionSchedule();
   }
 
   /// 保存先の設定を書く。既読の記録は容量内に収め、書けなくても保存先の設定は残す。
@@ -1085,6 +1200,8 @@ class HubController extends ChangeNotifier {
   Map<String, Object?> _settingsBase(VaultLocation target) => {
     ...target.toJson(),
     if (_homeWidgets.isNotEmpty) 'homeWidget': _homeWidgets,
+    if (_attention.identity != null || attentionNotify)
+      'attention': AttentionSettings(_attention, attentionNotify).toJson(),
   };
 
   /// 既読の記録を容量内に収めて設定を作る。古いVault→本文→古いプロジェクトの順に削る。

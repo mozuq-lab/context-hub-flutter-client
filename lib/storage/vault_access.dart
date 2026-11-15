@@ -53,10 +53,41 @@ abstract class VaultAccess {
 
   /// アプリを開いたまま新しい起動時の操作が届いたときの通知先を登録する。
   void listenLaunchActions(void Function() onAction) {}
+
+  /// ドックのアイコンに判断待ちの件数を出せる端末か（Macだけ）。
+  bool get dockBadgeSupported => false;
+
+  /// ドックのアイコンに件数を出す。0なら消す。
+  Future<void> setDockBadge(int count) async {}
+
+  /// アプリを閉じている間の確認待ちの通知を使える端末か（Androidだけ）。
+  bool get attentionNotificationsSupported => false;
+
+  /// 確認待ちの通知を有効・無効にする。有効にできた（通知が許可されている）ときだけtrue。
+  ///
+  /// [request]がtrueなら、許可がまだのときに端末の許可画面を出す（本人が設定を入れたときだけ）。
+  /// 有効にすると数時間おきの確認を登録し、無効にすると登録と出ている通知を消す。
+  Future<bool> setAttentionNotifications({
+    required bool enabled,
+    bool request = false,
+  }) async => false;
+
+  /// 確認待ちが増えたことを端末に通知する。[key]が前回と同じなら出し直さない。
+  Future<void> showAttentionNotification({
+    required String key,
+    required String title,
+    required String text,
+  }) async {}
+
+  /// 出ている確認待ちの通知を消す（アプリで件数を出したとき）。
+  Future<void> clearAttentionNotification() async {}
+
+  /// アプリを閉じている間の確認が終わったことを端末へ伝える。
+  Future<void> finishBackgroundCheck() async {}
 }
 
 /// 起動時の操作として受け付ける名前。ほかの値は無視する。
-const launchActions = {'capture', 'guided', 'next'};
+const launchActions = {'capture', 'guided', 'next', 'attention'};
 
 class NativeVaultAccess implements VaultAccess {
   static const channel = MethodChannel('com.mozuqlab.contexthub/vault');
@@ -179,6 +210,58 @@ class NativeVaultAccess implements VaultAccess {
     channel.setMethodCallHandler((call) async {
       if (call.method == 'launchAction') onAction();
     });
+  }
+
+  @override
+  bool get dockBadgeSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+
+  @override
+  Future<void> setDockBadge(int count) async {
+    if (!dockBadgeSupported) return;
+    await channel.invokeMethod('setDockBadge', {'count': count});
+  }
+
+  @override
+  bool get attentionNotificationsSupported => homeScreenSupported;
+
+  @override
+  Future<bool> setAttentionNotifications({
+    required bool enabled,
+    bool request = false,
+  }) async {
+    if (!attentionNotificationsSupported) return false;
+    return await channel.invokeMethod<bool>('attentionNotifications', {
+          'enabled': enabled,
+          'request': request,
+        }) ==
+        true;
+  }
+
+  @override
+  Future<void> showAttentionNotification({
+    required String key,
+    required String title,
+    required String text,
+  }) async {
+    if (!attentionNotificationsSupported) return;
+    await channel.invokeMethod('showAttention', {
+      'key': key,
+      'title': title,
+      'text': text,
+    });
+  }
+
+  @override
+  Future<void> clearAttentionNotification() async {
+    if (!attentionNotificationsSupported) return;
+    await channel.invokeMethod('clearAttention');
+  }
+
+  @override
+  Future<void> finishBackgroundCheck() async {
+    if (!attentionNotificationsSupported) return;
+    await channel.invokeMethod('backgroundDone');
   }
 }
 
