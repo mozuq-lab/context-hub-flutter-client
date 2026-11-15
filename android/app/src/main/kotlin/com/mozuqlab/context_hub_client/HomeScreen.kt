@@ -40,7 +40,7 @@ object LaunchActions {
                     .setIcon(Icon.createWithResource(context, icon))
                     .setRank(rank)
                     .setIntent(Intent(context, MainActivity::class.java).setAction(action)
-                        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP))
                     .build()
             manager.setDynamicShortcuts(listOf(
                 shortcut("capture", CAPTURE, R.string.shortcut_capture_short, R.string.shortcut_capture_long, R.drawable.ic_shortcut_capture, 0),
@@ -94,7 +94,7 @@ class HomeWidgetProvider : AppWidgetProvider() {
         private fun open(context: Context, action: String, request: Int): PendingIntent = PendingIntent.getActivity(
             context, request,
             Intent(context, MainActivity::class.java).setAction(action)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         private fun render(context: Context, manager: AppWidgetManager, ids: IntArray, content: String?) {

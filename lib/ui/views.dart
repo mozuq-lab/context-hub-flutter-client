@@ -1822,6 +1822,12 @@ Future<void> sendIdeaLink(
   String action,
 ) async {
   final repo = c.repository;
+  // 確認の画面に出す時点の内容を覚えておき、確認の間に変わっていれば依頼しない。
+  final seenMe = c.ideaSeenHash(me), seenOther = c.ideaSeenHash(other);
+  if (seenMe == null || seenOther == null) {
+    notice(context, 'アイデアが見つかりません。再読込してください。');
+    return;
+  }
   final title = repo?.ideaRecord(other)?.title ?? other;
   final linked = repo?.ideaGroupOf(me)?.linksDirectly(me, other) ?? false;
   final (heading, body, verb) = action == 'link'
@@ -1849,7 +1855,13 @@ Future<void> sendIdeaLink(
   );
   if (ok != true || !context.mounted) return;
   try {
-    final result = await c.requestIdeaLink(me, other, action);
+    final result = await c.requestIdeaLink(
+      me,
+      other,
+      action,
+      seenA: seenMe,
+      seenB: seenOther,
+    );
     if (context.mounted) {
       notice(
         context,
@@ -1972,7 +1984,13 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
     }
     final checked = await checkSecretsBeforeSave(context, text.text);
     if (checked == null || !mounted) return;
-    if (checked != text.text) text.text = checked;
+    if (checked != text.text) {
+      if (checked.length > 8000) {
+        setState(() => error = '伏せ字にすると8000文字を超えます。訂正文を短くしてください。');
+        return;
+      }
+      text.text = checked;
+    }
     setState(() {
       busy = true;
       error = null;

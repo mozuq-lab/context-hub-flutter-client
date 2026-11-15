@@ -23,9 +23,10 @@ class SecretFinding {
 String secretPlaceholder(String label) => '[伏せ字:$label]';
 const _placeholderHead = '[伏せ字:';
 
-/// 代入の形で値を伏せる鍵の名前。DB_PASSWORDのように前に語が付いた環境変数名も含める。
+/// 代入の形で値を伏せる鍵の名前。英数字に続く位置では始めないため、DB_PASSWORDのように
+/// 前に語が付いた環境変数名にも当たり、passwordlessのような語の途中には当たらない。
 const _keys =
-    r'(?:(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?key|access[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|signature|sig)(?![A-Za-z0-9])|パスワード|暗証番号|合言葉)';
+    r'(?:(?<![A-Za-z0-9])(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?key|access[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|signature|sig)(?![A-Za-z0-9])|パスワード|暗証番号|合言葉)';
 
 final List<SecretRule> secretRules = [
   SecretRule(
@@ -119,8 +120,22 @@ double _entropy(String value) {
   return bits;
 }
 
+/// 検査できなかった文字列に付ける種類名。
+const secretUnscannedLabel = '検査できない長い文字列';
+
 /// 重ならない一致を、開始位置の順に返す。
+///
+/// 空白のない数万文字の並びでは、端末向けビルドの正規表現が後戻りの上限に達して失敗する。
+/// その場合は値を出さない側に倒し、全体を1つの検出として返す（本体のJavaScriptでは起きない）。
 List<SecretFinding> findSecrets(String text) {
+  try {
+    return _findSecrets(text);
+  } on StackOverflowError {
+    return [SecretFinding('unscanned', secretUnscannedLabel, 0, text.length)];
+  }
+}
+
+List<SecretFinding> _findSecrets(String text) {
   if (text.isEmpty) return const [];
   final all = <(SecretFinding, int)>[];
   var order = 0;
@@ -205,4 +220,28 @@ String redactSecrets(String text) {
   }
   out.write(text.substring(at));
   return out.toString();
+}
+
+/// 組み立てた文書を1行ずつ伏せる。
+///
+/// 各部分は組み立てる前に伏せておき、これは1行に収まる値の取りこぼしを防ぐために使う。
+/// 文書全体を一度に伏せると、終わりのない秘密鍵の見出しがその後ろの内容をすべて消してしまう。
+String redactSecretLines(String text) =>
+    text.split('\n').map(redactSecrets).join('\n');
+
+/// 先頭[size]文字だけを使う場面で、切る前に伏せる。
+///
+/// 切る位置をまたぐ値を伏せ残さないよう、余裕を持たせた範囲を検査してから切る。
+/// 全文を検査しないため、長い記録でも時間がかからない。
+String redactSecretsHead(String text, int size) {
+  const margin = 4096;
+  var end = text.length > size + margin ? size + margin : text.length;
+  // サロゲートペアの途中で切らない。
+  if (end < text.length &&
+      end > 0 &&
+      text.codeUnitAt(end - 1) >= 0xD800 &&
+      text.codeUnitAt(end - 1) <= 0xDBFF) {
+    end--;
+  }
+  return redactSecrets(text.substring(0, end));
 }

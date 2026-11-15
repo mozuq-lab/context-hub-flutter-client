@@ -46,6 +46,9 @@ class HubRepository {
   final List<IdeaCandidate> ideaCandidates = [];
   final List<IdeaGroup> ideaGroups = [];
 
+  /// 似ているアイデアの索引を本体が作った日時。読めなければnull。
+  DateTime? _ideaIndexAt;
+
   /// アイデアの組（ideaPairKey）→ 反映待ちの判断の依頼のREQ ID。
   final Map<String, String> _outstandingIdeaLinks = {};
 
@@ -419,9 +422,11 @@ class HubRepository {
       final j = jsonDecode(raw) as Map<String, dynamic>;
       if (j['schema_version'] != 1 ||
           j['candidates'] is! List ||
-          j['groups'] is! List) {
+          j['groups'] is! List ||
+          j['generated_at'] is! String) {
         throw const FormatException();
       }
+      final generated = DateTime.parse(j['generated_at'] as String);
       for (final c in (j['candidates'] as List).cast<Map>()) {
         final ideas = c['ideas'], hashes = c['hashes'], score = c['score'];
         if (ideas is! List ||
@@ -477,10 +482,25 @@ class HubRepository {
           );
         }
       }
+      _ideaIndexAt = generated;
     } catch (_) {
       ideaCandidates.clear();
       ideaGroups.clear();
       _problem(path);
+    }
+  }
+
+  /// 束ねる・別の話にする判断の記録（90_system/idea-links）が作られた日時。届いていない・読めない記録はnull。
+  DateTime? _ideaLinkCreatedAt(String linkId) {
+    final raw = snapshot.files['90_system/idea-links/$linkId.json'];
+    if (raw == null) return null;
+    try {
+      final j = jsonDecode(raw);
+      return j is Map && j['id'] == linkId && j['created_at'] is String
+          ? DateTime.parse(j['created_at'] as String)
+          : null;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -952,7 +972,7 @@ class HubRepository {
   }
 
   void _readIntake() {
-    final ideaLinkItems = <(IntakeStatus, Map)>[];
+    final ideaLinkItems = <(IntakeStatus, Map, String?)>[];
     for (final e in snapshot.files.entries.where(
       (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
     )) {
@@ -1093,7 +1113,7 @@ class HubRepository {
         final usedDraft = m['operation'] == 'capture' && m['meta'] is Map
             ? (m['meta'] as Map)['git_draft']
             : null;
-        String? resolutionId;
+        String? resolutionId, ideaLinkId;
         final decision = [
           'project-approve',
           'project-reject',
@@ -1269,6 +1289,7 @@ class HubRepository {
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
+              ideaLinkId = r['linkId'] as String;
               item.detail = m['action'] == 'link'
                   ? 'Miniがアイデアを束ねました。'
                   : 'Miniが別の話として記録しました。';
@@ -1395,7 +1416,7 @@ class HubRepository {
           }
         }
         if (itemReport) _itemRequest(item, m, resolutionId);
-        if (ideaLink) ideaLinkItems.add((item, m));
+        if (ideaLink) ideaLinkItems.add((item, m, ideaLinkId));
         if (draftDismiss &&
             ['waiting', 'accepted'].contains(item.state) &&
             gitDrafts.containsKey(m['draft_id'])) {
@@ -1414,7 +1435,7 @@ class HubRepository {
     intake.sort((a, b) => b.at?.compareTo(a.at ?? DateTime(0)) ?? 0);
     // 同じ組への判断は最後の依頼だけが有効。古い依頼が索引と食い違っても反映待ちにしない。
     final latest = <String, IntakeStatus>{};
-    for (final (item, m) in ideaLinkItems) {
+    for (final (item, m, _) in ideaLinkItems) {
       final ids = List<String>.from(m['idea_ids'] as List),
           key = ideaPairKey(ids[0], ids[1]),
           current = latest[key];
@@ -1424,11 +1445,11 @@ class HubRepository {
         latest[key] = item;
       }
     }
-    for (final (item, m) in ideaLinkItems) {
+    for (final (item, m, linkId) in ideaLinkItems) {
       final ids = List<String>.from(m['idea_ids'] as List);
       if (item.state == 'waiting' ||
           latest[ideaPairKey(ids[0], ids[1])] == item) {
-        _ideaLinkRequest(item, m);
+        _ideaLinkRequest(item, m, linkId);
       }
     }
   }
@@ -1437,22 +1458,19 @@ class HubRepository {
       id is String ? clip(ideaRecord(id)?.title ?? id, 30) : '不明';
 
   /// 判断の依頼が索引に反映されるまで、同じ組への操作を止める。
-  void _ideaLinkRequest(IntakeStatus item, Map m) {
+  ///
+  /// 反映されたかは、索引の今の状態ではなく、依頼で作られた判断の記録より後に索引が
+  /// 作られたかで決める。後からCLIや別の端末で逆の判断がされても、反映待ちのまま残さない。
+  void _ideaLinkRequest(IntakeStatus item, Map m, String? linkId) {
     final ids = List<String>.from(m['idea_ids'] as List),
         key = ideaPairKey(ids[0], ids[1]);
     if (item.state == 'waiting') {
       _outstandingIdeaLinks[key] = item.id;
       return;
     }
-    if (item.state != 'accepted') return;
-    final linked = ideaGroupOf(ids[0])?.linksDirectly(ids[0], ids[1]) ?? false;
-    final stillCandidate = ideaCandidates.any(
-      (c) => ideaPairKey(c.a, c.b) == key,
-    );
-    final reflected = m['action'] == 'link'
-        ? linked
-        : !linked && !stillCandidate;
-    if (!reflected) {
+    if (item.state != 'accepted' || linkId == null) return;
+    final created = _ideaLinkCreatedAt(linkId), indexed = _ideaIndexAt;
+    if (created == null || indexed == null || indexed.isBefore(created)) {
       _outstandingIdeaLinks[key] = item.id;
       item.detail = 'Mini受領済み。似ているアイデアの一覧の同期を待っています。';
     }
@@ -1765,7 +1783,7 @@ class HubRepository {
       for (final u in units) {
         final r = u.root;
         out.writeln(
-          '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecrets(r.body), 300).replaceAll('\n', ' ')}',
+          '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecretsHead(r.body, 300), 300).replaceAll('\n', ' ')}',
         );
         if (u.receipt?['result'] is Map) {
           out.writeln('  有効解釈: ${(u.receipt!['result'] as Map)['summary']}');
@@ -1781,7 +1799,8 @@ class HubRepository {
         }
       }
     }
-    final text = redactSecrets(out.toString()), suffix = '\n…（省略。全文は記録の詳細から確認）';
+    final text = redactSecretLines(out.toString()),
+        suffix = '\n…（省略。全文は記録の詳細から確認）';
     return policy +
         (text.length <= optionalMax
             ? text
@@ -1813,10 +1832,10 @@ class HubRepository {
     if (items.isEmpty) out.writeln('見つかりません');
     for (final r in items) {
       out.writeln(
-        '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecrets(r.body), 200).replaceAll('\n', ' ')}',
+        '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecretsHead(r.body, 200), 200).replaceAll('\n', ' ')}',
       );
     }
-    final text = redactSecrets(out.toString()), suffix = '\n…（省略）';
+    final text = redactSecretLines(out.toString()), suffix = '\n…（省略）';
     return policy +
         (text.length <= optionalMax
             ? text

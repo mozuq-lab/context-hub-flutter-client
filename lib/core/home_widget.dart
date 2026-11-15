@@ -55,31 +55,36 @@ Map<String, Object?> homeWidgetContent(
   HomeWidgetSettings settings = const HomeWidgetSettings(),
 }) {
   final active = repo.actionableProjects;
-  final chosen = settings.projectId == null
-      ? null
-      : active.where((p) => p.id == settings.projectId).firstOrNull;
-  final projects = chosen == null ? active : [chosen];
+  final review = repo.review.pending.length;
+  final scoped = settings.projectId != null;
+  final chosen = scoped
+      ? active.where((p) => p.id == settings.projectId).firstOrNull
+      : null;
+  // 選んだプロジェクトが進行中でなくなったら、ほかのプロジェクトへ広げずに何も出さない。
+  final projects = scoped ? [?chosen] : active;
   final entries = [
     for (final p in projects)
       for (final e in p.entriesWithSource('next')) (p, e),
   ];
-  final review = repo.review.pending.length;
   String line(String title, String text) {
     final flat = redactSecrets(text).replaceAll(RegExp(r'\s+'), ' ').trim();
     final body = flat.length > homeWidgetLineChars
         ? '${clip(flat, homeWidgetLineChars)}…'
         : flat;
-    return chosen == null ? '$body（${clip(title, 16)}）' : body;
+    return scoped ? body : '$body（${clip(title, 16)}）';
   }
 
+  final known = scoped ? repo.projects[settings.projectId] : null;
   return {
     'schema_version': 1,
-    'title': settings.showText && chosen != null
-        ? clip(chosen.title, 24)
-        : chosen != null
-        ? '選んだプロジェクト'
-        : 'ContextHub',
-    'counts': '次の一手 ${entries.length}件 · 確認待ち $review件',
+    'title': !scoped
+        ? 'ContextHub'
+        : settings.showText && known != null
+        ? clip(known.title, 24)
+        : '選んだプロジェクト',
+    'counts': scoped && chosen == null
+        ? '進行中ではありません · 確認待ち $review件'
+        : '次の一手 ${entries.length}件 · 確認待ち $review件',
     'lines': settings.showText
         ? [
             for (final (p, e) in entries.take(homeWidgetMaxLines))

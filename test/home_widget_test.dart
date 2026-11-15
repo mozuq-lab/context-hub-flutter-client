@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/home_widget.dart';
 import 'package:context_hub_client/core/repository.dart';
+import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'fixtures.dart';
 import 'next_actions_test.dart' show multiProjectFiles, withProject;
@@ -74,7 +75,7 @@ void main() {
     expect(content['counts'], startsWith('次の一手 5件'));
   });
 
-  test('プロジェクトを選ぶとその件数に絞り、なくなったプロジェクトはすべてに戻す', () {
+  test('プロジェクトを選ぶとその件数に絞り、進行中でなくなってもほかのプロジェクトは出さない', () {
     final repo = HubRepository(fixture(multiProjectFiles()));
     final scoped = homeWidgetContent(
       repo,
@@ -90,14 +91,20 @@ void main() {
     );
     expect(hidden['title'], '選んだプロジェクト');
     expect(hidden['lines'], isEmpty);
-    // 休止中・存在しないプロジェクトは選べない。
-    for (final id in ['old-plan', 'missing']) {
-      final all = homeWidgetContent(
+    // 選んだプロジェクトが進行中でなくなっても、ほかのプロジェクトの内容へ広げない。
+    for (final (id, title) in [
+      ('old-plan', '休止中の計画'),
+      ('missing', '選んだプロジェクト'),
+    ]) {
+      final none = homeWidgetContent(
         repo,
         settings: HomeWidgetSettings(showText: true, projectId: id),
       );
-      expect(all['title'], 'ContextHub');
-      expect(all['counts'], startsWith('次の一手 2件'));
+      expect(none['title'], title);
+      expect(none['counts'], startsWith('進行中ではありません'));
+      expect(none['lines'], isEmpty);
+      expect(jsonEncode(none), isNot(contains('設定画面')));
+      expect(jsonEncode(none), isNot(contains('サンプルの検索')));
     }
   });
 
@@ -147,10 +154,17 @@ void main() {
       const HomeWidgetSettings(showText: true, projectId: 'side-app'),
     );
     expect(jsonDecode(access.sent.last!)['lines'], ['設定画面を作る。']);
+    // 設定はVaultごとに保存する。
     expect(jsonDecode(access.states['settings.json']!)['homeWidget'], {
-      'showText': true,
-      'project': 'side-app',
+      'sample': {'showText': true, 'project': 'side-app'},
     });
+    // 別のVaultへ切り替えると、そのVaultの設定（既定は件数だけ）で渡す。
+    await c.activate(const VaultLocation('other', '別のVault'));
+    expect(c.homeWidget, const HomeWidgetSettings());
+    expect(jsonDecode(access.sent.last!)['lines'], isEmpty);
+    expect(jsonDecode(access.sent.last!)['title'], 'ContextHub');
+    await c.useSample();
+    expect(jsonDecode(access.sent.last!)['title'], '別のアプリ');
     c.dispose();
     // 次の起動では保存した設定で渡す。
     final next = HomeScreenAccess()..states.addAll(access.states);
@@ -200,18 +214,49 @@ void main() {
     // 起動時の指定でメモの入力が開く。保存はしていない。
     expect(find.byKey(const Key('memo-text')), findsOneWidget);
     expect(access.requests, isEmpty);
-    // 入力を開いている間に届いた操作は割り込まない。
+    // 入力を開いている間に届いた操作は割り込まず、開けなかったことを知らせる。
     access.action = 'next';
+    access.onAction!();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('memo-text')), findsOneWidget);
+    expect(find.text('開いている入力や確認を閉じてから、もう一度お試しください。'), findsOneWidget);
+    await tester.tap(find.text('フォームを閉じる'));
+    await tester.pumpAndSettle();
+    // 記録の詳細を開いていても、その上にメモの入力を開く。
+    await tester.ensureVisible(
+      find.byKey(const Key('project-context-hub')).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('project-context-hub')).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('source-record')).first);
+    await tester.pumpAndSettle();
+    expect(find.text('出典・日時'), findsOneWidget);
+    expect(find.byKey(const Key('memo-text')), findsNothing);
+    access.action = 'capture';
     access.onAction!();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('memo-text')), findsOneWidget);
     await tester.tap(find.text('フォームを閉じる'));
     await tester.pumpAndSettle();
-    // アプリを開いたまま届いた操作も扱う。
+    // 「次の一手」は、開いていた記録の詳細を閉じて一覧へ戻る。
     access.action = 'next';
     access.onAction!();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('next-section')), findsOneWidget);
+    expect(find.text('出典・日時'), findsNothing);
+    // 確認の画面（ここではアプリの情報）を開いている間は割り込まない。
+    await tester.tap(find.byTooltip('このアプリについて'));
+    await tester.pumpAndSettle();
+    access.action = 'capture';
+    access.onAction!();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('memo-text')), findsNothing);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
+    // お知らせの表示が消えるのを待つ。
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
     // 表示設定を開いて保存できる。
     await tester.tap(find.byKey(const Key('home-widget-settings')));
     await tester.pumpAndSettle();

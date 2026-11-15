@@ -52,8 +52,6 @@ class _HubShellState extends State<HubShell> {
     c.access.listenLaunchActions(_launch);
   }
 
-  bool _launching = false;
-
   /// 読込が終わるまで待つ。
   Future<void> _idle() {
     if (!c.loading) return Future.value();
@@ -72,36 +70,51 @@ class _HubShellState extends State<HubShell> {
   /// アイコン長押しのショートカットやウィジェットで選んだ操作を開く。
   /// 開くだけで、保存や依頼は通常の画面と同じ確認を通る。
   Future<void> _launch() async {
-    if (_launching || !mounted) return;
-    _launching = true;
+    String? action;
     try {
-      final action = await c.access.takeLaunchAction();
-      if (action == null || !mounted) return;
-      await _idle();
-      if (!mounted) return;
-      // ほかの入力や確認を開いている間は割り込まない。
-      if (!(ModalRoute.of(context)?.isCurrent ?? true)) return;
-      if (c.repository == null) {
-        notice(context, '先にVaultフォルダーを選んでください。');
-        return;
-      }
-      if (action == 'next') {
-        setState(() => page = 'next');
-        return;
-      }
-      if (c.captureWarning != null) {
-        notice(context, '保存の確認情報を読めません。受付状況を確認してください。');
-        return;
-      }
-      if (action == 'capture') {
-        await showCapture(context, c);
-      } else if (action == 'guided') {
-        await showGuided(context, c);
-      }
+      action = await c.access.takeLaunchAction();
+      if (action != null) await _idle();
     } catch (_) {
       // 起動時の操作を読めなくても、通常の画面は使える。
-    } finally {
-      _launching = false;
+      return;
+    }
+    if (action == null || !mounted) return;
+    final navigator = Navigator.of(context);
+    // いちばん上の画面を調べる（何も閉じない）。
+    Route<dynamic>? top;
+    navigator.popUntil((route) {
+      top ??= route;
+      return true;
+    });
+    // 入力・保存・確認の途中には割り込まず、開けなかったことを知らせる。
+    if (c.composing || c.saving || top is PopupRoute) {
+      notice(context, '開いている入力や確認を閉じてから、もう一度お試しください。');
+      return;
+    }
+    if (c.repository == null) {
+      notice(
+        context,
+        c.location == null
+            ? '先にVaultフォルダーを選んでください。'
+            : 'Vaultを読み込めていません。再読込してから、もう一度お試しください。',
+      );
+      return;
+    }
+    if (action == 'next') {
+      // 記録の詳細などを開いていたら閉じて、次の一手の一覧へ戻る。
+      navigator.popUntil((route) => route.isFirst);
+      setState(() => page = 'next');
+      return;
+    }
+    if (c.captureWarning != null) {
+      notice(context, '保存の確認情報を読めません。受付状況を確認してください。');
+      return;
+    }
+    // 記録の詳細などを開いていても、その上に開く。
+    if (action == 'capture') {
+      await showCapture(context, c);
+    } else if (action == 'guided') {
+      await showGuided(context, c);
     }
   }
 

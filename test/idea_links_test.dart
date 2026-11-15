@@ -4,7 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/core/models.dart';
 import 'package:context_hub_client/core/repository.dart';
 import 'package:context_hub_client/storage/capture_service.dart';
+import 'package:context_hub_client/app/controller.dart';
 import 'capture_test.dart' show TempAccess, location;
+import 'widget_test.dart' show MemoryUIAccess;
 
 const linkOp = '61111111-2222-4333-8444-555555555555';
 const separateOp = '71111111-2222-4333-8444-555555555555';
@@ -137,6 +139,133 @@ void main() {
     expect(repo.ideaCandidates, hasLength(1));
   });
 
+  test('画面から束ねる依頼は、本人が見ていた内容のhashに結び付け、変わっていれば止める', () async {
+    final prepared = await runNode(['prepare'], access.directory);
+    final candidate = HubRepository(
+      VaultSnapshot(prepared),
+    ).ideaCandidates.single;
+    // わざと逆順で渡しても、依頼ではIDの順に並べ、hashも同じ順に付ける。
+    final a = candidate.b, b = candidate.a;
+    final ui = MemoryUIAccess()..current = VaultSnapshot(prepared);
+    final c = HubController(ui, sampleLoader: () async => prepared);
+    addTearDown(c.dispose);
+    await c.useSample();
+    final seenA = c.ideaSeenHash(a)!, seenB = c.ideaSeenHash(b)!;
+    expect(seenA, digestOf(prepared, a));
+
+    // 確認の間にアイデアが作り直されたら、依頼を保存しない。
+    final path = '20_ideas/$a.md';
+    ui.current = VaultSnapshot({...prepared, path: '${prepared[path]}\n追記'});
+    await expectLater(
+      c.requestIdeaLink(a, b, 'link', seenA: seenA, seenB: seenB),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('更新')),
+      ),
+    );
+    expect(ui.requests, isEmpty);
+    // アイデアだけ先に同期され、索引が古いままなら、束ねる依頼を出さない。
+    await expectLater(
+      c.requestIdeaLink(
+        a,
+        b,
+        'link',
+        seenA: c.ideaSeenHash(a)!,
+        seenB: c.ideaSeenHash(b)!,
+      ),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('同期')),
+      ),
+    );
+    expect(ui.requests, isEmpty);
+
+    ui.current = VaultSnapshot(prepared);
+    await c.reload();
+    final saved = await c.requestIdeaLink(
+      a,
+      b,
+      'link',
+      seenA: seenA,
+      seenB: seenB,
+    );
+    expect(saved.saved, isTrue);
+    final raw = ui.requests[saved.requestId]!;
+    final meta = jsonDecode(raw.split('---\n')[1]) as Map<String, dynamic>;
+    expect(meta['idea_ids'], [candidate.a, candidate.b]);
+    expect(meta['idea_hashes'], [
+      digestOf(prepared, candidate.a),
+      digestOf(prepared, candidate.b),
+    ]);
+    expect(meta['action'], 'link');
+    // 依頼がMiniに届くまで、同じ組へ重ねて依頼しない。
+    ui.current = VaultSnapshot({
+      ...prepared,
+      'Input/${saved.requestId}.md': raw,
+    });
+    await c.reload();
+    await expectLater(
+      c.requestIdeaLink(a, b, 'separate', seenA: seenA, seenB: seenB),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('依頼済み')),
+      ),
+    );
+    // 候補にも束にもない組は依頼できない。
+    final other = HubRepository(VaultSnapshot(prepared)).records.values
+        .where((r) => r.kind == 'idea')
+        .map((r) => r.sourceId)
+        .firstWhere((id) => id != a && id != b, orElse: () => '');
+    if (other.isNotEmpty) {
+      await expectLater(
+        c.requestIdeaLink(
+          a,
+          other,
+          'link',
+          seenA: seenA,
+          seenB: c.ideaSeenHash(other)!,
+        ),
+        throwsStateError,
+      );
+    }
+  });
+
+  test('受理された依頼は、判断の記録より後の索引が届くまで反映待ちにし、後から逆の判断がされても残さない', () async {
+    final prepared = await runNode(['prepare'], access.directory);
+    final c = HubRepository(VaultSnapshot(prepared)).ideaCandidates.single;
+    final (_, linked) = await send(
+      prepared,
+      linkOp,
+      c.a,
+      c.hashA,
+      c.b,
+      c.hashB,
+      'link',
+    );
+    const index = '90_system/idea-index.json';
+    // 受理の記録だけ先に届き、索引が古いまま（判断の記録より前に作られた索引）。
+    final early = HubRepository(
+      VaultSnapshot({...linked, index: prepared[index]!}),
+    );
+    expect(early.ideaLinkRequestIdFor(c.a, c.b), isNotNull);
+    expect(early.intake.single.detail, contains('同期を待っています'));
+    // 判断の記録がまだ届いていない間も反映待ち。
+    final noRecord = HubRepository(
+      VaultSnapshot({
+        for (final e in linked.entries)
+          if (!e.key.startsWith('90_system/idea-links/')) e.key: e.value,
+      }),
+    );
+    expect(noRecord.ideaLinkRequestIdFor(c.a, c.b), isNotNull);
+    // 後からCLIなどで別の話にされた（束がなくなった新しい索引）場合は、反映待ちのまま残さない。
+    final j = jsonDecode(linked[index]!) as Map<String, dynamic>;
+    j['groups'] = [];
+    j['generated_at'] = '2099-01-01T00:00:00.000Z';
+    final overridden = HubRepository(
+      VaultSnapshot({...linked, index: jsonEncode(j)}),
+    );
+    expect(overridden.warnings, isEmpty);
+    expect(overridden.ideaGroupOf(c.a), isNull);
+    expect(overridden.ideaLinkRequestIdFor(c.a, c.b), isNull);
+  });
+
   test('依頼の形式を保存前に検査する', () async {
     final service = CaptureService(access, location);
     const id = 'IDEA-01M2DSFVQMH65989604KSVE1PV';
@@ -178,7 +307,7 @@ void main() {
     final repo = HubRepository(
       VaultSnapshot({
         '90_system/idea-index.json':
-            '{"schema_version":1,"candidates":[{"ideas":["x"]}],"groups":[]}',
+            '{"schema_version":1,"generated_at":"2026-11-12T00:00:00.000Z","candidates":[{"ideas":["x"]}],"groups":[]}',
       }),
     );
     expect(repo.ideaCandidates, isEmpty);

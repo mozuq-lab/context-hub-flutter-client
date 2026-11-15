@@ -85,7 +85,10 @@ class HubController extends ChangeNotifier {
   }
 
   // ---- Androidのホーム画面ウィジェット（端末の表示だけ。Vaultには書かない） ----
-  HomeWidgetSettings homeWidget = const HomeWidgetSettings();
+  /// 表示設定はVaultごとに持つ。サンプルや別のVaultで選んだ設定を、ほかのVaultへ持ち込まない。
+  Map<String, dynamic> _homeWidgets = {};
+  HomeWidgetSettings get homeWidget =>
+      HomeWidgetSettings.fromJson(_homeWidgets[location?.identity]);
   bool get homeScreenSupported => access.homeScreenSupported;
   String? _homeWidgetSent;
   bool _homeWidgetEverSent = false;
@@ -115,8 +118,13 @@ class HubController extends ChangeNotifier {
 
   /// ウィジェットの表示設定を変える。設定は端末に保存する。
   Future<void> setHomeWidget(HomeWidgetSettings settings) async {
-    if (location == null) throw StateError('先にVaultを選んでください。');
-    homeWidget = settings;
+    final target = location;
+    if (target == null) throw StateError('先にVaultを選んでください。');
+    if (settings == const HomeWidgetSettings()) {
+      _homeWidgets.remove(target.identity);
+    } else {
+      _homeWidgets[target.identity] = settings.toJson();
+    }
     await _writeSettings();
     _changed();
   }
@@ -740,9 +748,25 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 表示中のアイデアのhash。確認の画面を出すときに取り、依頼に渡す。読めなければnull。
+  String? ideaSeenHash(String id) {
+    final repo = repository, record = repo?.ideaRecord(id);
+    final raw = record == null ? null : repo!.snapshot.files[record.path];
+    return raw == null ? null : digest(raw);
+  }
+
   /// 似ているアイデアの組を束ねる（link）か、別の話とする（separate）依頼を保存する。
   /// 束ねるのは索引にある未確認の組、束から外すのは同じ束にある組、別の話とするのはそのどちらか。
-  Future<CaptureResult> requestIdeaLink(String a, String b, String action) {
+  ///
+  /// [seenA]・[seenB]は、本人が確認の画面で見ていた時点の両方のアイデアのhash（[ideaSeenHash]）。
+  /// 読み直した内容と食い違えば、依頼を保存せずに止める。
+  Future<CaptureResult> requestIdeaLink(
+    String a,
+    String b,
+    String action, {
+    required String seenA,
+    required String seenB,
+  }) {
     late String hashA, hashB;
     return _confirmedRequest(
       (parsed) {
@@ -764,13 +788,20 @@ class HubController extends ChangeNotifier {
         if (ra == null || rb == null) {
           throw StateError('アイデアが見つかりません。再読込してください。');
         }
-        // 束ねた後のアイデアは索引の候補に出ないため、今のファイルのhashを使う（本体は束ねるときだけ確かめる）。
-        hashA = candidate == null
-            ? digest(parsed.snapshot.files[ra.path]!)
-            : (candidate.a == a ? candidate.hashA : candidate.hashB);
-        hashB = candidate == null
-            ? digest(parsed.snapshot.files[rb.path]!)
-            : (candidate.a == b ? candidate.hashA : candidate.hashB);
+        // 依頼には、本人が見ていた内容のhashを付ける。読み直した内容が変わっていれば止める。
+        hashA = digest(parsed.snapshot.files[ra.path]!);
+        hashB = digest(parsed.snapshot.files[rb.path]!);
+        if (hashA != seenA || hashB != seenB) {
+          throw StateError('アイデアの内容が更新されました。表示を確認してから、もう一度操作してください。');
+        }
+        // 索引がアイデアより先に（または後に）同期されている間は、束ねる依頼を出さない。
+        if (candidate != null &&
+            action == 'link' &&
+            ((candidate.a == a ? candidate.hashA : candidate.hashB) != hashA ||
+                (candidate.a == b ? candidate.hashA : candidate.hashB) !=
+                    hashB)) {
+          throw StateError('似ているアイデアの一覧とアイデアの同期が揃っていません。再読込してから操作してください。');
+        }
         return 'idea-link/$key/$action/$hashA/$hashB';
       },
       (service, parsed, operation) =>
@@ -817,8 +848,8 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['seen'] is Map) {
         _seen = Map<String, dynamic>.from(value['seen'] as Map);
       }
-      if (value is Map) {
-        homeWidget = HomeWidgetSettings.fromJson(value['homeWidget']);
+      if (value is Map && value['homeWidget'] is Map) {
+        _homeWidgets = Map<String, dynamic>.from(value['homeWidget'] as Map);
       }
     } catch (_) {
       // 読めない記録は空として扱う。保存先の設定はrestoreで別に扱う。
@@ -842,8 +873,7 @@ class HubController extends ChangeNotifier {
 
   Map<String, Object?> _settingsBase(VaultLocation target) => {
     ...target.toJson(),
-    if (homeWidget != const HomeWidgetSettings())
-      'homeWidget': homeWidget.toJson(),
+    if (_homeWidgets.isNotEmpty) 'homeWidget': _homeWidgets,
   };
 
   /// 既読の記録を容量内に収めて設定を作る。古いVault→本文→古いプロジェクトの順に削る。
