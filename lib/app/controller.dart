@@ -545,8 +545,10 @@ class HubController extends ChangeNotifier {
     // 列挙後に届いた採用・停止を、別の走査でもう一度照合する。
     final confirmed = await access.readSnapshot(target);
     if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+    // 読取の注意の有無は、読み直した内容（parsed）でコピーする資料ごとに判断する。
+    // 確認の走査で注意が変わったときは、判断の前提が変わったので止める。
     if (!confirmed.recognized ||
-        confirmed.warnings.isNotEmpty ||
+        confirmed.warnings.join('\n') != fresh.warnings.join('\n') ||
         fresh.fingerprint != confirmed.fingerprint) {
       repository = HubRepository(confirmed);
       _changed();

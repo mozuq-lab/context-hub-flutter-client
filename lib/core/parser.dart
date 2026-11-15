@@ -64,6 +64,21 @@ String encodePacket(Map<String, dynamic> meta, String body) =>
 final inputIdPattern = RegExp(r'^IN-[0-9A-HJKMNP-TV-Z]{26}$');
 final projectIdPattern = RegExp(r'^[a-z0-9][a-z0-9-]{1,40}$');
 final requestIdPattern = RegExp(r'^REQ-[A-Za-z0-9]{32}$');
+/// 同期ソフト（Syncthing）が作る競合コピーか。本体と同じく通常の記録から外す。
+bool isConflictCopy(String path) => path.contains('.sync-conflict-');
+
+/// 端末の読取の注意のうち、どのファイルのことか分かるもの（symlinkの除外・読めないファイル）の
+/// パス。上限・深さ・フォルダーの中断など、ファイルに結び付けられない注意はnull。
+String? snapshotWarningPath(String warning) {
+  for (final prefix in const ['symlinkを除外: ', '読取できないファイル: ']) {
+    if (warning.startsWith(prefix)) {
+      final path = warning.substring(prefix.length);
+      return validPath(path) ? path : null;
+    }
+  }
+  return null;
+}
+
 bool validPath(String path) =>
     path.isNotEmpty &&
     !path.startsWith('/') &&

@@ -61,8 +61,14 @@ class PolicyReader {
               p.startsWith('90_system/knowledge-retirements/'));
   PolicyBundle read([String? projectId]) {
     try {
+      // 方針の正本（知識・承認・停止記録・方針の一覧）に関係しうる読取の注意があれば読まない。
       if (!snapshot.recognized ||
-          snapshot.warnings.isNotEmpty ||
+          snapshot.warnings.any((w) {
+            final path = snapshotWarningPath(w);
+            return path == null ||
+                _inventoryPath(path) ||
+                path.startsWith('90_system/policies/');
+          }) ||
           projectId != null && !projectIdPattern.hasMatch(projectId)) {
         throw const FormatException();
       }
