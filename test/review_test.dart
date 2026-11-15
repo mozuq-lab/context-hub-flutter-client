@@ -14,6 +14,13 @@ Map<String, dynamic> reviewFixture() =>
         as Map<String, dynamic>;
 Map<String, String> reviewFiles() =>
     Map<String, String>.from(reviewFixture()['files'] as Map);
+Map<String, String> nativeReviewFiles(Map<String, String> files) => {
+  for (final entry in files.entries)
+    if (!snapshotSkippedPaths.any(
+      (path) => entry.key == path || entry.key.startsWith('$path/'),
+    ))
+      entry.key: entry.value,
+};
 ReviewRepository review(Map<String, String> files) {
   final s = VaultSnapshot(files);
   return ReviewRepository(s, HubRepository(s).records.values);
@@ -36,6 +43,21 @@ void main() {
       r.history.where((i) => i.status == 'approved').single.reflected,
       isTrue,
     );
+  });
+  test('端末の読取除外後も同期済みのプロジェクト案を確認待ちに残す', () {
+    final r = review(nativeReviewFiles(reviewFiles()));
+    final project = r.items.singleWhere((i) => i.kind == 'project');
+    expect(project.status, 'pending');
+    expect(project.actionable, isTrue);
+    expect(r.pending.length, 4);
+  });
+  test('プロジェクトの確認情報が欠けている場合は操作を止める', () {
+    final files = nativeReviewFiles(reviewFiles());
+    final project = review(
+      reviewFiles(),
+    ).pending.singleWhere((i) => i.kind == 'project');
+    files.remove('90_system/project-confirmations/${project.id}.json');
+    expect(review(files).byId(project.id)!.status, 'unavailable');
   });
   test('依存欠損・変更・新しい訂正を操作可能とせず他の候補を残す', () {
     for (final mode in ['missing', 'changed', 'correction', 'decision']) {
@@ -132,7 +154,7 @@ void main() {
         final files = Map<String, String>.from(
           jsonDecode(await File(output).readAsString()) as Map,
         );
-        final repo = HubRepository(VaultSnapshot(files));
+        final repo = HubRepository(VaultSnapshot(nativeReviewFiles(files)));
         expect(repo.review.pending.length, 2);
         expect(
           repo.review.byId(c.id)!.status,
@@ -144,6 +166,15 @@ void main() {
           repo.intake.single.detail,
           contains(action == 'approve' ? '承認済み' : '却下済み'),
         );
+        if (kind == 'project' && action == 'approve') {
+          final candidate = repo.review.byId(c.id)!;
+          files.remove(
+            '90_system/project-approvals/materialized/${candidate.decisionId}.json',
+          );
+          final incomplete = review(nativeReviewFiles(files)).byId(c.id)!;
+          expect(incomplete.status, 'unavailable');
+          expect(incomplete.reflected, isFalse);
+        }
       });
     }
   }

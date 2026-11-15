@@ -13,6 +13,14 @@
 - Androidエミュレーターの実SAF選択で、永続URI権限・Input保存・rename/readback・再確認・未対応provider拒否を確認。
 - Mac release `.app` とAndroid release APKのビルド・通常起動・署名検証を確認。Macはarm64/macOS 12以降、ad-hoc署名でTeamIdentifierなし。Androidはcheckout専用の検証鍵によるAPK v2署名。
 
+## 確認待ちの同期判定（2026-11-15）
+
+- Flutter 3.41.5 / Dart 3.11.3と本体の固定commitで、静的解析の指摘なし、共通351テスト成功。
+- 端末と同じ読取除外を適用しても、同期済みのプロジェクト案を確認待ちに残し、採用・却下後の判断履歴を保持することを確認。確認情報や反映記録が実際に欠けている場合は、引き続き要確認として操作を止めます。
+- MacのSwift snapshot検査24項目成功。検査スクリプトの型付き定数の抽出も、実際の宣言に合わせました。
+- Macの実アプリで、専用の架空サンプルを使い、候補・出典の表示、取消、採用依頼、プロジェクト案の却下依頼、既存ファイルの保持を確認。
+- Mac release `.app`とAndroid release APKのビルド成功。Android実機での操作と、実Vault・実同期での再確認は未検証です。
+
 ## ふりかえりとプロジェクト状態（0.3.0以降の追加）
 
 - Linux上のFlutter 3.41.5で、静的解析の指摘なし、共通73テスト成功。

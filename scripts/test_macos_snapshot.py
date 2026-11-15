@@ -9,7 +9,7 @@ source = Path('macos/Runner/VaultBridge.swift').read_text()
 members = []
 for prefix in ['  private let fm ', '  private let folders ', '  private let rootFiles ',
                '  private let maxFile ', '  private let maxFiles ', '  private let maxEntries ',
-               '  private let maxTotal ', '  private let racyInterval ', '  private enum Failure:']:
+               '  private let maxTotal ', '  private let racyInterval:', '  private enum Failure:']:
     members.append(next(line for line in source.splitlines() if line.startswith(prefix)))
 for name in ['physical', 'identity', 'directory', 'read', 'syncDirectory', 'snapshot']:
     start = source.index('  private func ' + name + '(')
