@@ -1228,6 +1228,35 @@ class HubRepository {
       }
       children[target] = r;
     }
+    // 登録簿hashは、元メモごとに変わらないので1回だけ計算する。
+    String? registryCache;
+    String registryHash() {
+      final cached = registryCache;
+      if (cached != null) return cached;
+      final defs = projects.values.toList()
+        ..sort((a, b) => a.id.compareTo(b.id));
+      return registryCache = digest(
+        jsonEncode(
+          defs
+              .map(
+                (p) => {
+                  'id': p.id,
+                  'title': p.title,
+                  'aliases': [...p.aliases]..sort(),
+                  'keywords': [...p.keywords]..sort(),
+                  // 本体と同じく、休止・完了は登録簿hashでは進行中として扱う。
+                  'status': p.lifecycle == 'active' ? p.status : 'active',
+                },
+              )
+              .toList(),
+        ),
+      );
+    }
+
+    // ファイルのhashも、訂正の連なりごとに計算し直さない。
+    final fileHashes = <String, String>{};
+    String fileHash(String path) =>
+        fileHashes[path] ??= digest(snapshot.files[path]!);
     final roots = _inputs.values.where((r) => r.kind != 'correction').toList()
       ..sort((a, b) => (a.at?.compareTo(b.at ?? DateTime(0)) ?? 0));
     for (final root in roots) {
@@ -1257,10 +1286,7 @@ class HubRepository {
             receipt['evidence_hash'] !=
                 digest(
                   evidence
-                      .map(
-                        (r) =>
-                            '${r.sourceId}:${digest(snapshot.files[r.path]!)}',
-                      )
+                      .map((r) => '${r.sourceId}:${fileHash(r.path)}')
                       .join('\n'),
                 )) {
           _problem(chain[processedIndex].path);
@@ -1279,35 +1305,14 @@ class HubRepository {
           summary = organizedResult['summary'] as String;
         }
         var candidates = organizedResult['project_candidates'];
-        final defs = projects.values.toList()
-          ..sort((a, b) => a.id.compareTo(b.id));
-        final registry = digest(
-          jsonEncode(
-            defs
-                .map(
-                  (p) => {
-                    'id': p.id,
-                    'title': p.title,
-                    'aliases': [...p.aliases]..sort(),
-                    'keywords': [...p.keywords]..sort(),
-                    // 本体と同じく、休止・完了は登録簿hashでは進行中として扱う。
-                    'status': p.lifecycle == 'active' ? p.status : 'active',
-                  },
-                )
-                .toList(),
-          ),
-        );
+        final registry = registryHash();
         final evidence = chain
             .take(processedIndex + 1)
-            .map((r) => '${r.sourceId}:${digest(snapshot.files[r.path]!)}')
+            .map((r) => '${r.sourceId}:${fileHash(r.path)}')
             .join('\n');
+        final evidenceHash = digest(evidence);
         // 誤りとして外した項目のメモを本体が読み直していれば、その関連候補を使う。
-        final reread = _appliedReread(
-          root,
-          chain.last,
-          receipt,
-          digest(evidence),
-        );
+        final reread = _appliedReread(root, chain.last, receipt, evidenceHash);
         if (reread != null) {
           candidates = reread.candidates;
           // 本体のoverlayRereadと同じく、アイデアとして保存した入力と、読み直しでアイデアへ変わった入力は要約を変えない。
@@ -1318,13 +1323,13 @@ class HubRepository {
           }
         }
         final associationPath =
-            '90_system/associations/${root.sourceId}/${digest(evidence)}.$registry.json';
+            '90_system/associations/${root.sourceId}/$evidenceHash.$registry.json';
         if (snapshot.files.containsKey(associationPath)) {
           try {
             final association =
                 jsonDecode(snapshot.files[associationPath]!) as Map;
             if (association['input_id'] != root.sourceId ||
-                association['evidence_hash'] != digest(evidence) ||
+                association['evidence_hash'] != evidenceHash ||
                 association['registry_hash'] != registry) {
               throw const FormatException();
             }

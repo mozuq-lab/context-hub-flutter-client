@@ -98,6 +98,12 @@ class CaptureService {
   final VaultAccess access;
   final VaultLocation location;
   static final _queues = Expando<_CaptureQueue>();
+
+  /// 保存を確かめた（saved）journalの名前。journalはこのアプリだけが書き、書くときはここから
+  /// 外すので、一度検証したものは再読込のたびに読み直さない（journalは消さずに残るため、
+  /// 読み直すと保存の数だけネイティブ呼び出しが増える）。アプリを起動し直すと1回ずつ検証する。
+  static final _savedJournals = Expando<Set<String>>();
+  Set<String> get _saved => _savedJournals[access] ??= <String>{};
   static final _uuid = RegExp(
     r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$',
   );
@@ -151,6 +157,7 @@ class CaptureService {
           DateTime.tryParse(j['occurredAt'] as String) == null) {
         throw const FormatException();
       }
+      if (j['state'] == 'saved') _saved.add(name);
       return j;
     } catch (_) {
       // どの操作の記録かを示し、Vaultの受付状況で同じREQ IDを確かめられるようにする。
@@ -175,6 +182,7 @@ class CaptureService {
 
   Future<void> _checkJournals() async {
     for (final name in await _journalNames()) {
+      if (_saved.contains(name)) continue;
       await _readJournal(name);
     }
   }
@@ -193,6 +201,7 @@ class CaptureService {
       /* 不明な結果は再送しない。 */
     }
     j['state'] = state;
+    _saved.remove('${j['operationId']}.json');
     try {
       await access.writeState('${j['operationId']}.json', jsonEncode(j));
     } catch (_) {
@@ -656,6 +665,7 @@ class CaptureService {
       'state': 'prepared',
     };
     // 排他journal公開に失敗した場合、Inputへの書込へ進まない。
+    _saved.remove(name);
     await access.writeState(name, jsonEncode(j), exclusive: !incomplete);
     try {
       await access.writeRequest(location, requestId, raw);
@@ -683,6 +693,7 @@ class CaptureService {
   Future<List<CaptureResult>> pending() => _serial(() async {
     final results = <CaptureResult>[];
     for (final name in await _journalNames()) {
+      if (_saved.contains(name)) continue;
       final j = await _readJournal(name);
       if (j == null) continue;
       if (j['rootHash'] == digest(location.identity) && j['state'] != 'saved') {

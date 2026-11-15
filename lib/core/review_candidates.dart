@@ -168,6 +168,18 @@ class ReviewRepository {
         }
       }
       if (rows.length > 5000) throw const FormatException();
+      // 候補ごとに読み直さないよう、未整理のメモのmetaとファイルのhashは1回だけ求める。
+      // 読めないメモはnullとして残す（根拠のあるすべての候補を未同期扱いにする）。
+      final inbox = <Map<String, dynamic>?>[
+        for (final entry in snapshot.files.entries)
+          if (entry.key.startsWith('00_inbox/') && entry.key.endsWith('.md'))
+            _metaOf(entry.value),
+      ];
+      final hashes = <String, String?>{};
+      String? hashOf(String path) => hashes.putIfAbsent(path, () {
+        final actual = snapshot.files[path];
+        return actual == null ? null : digest(actual);
+      });
       final ids = <String>{};
       for (final row in rows) {
         try {
@@ -181,30 +193,24 @@ class ReviewRepository {
           }
           var valid = snapshot.recognized && snapshot.warnings.isEmpty;
           for (final entry in c.dependencies.entries) {
-            final actual = snapshot.files[entry.key];
-            if ((actual == null ? null : digest(actual)) != entry.value) {
-              valid = false;
-            }
+            if (hashOf(entry.key) != entry.value) valid = false;
           }
           // indexの生成後に到着した訂正も調べる。正本の最終判定はMiniが行う。
           final found = <String>{};
           var historyCorrection = false;
-          for (final entry in snapshot.files.entries.where(
-            (e) => e.key.startsWith('00_inbox/') && e.key.endsWith('.md'),
-          )) {
-            try {
-              final m = parseMarkdown(entry.value).meta;
-              if (c.inputIds.contains(m['id'])) found.add(m['id'] as String);
-              if (c.inputIds.contains(m['corrects_input_id']) &&
-                  !c.inputIds.contains(m['id'])) {
-                if (c.actionable) {
-                  valid = false;
-                } else if (['approved', 'rejected'].contains(c.status)) {
-                  historyCorrection = true;
-                }
-              }
-            } catch (_) {
+          for (final m in inbox) {
+            if (m == null) {
               if (c.inputIds.isNotEmpty) valid = false;
+              continue;
+            }
+            if (c.inputIds.contains(m['id'])) found.add(m['id'] as String);
+            if (c.inputIds.contains(m['corrects_input_id']) &&
+                !c.inputIds.contains(m['id'])) {
+              if (c.actionable) {
+                valid = false;
+              } else if (['approved', 'rejected'].contains(c.status)) {
+                historyCorrection = true;
+              }
             }
           }
           if (!found.containsAll(c.inputIds)) valid = false;
@@ -429,4 +435,13 @@ class ReviewRepository {
       items.where((i) => ['approved', 'rejected'].contains(i.status)).toList();
   ReviewCandidate? byId(String id) =>
       items.where((i) => i.id == id).firstOrNull;
+}
+
+/// 未整理のメモのmeta。読めなければnull。
+Map<String, dynamic>? _metaOf(String raw) {
+  try {
+    return parseMarkdown(raw).meta;
+  } catch (_) {
+    return null;
+  }
 }

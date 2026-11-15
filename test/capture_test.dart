@@ -202,6 +202,32 @@ void main() {
     );
     expect(access.writes, 2);
   });
+  test('保存を確かめたjournalは、再読込のたびに読み直さない', () async {
+    const ops = [
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333',
+    ];
+    for (final id in ops) {
+      expect(
+        (await service.save(CaptureDraft(operationId: id, text: 'メモ$id'))).saved,
+        isTrue,
+      );
+    }
+    final counting = CountingAccess(access);
+    final restarted = CaptureService(counting, location);
+    expect(await restarted.pending(), isEmpty);
+    expect(counting.reads, ops.length);
+    counting.reads = 0;
+    expect(await restarted.pending(), isEmpty);
+    expect(await CaptureService(counting, location).pending(), isEmpty);
+    expect(counting.reads, 0);
+    // 書き直したjournal（受付が消えて不明に戻った）は、また読む。
+    final journal = jsonDecode((await access.readState('${ops[0]}.json'))!);
+    await access.request(location, journal['requestId']).delete();
+    expect((await restarted.confirm(ops[0])).state, 'uncertain');
+    expect((await restarted.pending()).single.operationId, ops[0]);
+  });
   test('journalを先に書き、Input欠損でも新規書込をしない', () async {
     await service.save(draft);
     final journal = jsonDecode((await access.readState('$op.json'))!);
@@ -222,4 +248,17 @@ void main() {
     }
     expect(access.writes, 0);
   });
+}
+
+/// 状態ファイルの読み出し回数を数える（ネイティブ呼び出しの回数の代わり）。
+class CountingAccess extends TempAccess {
+  CountingAccess(TempAccess base) {
+    directory = base.directory;
+  }
+  int reads = 0;
+  @override
+  Future<String?> readState(String name) {
+    reads++;
+    return super.readState(name);
+  }
 }
