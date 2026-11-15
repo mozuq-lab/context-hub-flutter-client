@@ -54,6 +54,58 @@ void main() {
       );
     }
   });
+  test('手で変更された採用済み知識は、本体と同じくその知識だけを方針から外して読む', () async {
+    final dir = await Directory.systemTemp.createTemp('ctx-modified-knw-');
+    addTearDown(() => dir.delete(recursive: true));
+    final out = File('${dir.path}/out.json');
+    // 本体で、採用済みの共通方針のファイルを1行手で直してから方針を集約し直す。
+    const script = r'''
+import {mkdtemp,readFile,writeFile,readdir,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';import {join,resolve} from 'node:path';
+const core=resolve('vendor/context-hub/packages/core/dist/index.js');
+const {defaultConfig,Vault,rebuildDashboard,readPolicies,formatPolicies}=await import(core);
+async function filesAt(dir,prefix=''){const out={};for(const e of await readdir(dir,{withFileTypes:true})){if(e.name.startsWith('.'))continue;const p=prefix+e.name;if(e.isDirectory())Object.assign(out,await filesAt(join(dir,e.name),p+'/'));else out[p]=await readFile(join(dir,e.name),'utf8');}return out;}
+const fx=JSON.parse(await readFile('assets/scoped-policy.json','utf8'));
+const root=await mkdtemp(join(tmpdir(),'modknw-'));
+try{
+ const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
+ for(const[p,raw]of Object.entries(fx.files))await vault.write(p,raw);
+ const p=Object.keys(fx.files).find(p=>p.startsWith('30_knowledge/')&&fx.files[p].includes('共通の採用方針'));
+ await vault.write(p,fx.files[p].replace('共通の採用方針','共通の採用方針（手で直した）'));
+ await rebuildDashboard(config,{now:new Date('2026-11-02T00:00:00Z')});
+ const b=await readPolicies(config,'example'),c=await readPolicies(config);
+ await writeFile(process.argv[1],JSON.stringify({files:await filesAt(config.vaultPath),text:formatPolicies(b),common:formatPolicies(c),inactive:b.inactiveIds,modified:p}));
+}finally{await rm(root,{recursive:true,force:true});}
+''';
+    final result = await Process.run('node', [
+      '--input-type=module',
+      '-e',
+      script,
+      out.path,
+    ]);
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    final core = jsonDecode(await out.readAsString()) as Map<String, dynamic>;
+    final files = Map<String, String>.from(core['files'] as Map);
+    final id = (core['modified'] as String)
+        .split('/')
+        .last
+        .replaceAll('.md', '');
+    expect(core['inactive'], contains(id));
+    final bundle = PolicyReader(VaultSnapshot(files)).read('example');
+    expect(bundle.modified, [id]);
+    expect(bundle.text, core['text']);
+    expect(PolicyReader(VaultSnapshot(files)).read().text, core['common']);
+    expect(bundle.text, contains(modifiedKnowledgeWarning([id])));
+    expect(bundle.text, isNot(contains('共通の採用方針')));
+    expect(bundle.text, contains('対象固有の採用方針'));
+    // 外した知識のファイルをさらに書き換えても、集約し直すまでは依存のhashで止まる。
+    final p = core['modified'] as String;
+    files[p] = '${files[p]}さらに変更';
+    expect(
+      () => PolicyReader(VaultSnapshot(files)).read('example'),
+      throwsFormatException,
+    );
+  });
   test('採用先なしを拒否しscope付きREQと停止REQを先行journalで保存する', () async {
     final a = TempAccess();
     await a.init();
