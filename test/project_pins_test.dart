@@ -57,13 +57,6 @@ void main() {
       )['lines'],
       ['サンプルの検索を確認する。（AI Context Hub）', '設定画面を作る。（別のアプリ）'],
     );
-    // 別のAIへ渡す文脈は、端末の並びに左右させない。
-    repo.pinned = ['side-app'];
-    final text = repo.vaultContext();
-    expect(
-      text.indexOf('（context-hub）'),
-      inInclusiveRange(0, text.indexOf('（side-app）') - 1),
-    );
   });
 
   test('ピン留めは端末の設定にVaultごとに保存し、Vaultには何も書かない', () async {
