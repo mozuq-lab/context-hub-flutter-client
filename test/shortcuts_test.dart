@@ -80,11 +80,17 @@ void main() {
     // フォームを開いている間は、画面の移動キーで裏の画面を変えない。
     await press(tester, LogicalKeyboardKey.digit2);
     expect(appBarTitle(tester), 'ContextHub');
-    // 本文の入力欄にいるときに、保存キーで保存する（空の本文は送らない）。
-    await tester.tap(find.byKey(const Key('memo-text')));
-    await tester.pumpAndSettle();
+    // 開いた直後（入力欄を選ぶ前）から保存キーが届く。空の本文は送らない。
     await press(tester, LogicalKeyboardKey.enter);
     expect(find.text('本文は1〜8000文字で入力してください。'), findsOneWidget);
+    // 書きかけがあるときは、Escで閉じて捨てない。
+    await tester.enterText(find.byKey(const Key('memo-text')), '書きかけ');
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('思いつきを、そのまま。'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('memo-text')), '');
+    await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.text('思いつきを、そのまま。'), findsNothing);
@@ -148,6 +154,7 @@ void main() {
       expect(bar.menus.map((m) => (m as PlatformMenu).label), [
         'ContextHub',
         'ファイル',
+        '編集',
         '移動',
         'ウインドウ',
         'ヘルプ',
@@ -166,7 +173,7 @@ void main() {
         isNull,
       );
       // メニューから選んでも、ショートカットと同じ操作になる。
-      final move = bar.menus[2] as PlatformMenu;
+      final move = bar.menus[3] as PlatformMenu;
       move.menus.first.onSelected!();
       await tester.pumpAndSettle();
       expect(appBarTitle(tester), 'ContextHub');
@@ -177,10 +184,40 @@ void main() {
       final again = tester.widget<PlatformMenuBar>(
         find.byType(PlatformMenuBar),
       );
-      (again.menus[2] as PlatformMenu).menus[1].onSelected!();
+      (again.menus[3] as PlatformMenu).menus[1].onSelected!();
       await tester.pumpAndSettle();
       expect(find.text('思いつきを、そのまま。'), findsOneWidget);
       expect(sent, isNotEmpty);
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.menu,
+        null,
+      );
+    }
+  });
+
+  testWidgets('Macでアプリが背後に回って戻っても、入力欄のフォーカスを奪わない', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.menu,
+      (call) async => null,
+    );
+    try {
+      // デスクトップでは、アプリが背後に回るとフォーカスを最上位へ退避し、戻ったときに元へ戻す。
+      FocusManager.instance.listenToApplicationLifecycleChangesIfSupported();
+      await openSample(tester);
+      await press(tester, LogicalKeyboardKey.keyF);
+      final node = tester
+          .widget<TextField>(find.byKey(const Key('search-query')))
+          .focusNode!;
+      expect(node.hasFocus, isTrue);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pumpAndSettle();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(node.hasFocus, isTrue);
       expect(tester.takeException(), isNull);
     } finally {
       debugDefaultTargetPlatformOverride = null;

@@ -109,6 +109,38 @@ void main() {
         pending.intake.firstWhere((i) => i.id == saved.requestId).title,
         startsWith('「片付いたかも」の見送り: '),
       );
+      // Miniが受け付けても、NOWの同期が届くまでは反映待ちとして扱う。
+      final accepted = HubRepository(
+        fixture({
+          ...files,
+          'Input/${saved.requestId}.md': raw,
+          '90_system/intake/${saved.requestId}.json': jsonEncode({
+            'schema_version': 1,
+            'request_id': saved.requestId,
+            'request_hash': digest(raw),
+            'path': 'Input/${saved.requestId}.md',
+            'operation': 'item-hint-dismiss',
+            'status': 'accepted',
+            'received_at': '2026-11-15T00:00:00.000Z',
+            'result': {
+              'projectId': projectId,
+              'itemKey': item.key,
+              'hintInputId': hint.inputId,
+              'dismissalId': 'HDM-01M7AAAAAAAAAAAAAAAAAAAAAA',
+              'deduped': false,
+            },
+          }),
+        }),
+      );
+      expect(accepted.warnings, isEmpty);
+      expect(
+        accepted.hintDismissRequestIdFor(item.key, hint.inputId),
+        saved.requestId,
+      );
+      expect(
+        accepted.intake.firstWhere((i) => i.id == saved.requestId).detail,
+        'Mini受領済み。NOWの同期を待っています。',
+      );
       final fixtureFile = File('${access.directory.path}/with-hint.json')
         ..writeAsStringSync(jsonEncode(files));
       final synced = HubRepository(

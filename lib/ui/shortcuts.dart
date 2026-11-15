@@ -13,6 +13,8 @@ SingleActivator primaryKey(LogicalKeyboardKey key, {bool shift = false}) =>
       meta: usesCommandKey,
       control: !usesCommandKey,
       shift: shift,
+      // 押し続けても繰り返さない（文脈のコピーなどを重ねて実行しない）。
+      includeRepeats: false,
     );
 
 /// 一覧に出すキーの表記。
@@ -112,7 +114,7 @@ Future<void> showKeyboardHelp(BuildContext context) => showDialog<void>(
         shortcutPages.map((p) => p.$2).join('・'),
       ),
       (keyLabel(saveFormActivator), 'メモ・訂正のフォームで保存'),
-      ('Esc', 'フォーム・確認を閉じる'),
+      ('Esc', 'メモ・訂正のフォームを閉じる（書きかけがないとき）'),
       (keyLabel(HubCommand.keyboardHelp.activator), 'この一覧'),
     ];
     return AlertDialog(

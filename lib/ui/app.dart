@@ -66,11 +66,18 @@ class _HubShellState extends State<HubShell> {
 
   /// 入力欄が閉じたり画面が変わったりしてフォーカスがこの画面のルートへ戻ったときだけ、ショートカットが届くよう戻す。
   /// フォームや確認（別のルート）を開いている間は奪わない。
+  /// アプリが背後に回ったとき（フォーカスが最上位へ移る）は触らず、OSが元の入力欄へ戻すのに任せる。
   void keepFocus() {
-    if (!mounted || shellFocus.hasFocus || !shellFocus.canRequestFocus) return;
-    final primary = FocusManager.instance.primaryFocus;
-    if (primary == null ||
-        (primary is FocusScopeNode && shellFocus.ancestors.contains(primary))) {
+    if (!mounted ||
+        shellFocus.hasFocus ||
+        !shellFocus.canRequestFocus ||
+        !idle) {
+      return;
+    }
+    final scope = shellFocus.enclosingScope;
+    if (scope != null &&
+        scope != FocusManager.instance.rootScope &&
+        FocusManager.instance.primaryFocus == scope) {
       shellFocus.requestFocus();
     }
   }
@@ -141,6 +148,20 @@ class _HubShellState extends State<HubShell> {
         PlatformProvidedMenuItem(type: type);
     bool hasMenu(PlatformProvidedMenuItemType type) =>
         PlatformProvidedMenuItem.hasMenu(type);
+    // 入力欄などフォーカスのある部品へ、標準の編集操作をそのまま渡す。
+    PlatformMenuItem edit(
+      String label,
+      LogicalKeyboardKey key,
+      Intent intent, {
+      bool shift = false,
+    }) => PlatformMenuItem(
+      label: label,
+      shortcut: primaryKey(key, shift: shift),
+      onSelected: () {
+        final target = FocusManager.instance.primaryFocus?.context;
+        if (target != null) Actions.maybeInvoke(target, intent);
+      },
+    );
     return [
       PlatformMenu(
         label: 'ContextHub',
@@ -155,6 +176,10 @@ class _HubShellState extends State<HubShell> {
               ),
             ],
           ),
+          if (hasMenu(PlatformProvidedMenuItemType.servicesSubmenu))
+            PlatformMenuItemGroup(
+              members: [provided(PlatformProvidedMenuItemType.servicesSubmenu)],
+            ),
           PlatformMenuItemGroup(
             members: [
               for (final type in [
@@ -181,7 +206,57 @@ class _HubShellState extends State<HubShell> {
           PlatformMenuItemGroup(
             members: [
               item(HubCommand.reload, canReload),
-              item(HubCommand.copyContext, has && openProject != null),
+              item(
+                HubCommand.copyContext,
+                has && openProject != null && !c.loading,
+              ),
+            ],
+          ),
+        ],
+      ),
+      // 独自のメニューバーは標準の「編集」を置き換えるため、入力欄の編集操作を同じキーで並べ直す。
+      PlatformMenu(
+        label: '編集',
+        menus: [
+          PlatformMenuItemGroup(
+            members: [
+              edit(
+                '取り消す',
+                LogicalKeyboardKey.keyZ,
+                const UndoTextIntent(SelectionChangedCause.keyboard),
+              ),
+              edit(
+                'やり直す',
+                LogicalKeyboardKey.keyZ,
+                const RedoTextIntent(SelectionChangedCause.keyboard),
+                shift: true,
+              ),
+            ],
+          ),
+          PlatformMenuItemGroup(
+            members: [
+              edit(
+                'カット',
+                LogicalKeyboardKey.keyX,
+                const CopySelectionTextIntent.cut(
+                  SelectionChangedCause.keyboard,
+                ),
+              ),
+              edit(
+                'コピー',
+                LogicalKeyboardKey.keyC,
+                CopySelectionTextIntent.copy,
+              ),
+              edit(
+                'ペースト',
+                LogicalKeyboardKey.keyV,
+                const PasteTextIntent(SelectionChangedCause.keyboard),
+              ),
+              edit(
+                'すべてを選択',
+                LogicalKeyboardKey.keyA,
+                const SelectAllTextIntent(SelectionChangedCause.keyboard),
+              ),
             ],
           ),
         ],
@@ -238,7 +313,12 @@ class _HubShellState extends State<HubShell> {
             },
           ),
         },
-        child: Focus(focusNode: shellFocus, autofocus: true, child: child),
+        child: Focus(
+          focusNode: shellFocus,
+          autofocus: true,
+          skipTraversal: true,
+          child: child,
+        ),
       ),
     );
     return defaultTargetPlatform == TargetPlatform.macOS

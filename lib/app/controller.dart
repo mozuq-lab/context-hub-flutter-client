@@ -654,6 +654,9 @@ class HubController extends ChangeNotifier {
             !found.hints.any((h) => h.inputId == inputId)) {
           throw StateError('NOWが更新されています。表示を確認してから操作してください。');
         }
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目は完了・解決を報告済みです。受付状況を確認してください。');
+        }
         if (parsed.hintDismissRequestIdFor(itemKey, inputId) != null) {
           throw StateError('この候補は見送り済みです。受付状況を確認してください。');
         }

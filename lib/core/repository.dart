@@ -325,6 +325,8 @@ class HubRepository {
                   (h['quote'] as String).isEmpty) {
                 throw const FormatException();
               }
+              // 同じメモからの候補は1件だけにする（本体は重ねて書かない）。
+              if (hints.any((x) => x.inputId == h['input_id'])) continue;
               hints.add(
                 NowItemHint(
                   inputId: h['input_id'] as String,
