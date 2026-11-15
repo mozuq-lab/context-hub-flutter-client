@@ -48,6 +48,8 @@ class VaultBridge(
         const val MAX_TOTAL = 64L * 1_048_576
         /** 秘密の暗号化に使うAndroid Keystoreの鍵の名前。鍵は端末の外へ取り出せない。 */
         const val SECRET_ALIAS = "context-hub-secrets"
+        /** アプリを閉じている間の確認（画面なし）で使える操作。読むことと通知だけで、書く操作と秘密の読取は受け付けない。 */
+        val BACKGROUND_METHODS = setOf("readState", "readSnapshot", "showAttention", "clearAttention", "backgroundDone")
     }
     private val resolver = context.contentResolver
     private val executor = Executors.newSingleThreadExecutor()
@@ -70,7 +72,9 @@ class VaultBridge(
     init {
         channel.setMethodCallHandler { call, result ->
             val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any>()
-            if (call.method == "pickVault") {
+            if (activity == null && call.method !in BACKGROUND_METHODS) {
+                fail(result)
+            } else if (call.method == "pickVault") {
                 if (picker != null || activity == null) { fail(result); return@setMethodCallHandler }
                 picker = result
                 try {
@@ -101,8 +105,7 @@ class VaultBridge(
                         AttentionCheck.cancel(app)
                         result.success(false)
                     } else if (AttentionCheck.allowed(app)) {
-                        AttentionCheck.schedule(app)
-                        result.success(true)
+                        result.success(AttentionCheck.schedule(app))
                     } else {
                         // 許可がない間は、通知できない確認を続けない。
                         AttentionCheck.cancel(app)
@@ -121,7 +124,10 @@ class VaultBridge(
             } else if (call.method == "showAttention") {
                 // 件数と種類だけの短い文を通知に出す。Vaultには触れない。
                 try {
-                    AttentionCheck.show(context.applicationContext, args["key"] as String, args["title"] as String, args["text"] as String)
+                    // 確認の途中でアプリの画面が開いたら、アプリが件数を出すので通知しない。
+                    if (activity != null || !MainActivity.visible) {
+                        AttentionCheck.show(context.applicationContext, args["key"] as String, args["title"] as String, args["text"] as String)
+                    }
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
             } else if (call.method == "clearAttention") {
@@ -154,9 +160,7 @@ class VaultBridge(
         permission = null
         try {
             val app = context.applicationContext
-            val allowed = AttentionCheck.allowed(app)
-            if (allowed) AttentionCheck.schedule(app)
-            result.success(allowed)
+            result.success(AttentionCheck.allowed(app) && AttentionCheck.schedule(app))
         } catch (_: Exception) { fail(result) }
         return true
     }

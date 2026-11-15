@@ -40,20 +40,26 @@ List<AttentionItem> attentionItems(HubRepository repo) {
       if (repo.draftRequestIdFor(d.id) != null) continue;
       items.add(AttentionItem('draft', d.id, 'project:${p.id}'));
     }
-    final conflict = p.nowConflict;
-    if (conflict != null && repo.conflictRequestIdFor(p.id) == null) {
-      // 手で書き換え直すとhashが変わり、新しい判断待ちとして扱う。
-      items.add(
-        AttentionItem(
-          'conflict',
-          '${p.id}:${conflict.nowHash}',
-          'project:${p.id}',
-        ),
-      );
+    if (p.nowConflict != null && repo.conflictRequestIdFor(p.id) == null) {
+      // 止まっている間に手で書き換え直しても、同じ判断待ちとして扱う（知らせ直さない）。
+      items.add(AttentionItem('conflict', p.id, 'project:${p.id}'));
     }
   }
   return items;
 }
+
+/// 判断待ちが欠けずに読めているか。
+///
+/// 同期の途中や読取の失敗では、候補・下書き・NOWが一時的に見えなくなる。
+/// そのときに「片付いた」と扱うと、同期が済んだ後で同じものを新着として知らせ直してしまう。
+bool attentionComplete(HubRepository repo) =>
+    repo.snapshot.recognized &&
+    repo.warnings.isEmpty &&
+    repo.review.warnings.isEmpty &&
+    // 一覧では判断できる候補が、この端末では根拠の未同期などで操作できなくなっていないか。
+    !repo.review.items.any(
+      (c) => c.status == 'unavailable' && c.data['status'] != 'unavailable',
+    );
 
 /// 端末に残す鍵の上限。超える分は覚えず、新着として扱わない。
 const attentionMaxKeys = 400;
@@ -93,7 +99,7 @@ class AttentionState {
   ///
   /// 初めてのVaultでは、いまあるものをすべて既読にする（初回にすべてを新着にしない）。
   /// [visible]の画面にあるものは見たものとして既読にする。
-  /// [prune]がfalse（読取が途中で終わったなど）のときは、見つからない鍵を消さない。
+  /// [prune]がfalse（判断待ちが欠けて見えているかもしれない）のときは、見つからない鍵を消さない。
   AttentionState sync(
     String identity,
     List<AttentionItem> items, {
@@ -101,24 +107,33 @@ class AttentionState {
     bool prune = true,
   }) {
     final first = this.identity != identity;
-    final next = <String, bool>{if (!first && !prune) ...keys};
+    final current = <String, bool>{};
     for (final item in items) {
       final before = first ? true : seen(item);
-      next[item.key] = before || item.page == visible;
+      current[item.key] = before || item.page == visible;
     }
-    if (next.length <= attentionMaxKeys) {
+    if (current.length > attentionMaxKeys) {
+      final kept = current.keys.toList()..sort();
       return AttentionState(
         identity: identity,
-        keys: next,
-        // 覚えきれなかった後は、いまの判断待ちを覚え直せたときだけ解除する。
-        full: !first && full && !prune,
+        keys: {for (final k in kept.take(attentionMaxKeys)) k: current[k]!},
+        full: true,
       );
     }
-    final kept = next.keys.toList()..sort();
+    // いま見つからない鍵は、古い順に、上限に収まる分だけ残す。
+    final stale = first || prune
+        ? const <String>[]
+        : keys.keys.where((k) => !current.containsKey(k)).toList();
+    final room = attentionMaxKeys - current.length;
     return AttentionState(
       identity: identity,
-      keys: {for (final k in kept.take(attentionMaxKeys)) k: next[k]!},
-      full: true,
+      keys: {
+        for (final k in stale.skip(
+          stale.length > room ? stale.length - room : 0,
+        ))
+          k: keys[k]!,
+        ...current,
+      },
     );
   }
 

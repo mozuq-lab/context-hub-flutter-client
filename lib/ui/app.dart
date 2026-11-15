@@ -108,6 +108,13 @@ class _HubShellState extends State<HubShell> {
       );
       return;
     }
+    if (action == 'attention' &&
+        DateTime.now().difference(c.repository!.snapshot.loadedAt) >
+            const Duration(seconds: 10)) {
+      // アプリを開いたままだった場合は、通知のもとになった同期済みの内容を読み込んでから開く。
+      await c.reload();
+      if (!mounted) return;
+    }
     if (action == 'next' || action == 'attention') {
       // 記録の詳細などを開いていたら閉じて、次の一手の一覧（通知からは、増えた判断待ちを判断できる画面）へ戻る。
       navigator.popUntil((route) => route.isFirst);
@@ -904,7 +911,9 @@ Future<void> showAttentionSettings(
   HubController c,
 ) async {
   var enabled = c.attentionNotify, busy = false;
-  String? problem;
+  String? problem = c.attentionNotify && c.attentionNotifyBlocked
+      ? '端末で通知が許可されていないため、いまは通知されません。端末の設定でContextHub Flutterの通知を許可してから、アプリを開き直してください。'
+      : null;
   await showDialog<void>(
     context: context,
     builder: (context) => StatefulBuilder(

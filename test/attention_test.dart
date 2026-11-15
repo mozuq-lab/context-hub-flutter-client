@@ -43,6 +43,9 @@ class AttentionAccess extends MemoryUIAccess {
   int cleared = 0, snapshots = 0, finished = 0;
   bool granted = true;
   String? action;
+
+  /// 読み込んだ時刻。nullなら今。
+  DateTime? loadedAt;
   void Function()? onAction;
   @override
   void listenLaunchActions(void Function() onAction) =>
@@ -52,10 +55,14 @@ class AttentionAccess extends MemoryUIAccess {
   @override
   Future<VaultSnapshot> readSnapshot(VaultLocation location) async {
     snapshots++;
-    return VaultSnapshot({
-      ...current.files,
-      for (final e in requests.entries) 'Input/${e.key}.md': e.value,
-    }, warnings: current.warnings);
+    return VaultSnapshot(
+      {
+        ...current.files,
+        for (final e in requests.entries) 'Input/${e.key}.md': e.value,
+      },
+      warnings: current.warnings,
+      loadedAt: loadedAt,
+    );
   }
 
   @override
@@ -122,18 +129,46 @@ void main() {
       jsonEncode(items.map((i) => i.key).toList()),
       isNot(contains('CAN-')),
     );
-    // 手で書き換え直すと、新しい判断待ちとして扱う。
+    // 止まっている間に手で書き換え直しても、同じ判断待ちとして扱う（知らせ直さない）。
     final edited = withConflict(withDraft(baseFiles()));
     edited[nowPath] = edited[nowPath]!.replaceFirst('手で直した', 'もう一度直した');
     final again = attentionItems(HubRepository(fixture(edited)));
+    expect(again.map((i) => i.key), items.map((i) => i.key));
+  });
+
+  test('同期の途中や読取の失敗で判断待ちが欠けて見えるときを見分ける', () {
+    bool complete(Map<String, String> files, {bool recognized = true}) =>
+        attentionComplete(
+          HubRepository(VaultSnapshot(files, recognized: recognized)),
+        );
+    expect(complete(baseFiles()), isTrue);
+    expect(complete(withConflict(withDraft(baseFiles()))), isTrue);
+    // 確認待ち一覧がまだ届いていない。
     expect(
-      again.firstWhere((i) => i.kind == 'conflict').key,
-      isNot(items.firstWhere((i) => i.kind == 'conflict').key),
+      complete({...baseFiles()}..remove('90_system/review/index.json')),
+      isFalse,
     );
-    expect(
-      again.firstWhere((i) => i.kind == 'draft').key,
-      items.firstWhere((i) => i.kind == 'draft').key,
-    );
+    // 候補の根拠がまだ届いていない・変わっている。
+    final candidate = HubRepository(fixture(baseFiles())).review.pending.first;
+    expect(complete({...baseFiles(), candidate.path: '変更'}), isFalse);
+    // 読めない記録がある。
+    expect(complete({...baseFiles(), '00_inbox/broken.md': '壊れた記録'}), isFalse);
+  });
+
+  test('見つからない鍵を残すときは上限に収め、古いものから捨てる', () {
+    AttentionItem item(int i) => AttentionItem('draft', 'GDR-$i', project);
+    var state = const AttentionState().sync('vault-1', [item(0)]);
+    // 読取に注意が出続けるVaultでは消さずに残るが、上限を超えて覚えきれない状態にはしない。
+    for (var i = 1; i < attentionMaxKeys + 30; i++) {
+      state = state.sync('vault-1', [item(i)], prune: false);
+    }
+    expect(state.keys, hasLength(attentionMaxKeys));
+    expect(state.full, isFalse);
+    expect(state.known(item(0)), isFalse);
+    expect(state.known(item(attentionMaxKeys + 29)), isTrue);
+    expect(state.known(item(attentionMaxKeys + 28)), isTrue);
+    // 新しく届いたものは、これまでどおり新着・通知の対象になる。
+    expect(state.unknown([item(9999)]), hasLength(1));
   });
 
   test('初めてのVaultではすべて既読にし、後から増えた分だけを新着・通知の対象にする', () {
@@ -269,10 +304,12 @@ void main() {
       expect(await c.setAttentionNotify(true), isTrue);
       expect(access.toggles.last, (enabled: true, request: true));
       expect(settingsOf(access)['attention']['notify'], isTrue);
-      // 増えていなければ通知しない。
+      // 増えていなければ通知せず、出したままの通知があれば消す。
+      final none = access.cleared;
       expect(await runAttentionCheck(access), isFalse);
       expect(access.snapshots, 1);
       expect(access.notices, isEmpty);
+      expect(access.cleared, none + 1);
       // 下書きが同期されてきたら通知する。本文は出さない。
       access.current = fixture(withDraft(baseFiles()));
       final before = access.states['settings.json'];
@@ -306,6 +343,40 @@ void main() {
       access.current = fixture(baseFiles());
       expect(await runAttentionCheck(access), isFalse);
       expect(access.notices, isEmpty);
+    });
+
+    test('同期の途中で候補が見えなくなっても、同期が済んだ後に新着として知らせ直さない', () async {
+      await c.setAttentionNotify(true);
+      final candidate = c.review!.pending.first;
+      for (final partial in [
+        // 確認待ち一覧がまだ届いていない。
+        {...baseFiles()}..remove('90_system/review/index.json'),
+        // 候補の根拠がまだ届いていない。
+        {...baseFiles(), candidate.path: '変更'},
+      ]) {
+        access.current = fixture(partial);
+        await c.reload();
+        expect(c.attentionCount('review'), lessThan(4));
+        access.current = fixture(baseFiles());
+        expect(await runAttentionCheck(access), isFalse);
+        expect(access.notices, isEmpty);
+        await c.reload();
+        expect(c.attentionCount('review'), 4);
+        expect(c.attentionFresh('review'), 0);
+      }
+    });
+
+    test('確認の読取が途中で終わったときは通知しない', () async {
+      await c.setAttentionNotify(true);
+      access.current = VaultSnapshot(
+        withDraft(baseFiles()),
+        warnings: const ['読取できないファイル: 90_system/git-drafts/x.json'],
+      );
+      final cleared = access.cleared;
+      expect(await runAttentionCheck(access), isFalse);
+      expect(access.notices, isEmpty);
+      // 読み切れていないので、出ている通知も消さない。
+      expect(access.cleared, cleared);
     });
 
     test('設定が壊れている・アプリでまだ開いていないVaultでは通知しない', () async {
@@ -348,6 +419,18 @@ void main() {
       // 再読込のたびには登録し直さない。
       await next.reload();
       expect(access.toggles, hasLength(1));
+      expect(next.attentionNotifyBlocked, isFalse);
+      // 端末の設定で通知を止められていたら、設定は残したまま、止まっていることを示す。
+      access.granted = false;
+      final blocked = HubController(
+        access,
+        sampleLoader: () async => baseFiles(),
+      );
+      addTearDown(blocked.dispose);
+      await blocked.restore();
+      await Future<void>.delayed(Duration.zero);
+      expect(blocked.attentionNotify, isTrue);
+      expect(blocked.attentionNotifyBlocked, isTrue);
     });
   });
 
@@ -403,6 +486,55 @@ void main() {
       await c.reload();
       expect(c.attentionCount(project), 0);
       expect(access.badges.last, 4);
+    });
+
+    test('確認のための読み直しで記録が入れ替わっても、件数を数え直す', () async {
+      access.current = fixture(withDraft(baseFiles()));
+      // 採用の確認は読み直して変更に気づき、表示を更新して止まる。
+      await expectLater(
+        c.prepareReview(c.review!.pending.first.id),
+        throwsStateError,
+      );
+      expect(c.repository!.projects['context-hub']!.drafts, hasLength(1));
+      expect(c.attentionCount(project), 1);
+      expect(c.attentionFresh(project), 1);
+      expect(access.badges.last, 5);
+    });
+
+    test('通知から開く画面は、直近に届いた判断待ちを先にする', () async {
+      // まだ開いていない候補が残っている。
+      final files = baseFiles();
+      final index =
+          jsonDecode(files['90_system/review/index.json']!)
+              as Map<String, dynamic>;
+      final items = index['items'] as List;
+      final held = items.removeAt(
+        items.indexWhere((i) => (i as Map)['status'] == 'pending'),
+      );
+      access.current = fixture({
+        ...files,
+        '90_system/review/index.json': jsonEncode(index),
+      });
+      await c.reload();
+      expect(c.attentionCount('review'), 3);
+      items.add(held);
+      access.current = fixture({
+        ...files,
+        '90_system/review/index.json': jsonEncode(index),
+      });
+      await c.reload();
+      expect(c.attentionFresh('review'), 1);
+      expect(c.attentionLanding, 'review');
+      // その後で下書きが届いたら、下書きのあるプロジェクトを開く。
+      access.current = fixture({
+        ...withDraft(files),
+        '90_system/review/index.json': jsonEncode(index),
+      });
+      await c.reload();
+      expect(c.attentionFresh('review'), 1);
+      expect(c.attentionLanding, project);
+      await c.showPage(project);
+      expect(c.attentionLanding, 'review');
     });
 
     test('この端末から採用・却下を依頼した候補は、反映を待つ間は数えない', () async {
@@ -498,9 +630,12 @@ void main() {
     await c.reload();
     expect(c.attentionLanding, project);
     access.action = 'attention';
+    final loaded = access.snapshots;
     await tester.pumpWidget(ContextHubApp(controller: c));
     await tester.pumpAndSettle();
     expect(find.text('作業記録の下書き'), findsWidgets);
+    // 起動時の読込（1回）で読み込んだばかりなので、通知のためには読み直さない。
+    expect(access.snapshots, loaded + 1);
     expect(c.attentionFresh(project), 0);
     // 新しい判断待ちがなければ、確認待ちの一覧を開く。
     expect(c.attentionLanding, 'review');
@@ -508,6 +643,19 @@ void main() {
     access.onAction!();
     await tester.pumpAndSettle();
     expect(find.widgetWithText(AppBar, '確認待ち'), findsOneWidget);
+    // アプリを開いたままだった場合は、同期済みの内容を読み込んでから、届いた判断待ちの画面を開く。
+    access.loadedAt = DateTime.now().subtract(const Duration(minutes: 5));
+    await tester.tap(find.byTooltip('再読込'));
+    await tester.pumpAndSettle();
+    access.current = fixture(withConflict(withDraft(baseFiles())));
+    final reads = access.snapshots;
+    access.action = 'attention';
+    access.onAction!();
+    await tester.pumpAndSettle();
+    expect(access.snapshots, reads + 1);
+    expect(find.byKey(const Key('now-conflict')), findsOneWidget);
+    expect(c.attentionCount(project), 2);
+    expect(c.attentionFresh(project), 0);
     // Macのドックの件数は出さない。
     expect(access.badges, isEmpty);
     await tester.tap(find.byKey(const Key('attention-settings')));

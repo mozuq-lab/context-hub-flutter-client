@@ -81,6 +81,13 @@ class HubController extends ChangeNotifier {
   bool _disposed = false;
   void _changed() {
     if (!_disposed) {
+      // 確認のための読み直しなどで記録が入れ替わったら、判断待ちの件数も作り直す。
+      if (_seenLoaded &&
+          repository != null &&
+          !identical(repository, _attentionFor) &&
+          _syncAttention()) {
+        _writeSettings().catchError((Object _) {});
+      }
       _syncHomeWidget();
       _syncDockBadge();
       notifyListeners();
@@ -141,9 +148,18 @@ class HubController extends ChangeNotifier {
   bool attentionNotify = false;
   bool get attentionNotificationsSupported =>
       access.attentionNotificationsSupported;
+
+  /// 設定は有効だが、端末で通知が許可されていない（起動時に確かめた結果）。
+  bool attentionNotifyBlocked = false;
   String _visiblePage = 'home';
   int? _dockBadgeSent;
   bool _attentionScheduleChecked = false;
+
+  /// 判断待ちを数えた記録。記録が入れ替わったら数え直す。
+  HubRepository? _attentionFor;
+
+  /// 直近に届いた（それまでアプリで出していなかった）判断待ちの鍵。通知から開く画面を決める。
+  Set<String> _attentionArrived = const {};
 
   /// [page]で判断できる判断待ちの件数。
   int attentionCount(String page) =>
@@ -153,20 +169,39 @@ class HubController extends ChangeNotifier {
   int attentionFresh(String page) =>
       attention.where((i) => i.page == page && !_attention.seen(i)).length;
 
-  /// 通知から開く画面。まだ見ていない判断待ちを判断できる画面で、なければ確認待ちの一覧。
-  String get attentionLanding =>
-      attention.where((i) => !_attention.seen(i)).firstOrNull?.page ?? 'review';
+  /// 通知から開く画面。直近に届いた判断待ち（なければ、まだ見ていない判断待ち）を判断できる画面で、
+  /// どちらもなければ確認待ちの一覧。
+  String get attentionLanding {
+    final fresh = attention.where((i) => !_attention.seen(i)).toList();
+    return fresh
+            .where((i) => _attentionArrived.contains(i.key))
+            .firstOrNull
+            ?.page ??
+        fresh.firstOrNull?.page ??
+        'review';
+  }
 
   /// 読み込んだ判断待ちを既読の記録へ反映する。記録が変わったらtrue（設定の保存が要る）。
   bool _syncAttention() {
     final repo = repository, target = location;
     if (repo == null || target == null) return false;
+    _attentionFor = repo;
+    var complete = false;
     try {
       attention = attentionItems(repo);
+      complete = attentionComplete(repo);
     } catch (_) {
       // 件数を作れなくても、閲覧と操作は続ける。
       attention = const [];
       return false;
+    }
+    if (_attention.identity == target.identity) {
+      final arrived = _attention.unknown(attention);
+      if (arrived.isNotEmpty) {
+        _attentionArrived = {for (final i in arrived) i.key};
+      }
+    } else {
+      _attentionArrived = const {};
     }
     // アプリで件数を出したので、端末に出ている通知は消す。失敗しても操作は続ける。
     if (access.attentionNotificationsSupported) {
@@ -176,8 +211,8 @@ class HubController extends ChangeNotifier {
       target.identity,
       attention,
       visible: _visiblePage,
-      // 読取が途中で終わったときは候補が欠けて見えるため、見つからない記録を消さない。
-      prune: repo.snapshot.warnings.isEmpty,
+      // 同期の途中や読取の失敗で判断待ちが欠けて見えるときは、見つからない記録を消さない。
+      prune: complete,
     );
     if (next == _attention) return false;
     _attention = next;
@@ -219,6 +254,7 @@ class HubController extends ChangeNotifier {
     }
     if (!enabled) await access.setAttentionNotifications(enabled: false);
     attentionNotify = enabled;
+    attentionNotifyBlocked = false;
     await _writeSettings();
     _changed();
     return true;
@@ -229,9 +265,15 @@ class HubController extends ChangeNotifier {
     if (_attentionScheduleChecked) return;
     _attentionScheduleChecked = true;
     if (!attentionNotify || !access.attentionNotificationsSupported) return;
-    access.setAttentionNotifications(enabled: true).catchError((Object _) {
-      return false;
-    });
+    access
+        .setAttentionNotifications(enabled: true)
+        .then((granted) {
+          if (granted || _disposed || !attentionNotify) return;
+          // 端末の設定で通知を止められている。設定の画面で知らせる。
+          attentionNotifyBlocked = true;
+          notifyListeners();
+        })
+        .catchError((Object _) {});
   }
 
   @override

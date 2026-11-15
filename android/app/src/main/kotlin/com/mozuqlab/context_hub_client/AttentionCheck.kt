@@ -34,22 +34,26 @@ object AttentionCheck {
     /** 確認の間隔。端末の都合で遅れることがある。 */
     private const val PERIOD_MS = 4 * 60 * 60 * 1000L
 
-    /** 端末でこのアプリの通知が許可されているか。 */
+    /** 端末でこのアプリの通知（と、確認待ちのお知らせの種類）が許可されているか。 */
     fun allowed(context: Context): Boolean {
         if (Build.VERSION.SDK_INT >= 33 &&
             context.checkSelfPermission(PERMISSION) != PackageManager.PERMISSION_GRANTED) return false
         val manager = context.getSystemService(NotificationManager::class.java) ?: return false
-        return manager.areNotificationsEnabled()
+        if (!manager.areNotificationsEnabled()) return false
+        // 端末の設定で、このお知らせの種類だけを止めている場合。まだ一度も通知していなければ種類はない。
+        if (Build.VERSION.SDK_INT >= 26 &&
+            manager.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) return false
+        return true
     }
 
-    /** 数時間おきの確認を登録する。登録済みなら間隔を数え直さない。端末を再起動すると消える。 */
-    fun schedule(context: Context) {
-        val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
-        if (scheduler.getPendingJob(JOB_ID) != null) return
+    /** 数時間おきの確認を登録する。登録済みなら間隔を数え直さない。端末を再起動すると消える。登録できたらtrue。 */
+    fun schedule(context: Context): Boolean {
+        val scheduler = context.getSystemService(JobScheduler::class.java) ?: return false
+        if (scheduler.getPendingJob(JOB_ID) != null) return true
         val job = JobInfo.Builder(JOB_ID, ComponentName(context, AttentionJobService::class.java))
             .setPeriodic(PERIOD_MS)
         if (Build.VERSION.SDK_INT >= 26) job.setRequiresBatteryNotLow(true)
-        scheduler.schedule(job.build())
+        return scheduler.schedule(job.build()) == JobScheduler.RESULT_SUCCESS
     }
 
     /** 確認の登録と、出ている通知を消す。 */
