@@ -74,7 +74,7 @@ void main() {
         reason: w,
       );
     }
-    // 統合元のプロジェクトのフォルダーは、統合先のcontextに関係する。
+    // 資料に入るプロジェクト（記録の帰属先）のフォルダーの問題では、かごのコピーも止める。
     final memo = HubRepository(
       fixture(),
     ).records.values.firstWhere((r) => r.path == inputPath);

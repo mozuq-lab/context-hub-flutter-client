@@ -139,7 +139,7 @@
 
 ## 再検証
 
-基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。
+基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.41.5を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。
 
 実アプリのサンプル検査は `flutter test integration_test/app_test.dart -d <device>`、候補操作と方針は `integration_test/review_test.dart`・`integration_test/scoped_policy_test.dart` を使います。実Vaultをテストに使わないでください。
 
