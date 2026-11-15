@@ -484,10 +484,15 @@ class _HubShellState extends State<HubShell> {
                 ListTile(
                   key: Key('project-${project.id}'),
                   leading: Icon(
-                    project.lifecycle == 'active'
+                    c.repository?.isPinned(project.id) == true
+                        ? Icons.push_pin
+                        : project.lifecycle == 'active'
                         ? Icons.folder_outlined
                         : Icons.folder_off_outlined,
                     size: 20,
+                    semanticLabel: c.repository?.isPinned(project.id) == true
+                        ? 'ピン留め'
+                        : null,
                   ),
                   title: Text(
                     project.title,

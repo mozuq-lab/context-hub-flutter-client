@@ -490,14 +490,39 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
+      final pinnedCount = repo.pinnedProjects.length;
+      if (pinnedCount > 0) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'ピン留め $pinnedCount件を先頭に表示（この端末だけの並び）',
+                    key: const Key('home-pins'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                TextButton(
+                  key: const Key('reorder-pins'),
+                  onPressed: reorderPins,
+                  child: const Text('並び替え'),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
       for (final project in repo.orderedProjects) {
+        final pinned = repo.isPinned(project.id);
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Card(
               child: ListTile(
                 key: Key('project-${project.id}'),
-                contentPadding: const EdgeInsets.all(24),
+                contentPadding: const EdgeInsets.fromLTRB(24, 24, 12, 24),
                 title: Text(
                   project.title,
                   style: const TextStyle(
@@ -547,7 +572,20 @@ class _HubViewState extends State<HubView> {
                     ],
                   ),
                 ),
-                trailing: const Icon(Icons.arrow_forward),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      key: Key('pin-${project.id}'),
+                      tooltip: pinned ? 'ピン留めを外す' : 'ピン留めして先頭に表示',
+                      isSelected: pinned,
+                      onPressed: () => togglePin(project),
+                      icon: const Icon(Icons.push_pin_outlined, size: 20),
+                      selectedIcon: const Icon(Icons.push_pin, size: 20),
+                    ),
+                    const Icon(Icons.arrow_forward),
+                  ],
+                ),
                 onTap: () => widget.onNavigate('project:${project.id}'),
               ),
             ),
@@ -1461,6 +1499,20 @@ class _HubViewState extends State<HubView> {
 
   bool get busy => c.loading || c.saving || c.captureWarning != null;
 
+  /// プロジェクトをピン留めする、または外す（この端末の並びだけ。Vaultには書かない）。
+  Future<void> togglePin(HubProject project) async {
+    try {
+      await c.setPinned(project.id, !repo.isPinned(project.id));
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  Future<void> reorderPins() => showDialog<void>(
+    context: context,
+    builder: (_) => PinOrderDialog(controller: c),
+  );
+
   Future<void> markAllSeen() async {
     try {
       await c.markAllSeen();
@@ -1576,7 +1628,7 @@ class _HubViewState extends State<HubView> {
     ),
   );
 
-  /// 進行中のプロジェクトの「次の一手」（または未解決）を、最新の根拠が新しい順にまとめる。
+  /// 進行中のプロジェクトの「次の一手」（または未解決）を、ピン留めしたものから順に、残りは最新の根拠が新しい順にまとめる。
   /// 本人が付けた期日が過ぎた・今日・7日以内の項目はプロジェクトをまたいで先頭に出し、見直す日が先の項目はたたむ。
   List<Widget> nextView() {
     final now = DateTime.now(),
@@ -1663,7 +1715,7 @@ class _HubViewState extends State<HubView> {
       title(
         'NEXT ACTIONS',
         '次の一手',
-        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '進行中のプロジェクトの「次の一手」と「未解決」を、ピン留めしたプロジェクトから順に、残りは最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
       Align(
         alignment: Alignment.centerLeft,
@@ -1874,6 +1926,17 @@ class _HubViewState extends State<HubView> {
             onPressed: editable ? () => changeDefinition(project) : null,
             icon: const Icon(Icons.label_outline, size: 18),
             label: const Text('呼び名とキーワード'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('project-pin'),
+            onPressed: () => togglePin(project),
+            icon: Icon(
+              repo.isPinned(project.id)
+                  ? Icons.push_pin
+                  : Icons.push_pin_outlined,
+              size: 18,
+            ),
+            label: Text(repo.isPinned(project.id) ? 'ピン留めを外す' : 'ピン留め'),
           ),
           OutlinedButton.icon(
             key: const Key('project-history'),
@@ -3181,6 +3244,109 @@ class _CaptureDialogState extends State<CaptureDialog> {
 }
 
 /// NOWの項目に期日と次に見直す日を付ける画面。日付は本人が選び、AIは推測しない。
+/// ピン留めしたプロジェクトの並びを変える。並びはこの端末にだけ保存し、Vaultには書かない。
+class PinOrderDialog extends StatelessWidget {
+  const PinOrderDialog({super.key, required this.controller});
+  final HubController controller;
+
+  Future<void> _run(
+    BuildContext context,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (e) {
+      if (context.mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final projects =
+          controller.repository?.pinnedProjects ?? const <HubProject>[];
+      return AlertDialog(
+        key: const Key('pin-order-dialog'),
+        title: const Text('ピン留めの並び'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'ピン留めしたプロジェクトは、メニュー・ホーム・「次の一手」の先頭にこの順で並びます。並びはこの端末にだけ保存し、Vaultやほかの端末には伝わりません。',
+                  style: TextStyle(fontSize: 12, height: 1.7),
+                ),
+                const SizedBox(height: 8),
+                if (projects.isEmpty) const Text('ピン留めしたプロジェクトはありません。'),
+                for (final (index, project) in projects.indexed)
+                  ListTile(
+                    key: Key('pin-row-${project.id}'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      project.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: project.lifecycle == 'active'
+                        ? null
+                        : Text('${project.lifecycleLabel}（「次の一手」には出ません）'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          key: Key('pin-up-${project.id}'),
+                          tooltip: '前へ',
+                          onPressed: index == 0
+                              ? null
+                              : () => _run(
+                                  context,
+                                  () => controller.movePin(project.id, -1),
+                                ),
+                          icon: const Icon(Icons.arrow_upward, size: 18),
+                        ),
+                        IconButton(
+                          key: Key('pin-down-${project.id}'),
+                          tooltip: '後ろへ',
+                          onPressed: index == projects.length - 1
+                              ? null
+                              : () => _run(
+                                  context,
+                                  () => controller.movePin(project.id, 1),
+                                ),
+                          icon: const Icon(Icons.arrow_downward, size: 18),
+                        ),
+                        IconButton(
+                          key: Key('pin-remove-${project.id}'),
+                          tooltip: 'ピン留めを外す',
+                          onPressed: () => _run(
+                            context,
+                            () => controller.setPinned(project.id, false),
+                          ),
+                          icon: const Icon(Icons.close, size: 18),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('pin-order-close'),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('閉じる'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
 class ScheduleDialog extends StatefulWidget {
   const ScheduleDialog({super.key, required this.item});
   final NowItemRef item;
