@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
+import '../storage/basket_store.dart';
 import '../core/repository.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
@@ -151,6 +152,7 @@ class HubController extends ChangeNotifier {
     location = target;
     pending = [];
     captureWarning = null;
+    basket = const Basket();
     _changed();
     try {
       final data = await access.readSnapshot(target);
@@ -159,6 +161,8 @@ class HubController extends ChangeNotifier {
       }
       repository = HubRepository(data);
       _visits.clear();
+      basket = await baskets.read(target.identity);
+      if (epoch != _epoch) return;
       await _loadSeen();
       _initializeSeen();
       await _writeSettings();
@@ -214,7 +218,12 @@ class HubController extends ChangeNotifier {
     }
   }
 
-  Future<String> context(String project) async {
+  Future<String> context(String project) async =>
+      (await _verifiedRepository()).context(project);
+
+  /// コピーの直前に読み直し、表示中の内容と同じで、確認の間にも変わっていないVaultを返す。
+  /// 変わっていれば表示を更新して止める（内容を確かめてからもう一度コピーしてもらう）。
+  Future<HubRepository> _verifiedRepository() async {
     final target = location, old = repository;
     final epoch = _epoch;
     if (target == null || old == null || loading || error != null) {
@@ -240,7 +249,104 @@ class HubController extends ChangeNotifier {
       _changed();
       throw StateError('コピーの確認中に同期された記録が変わりました。再読込して確認してください。');
     }
-    return parsed.context(project);
+    return parsed;
+  }
+
+  /// 文脈かご（端末内のみ）。
+  late final BasketStore baskets = BasketStore(access);
+  Basket basket = const Basket();
+
+  /// この記録（訂正の前後は同じ1件）がかごに入っているか。
+  bool inBasket(String recordId) {
+    final repo = repository;
+    if (repo == null) return basket.ids.contains(recordId);
+    final key = repo.bundleKeyOf(recordId);
+    return basket.ids.any((id) => repo.bundleKeyOf(id) == key);
+  }
+
+  /// かごに入っている記録のうち、今のVaultで見つからない記録。
+  List<String> get missingInBasket {
+    final repo = repository;
+    if (repo == null) return const [];
+    return basket.ids
+        .where(
+          (id) =>
+              !HubRepository.bundleKinds.contains(repo.records[id]?.kind ?? ''),
+        )
+        .toList();
+  }
+
+  Future<void> _setBasket(Basket next) async {
+    final target = location;
+    if (target == null) return;
+    basket = next;
+    _changed();
+    await baskets.write(target.identity, next);
+  }
+
+  /// かごに入れる。入っていれば外す（訂正の前後も同じ1件として外す）。入れたらtrue。
+  Future<bool> toggleBasket(String recordId) async {
+    final repo = repository;
+    if (repo == null) throw StateError('先にVaultを再読込してください。');
+    if (inBasket(recordId)) {
+      final key = repo.bundleKeyOf(recordId);
+      await _setBasket(
+        Basket(
+          ids: basket.ids.where((id) => repo.bundleKeyOf(id) != key).toList(),
+          maxChars: basket.maxChars,
+        ),
+      );
+      return false;
+    }
+    if (!HubRepository.bundleKinds.contains(repo.records[recordId]?.kind)) {
+      throw StateError('この記録はかごに入れられません。');
+    }
+    if (basket.ids.length >= BasketStore.maxItems) {
+      throw StateError('かごには${BasketStore.maxItems}件まで入れられます。');
+    }
+    await _setBasket(
+      Basket(ids: [...basket.ids, recordId], maxChars: basket.maxChars),
+    );
+    return true;
+  }
+
+  Future<void> removeFromBasket(String recordId) => _setBasket(
+    Basket(
+      ids: basket.ids.where((id) => id != recordId).toList(),
+      maxChars: basket.maxChars,
+    ),
+  );
+
+  /// かごの並びを変える。[newIndex]は移動後の位置。
+  Future<void> moveInBasket(int oldIndex, int newIndex) {
+    final ids = [...basket.ids];
+    if (oldIndex < 0 || oldIndex >= ids.length) return Future.value();
+    final id = ids.removeAt(oldIndex);
+    ids.insert(newIndex.clamp(0, ids.length), id);
+    return _setBasket(Basket(ids: ids, maxChars: basket.maxChars));
+  }
+
+  Future<void> clearBasket() => _setBasket(Basket(maxChars: basket.maxChars));
+
+  Future<void> setBasketLimit(int maxChars) {
+    if (!Basket.limits.contains(maxChars)) {
+      throw StateError('文字数上限を選び直してください。');
+    }
+    return _setBasket(Basket(ids: basket.ids, maxChars: maxChars));
+  }
+
+  /// かごの記録を、コピーの直前に読み直したVaultから1つの文章にまとめる。
+  Future<({String text, List<String> included, List<String> omitted})>
+  bundleContext() async {
+    if (basket.ids.isEmpty) throw StateError('かごに記録がありません。');
+    final ids = [...basket.ids], maxChars = basket.maxChars;
+    final parsed = await _verifiedRepository();
+    if (ids.any(
+      (id) => !HubRepository.bundleKinds.contains(parsed.records[id]?.kind),
+    )) {
+      throw StateError('かごに見つからない記録があります。かごから外してください。');
+    }
+    return parsed.bundleContext(ids, maxChars: maxChars);
   }
 
   Future<CaptureResult> save(CaptureDraft draft) async {

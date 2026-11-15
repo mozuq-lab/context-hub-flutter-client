@@ -88,12 +88,19 @@ class _HubShellState extends State<HubShell> {
                 ('ideas', 'アイデア', Icons.lightbulb_outline),
                 ('review', '確認待ち', Icons.fact_check_outlined),
                 ('search', '検索', Icons.search),
+                // 文脈かごは、記録を入れたとき（または開いている間）だけメニューに出す。
+                if (c.basket.ids.isNotEmpty || page == 'basket')
+                  ('basket', '文脈かご', Icons.shopping_basket_outlined),
                 ('intake', '受付状況', Icons.inbox_outlined),
               ])
                 ListTile(
                   key: Key('nav-${item.$1}'),
                   leading: Icon(item.$3, size: 20),
-                  title: Text(item.$2),
+                  title: Text(
+                    item.$1 == 'basket' && c.basket.ids.isNotEmpty
+                        ? '${item.$2}（${c.basket.ids.length}）'
+                        : item.$2,
+                  ),
                   selected: page == item.$1,
                   onTap: () {
                     setState(() => page = item.$1);
@@ -236,6 +243,7 @@ class _HubShellState extends State<HubShell> {
                     'ideas' => 'アイデア',
                     'review' => '確認待ち',
                     'search' => '検索',
+                    'basket' => '文脈かご',
                     'intake' => '受付状況',
                     _ => 'ContextHub',
                   }
