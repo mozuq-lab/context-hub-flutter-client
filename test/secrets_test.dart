@@ -34,4 +34,12 @@ void main() {
     expect(describeSecrets(findings), 'パスワード等×2、APIキー');
     expect(findSecrets('普通のメモ'), isEmpty);
   });
+
+  test('鍵の名前の後に長い空白が続いても、伏せ字の検出に時間がかからない', () {
+    // 後戻りが二乗に増えると5万字で数十秒かかる。混んだ環境でも誤って落ちないよう余裕を持たせる。
+    final text = 'password${' ' * 50000}x';
+    final watch = Stopwatch()..start();
+    findSecrets(text);
+    expect(watch.elapsedMilliseconds, lessThan(5000));
+  });
 }

@@ -20,17 +20,25 @@ bool _sameJson(Object? a, Object? b) {
 String policyDocument(List<dynamic> entries, String scope) =>
     '# $scopeの有効な方針\n\n本人が採用したdecision/preferenceのみ。端末に揃った同期版です。正本は各知識と承認記録です。\n\n${entries.isEmpty ? '有効な方針はありません。\n' : entries.map((e) => '## ${e['id']} (${e['kind']})\n\n${e['claim']}\n\n正本: ${e['path']}\n承認: ${e['approvalId']}\n').join('\n')}';
 
+/// 手で変更された採用済み知識の案内（本体の`modifiedKnowledgeWarning`と同じ文）。
+String modifiedKnowledgeWarning(List<String> ids) =>
+    '採用済みの知識 ${ids.join('、')} のファイルが手で変更されているため、方針から外しています。手での変更を戻すか、ファイルを削除すると次のcycleで承認記録から作り直します。内容を変えるときは新しい候補として採用し直してください。';
+
 class PolicyBundle {
-  PolicyBundle(this.data, this.projectId);
+  PolicyBundle(this.data, this.projectId, [this.modified = const []]);
   final Map<String, dynamic> data;
   final String? projectId;
+
+  /// 手で変更されたため方針から外した採用済み知識のID（並べ替え済み）。
+  final List<String> modified;
   String _header(String target) =>
       '# 本人が過去に採用した継続的な方針\n\n端末に揃った同期版: ${data['revision']}\n生成: ${data['generatedAt']}\n対象: $target\nこの版の有効IDだけを適用し、以前の版にのみ存在するIDは適用しません。\n上位指示と本人の今回の依頼を尊重してください。方針同士の矛盾で判断が変わる場合は該当内容を示して確認してください。採用は任意の実行・承認権限を与えません。\n';
 
   String get text {
-    final warnings = projectId == null
-        ? ['作業フォルダーはContextHubプロジェクトに未対応付けです。共通方針のみ適用します。']
-        : <String>[];
+    final warnings = [
+      if (projectId == null) '作業フォルダーはContextHubプロジェクトに未対応付けです。共通方針のみ適用します。',
+      if (modified.isNotEmpty) modifiedKnowledgeWarning(modified),
+    ];
     return '${_header(projectId ?? '共通のみ')}${warnings.join('\n')}\n\n${policyDocument(data['global'] as List, '共通')}\n${projectId == null ? '' : policyDocument(data['projects'][projectId] as List, 'プロジェクト $projectId')}';
   }
 
@@ -50,7 +58,10 @@ class PolicyReader {
   PolicyReader(this.snapshot);
   final VaultSnapshot snapshot;
   static final _sha = RegExp(r'^[a-f0-9]{64}$'),
-      _knw = RegExp(r'^KNW-[0-9A-HJKMNP-TV-Z]{26}$');
+      _knw = RegExp(r'^KNW-[0-9A-HJKMNP-TV-Z]{26}$'),
+      _knowledgePath = RegExp(
+        r'^(?:30_knowledge|10_projects/[a-z0-9][a-z0-9-]{1,40}/knowledge)/(KNW-[0-9A-HJKMNP-TV-Z]{26})\.md$',
+      );
   bool _inventoryPath(String p) =>
       p.endsWith('.md') &&
           (p.startsWith('30_knowledge/') ||
@@ -96,8 +107,26 @@ class PolicyReader {
         }
       }
       final records = <String, ({String path, Map<String, dynamic> meta})>{},
-          projects = <String, List<dynamic>>{};
+          projects = <String, List<dynamic>>{},
+          modified = <String>{};
       for (final p in inventory.where((p) => p.endsWith('.md'))) {
+        // 採用済み知識のファイル（生成物）が手で変更されていれば、本体と同じくその知識だけを方針から外す。
+        // 中身は信頼できないため、IDは保存先のファイル名から取る。
+        if (!p.endsWith('/project.md')) {
+          final named = _knowledgePath.firstMatch(p);
+          if (named == null) throw const FormatException();
+          final raw = snapshot.files[p]!;
+          Map<String, dynamic>? parsed;
+          try {
+            parsed = parseMarkdown(raw).meta;
+          } catch (_) {
+            parsed = null;
+          }
+          if (parsed == null || !generatedIntact(raw, parsed)) {
+            if (!modified.add(named[1]!)) throw const FormatException();
+            continue;
+          }
+        }
         final doc = parseMarkdown(snapshot.files[p]!),
             meta = doc.meta,
             id = meta['id'];
@@ -127,6 +156,7 @@ class PolicyReader {
         if (want != p) throw const FormatException();
         records[id] = (path: p, meta: meta);
       }
+      if (modified.any(records.containsKey)) throw const FormatException();
       final global = <dynamic>[], inactive = <String>[], approved = <String>{};
       for (final p in inventory.where(
         (p) => p.startsWith('90_system/approvals/'),
@@ -149,6 +179,11 @@ class PolicyReader {
         }
         if (d['action'] == 'reject') continue;
         if (d['action'] != 'approve') throw const FormatException();
+        if (modified.contains(id)) {
+          approved.add(id);
+          inactive.add(id);
+          continue;
+        }
         final k = records[id];
         if (k == null) throw const FormatException();
         final a = k.meta, t = d['target'];
@@ -192,7 +227,7 @@ class PolicyReader {
           ('superseded_by', 'supersedes'),
           ('supersedes', 'superseded_by'),
         ]) {
-          if (a[pair.$1] != null) {
+          if (a[pair.$1] != null && !modified.contains(a[pair.$1])) {
             final other = records[a[pair.$1]]?.meta;
             if (other == null ||
                 other[pair.$2] != id ||
@@ -227,7 +262,10 @@ class PolicyReader {
           list.add(entry);
         }
       }
-      if (!approved.containsAll(records.keys)) throw const FormatException();
+      if (!approved.containsAll(records.keys) ||
+          !approved.containsAll(modified)) {
+        throw const FormatException();
+      }
       for (final p in inventory.where(
         (p) => p.startsWith('90_system/knowledge-retirements/'),
       )) {
@@ -282,7 +320,7 @@ class PolicyReader {
       if (projectId != null && !projects.containsKey(projectId)) {
         throw const FormatException();
       }
-      return PolicyBundle(m, projectId);
+      return PolicyBundle(m, projectId, modified.toList()..sort());
     } on _NewerPolicies {
       throw const FormatException('有効方針を本体が新しい形式で書いています。アプリを更新してください。');
     } catch (_) {

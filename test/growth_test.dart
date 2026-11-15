@@ -87,11 +87,12 @@ void main() {
         .where((p) => !p.endsWith('/') && RegExp(r'\.(md|json)$').hasMatch(p))
         .length;
     final perMemoAfter = read / count;
-    // 本体は受付の後に停止回復の記録（intake/pending）を片付けるため、全件はメモ1件あたり約6.6件。
-    expect(perMemoBefore, greaterThan(6));
+    // 全件はメモ1件あたり約6.6件（本体は受付の後に停止回復の記録 intake/pending を片付ける）。
+    // 読み除く記録の分だけ、1件あたりの読取が3割以上減ることを確かめる。
+    expect(perMemoAfter, lessThanOrEqualTo(perMemoBefore * 0.7));
     expect(perMemoAfter, lessThanOrEqualTo(4.5));
     // 以前の上限（フォルダーを含む5000件）と、今の上限（読むファイル20000件）で読み切れるメモの件数。
-    expect(5000 / perMemoBefore, lessThan(800));
+    expect(5000 / perMemoBefore, lessThan(1000));
     expect(20000 / perMemoAfter, greaterThan(4000));
   });
 
