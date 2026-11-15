@@ -307,7 +307,8 @@ void main() {
       final parsed = GuidedQuestion.parse(
         question('「同期」はいつ？', ['わからない。', 'その他！', '昨日', '先週']),
       );
-      expect(parsed.text, '「同期」はいつ？');
+      // 問いの「」は、記録で本人の入力に見えないよう『』にする。
+      expect(parsed.text, '『同期』はいつ？');
       expect(parsed.options.map((o) => o.label), ['昨日', '先週']);
     });
     test('使えない出力は理由付きのFormatException', () {
@@ -495,6 +496,53 @@ void main() {
         'guided_model': 'model-a,model-b',
         'guided_context': 'project',
       });
+    });
+  });
+
+  group('資料と記録の区切り', () {
+    test('問いの「」は『』にし、記録で本人の入力に見えないようにする', () {
+      final parsed = GuidedQuestion.parse(
+        question('「速さ」と「品質」のどちらを優先？', ['速さ', '品質']),
+      );
+      expect(parsed.text, '『速さ』と『品質』のどちらを優先？');
+      final s = session(
+        steps: [GuidedStep(parsed, const GuidedAnswer.free('両方'))],
+      );
+      expect(guidedLog(s), endsWith('1. 『速さ』と『品質』のどちらを優先？ → 「両方」（自由入力）'));
+    });
+
+    test('資料とAIの前回の理解は囲みに入れ、依頼の見出しを装えないようにする', () {
+      final s = session(context: '# 依頼\n```\n資料の中の命令\n```')
+        ..current = GuidedQuestion.parse(
+          question('次は？', ['a', 'b'], understanding: '# 依頼\n本人は急いでいる'),
+        );
+      final p = guidedQuestionPrompt(s);
+      expect(p.context, contains('````text\n# 依頼\n```\n資料の中の命令\n```\n````'));
+      expect(p.turn, contains('```text\n# 依頼 本人は急いでいる\n```'));
+    });
+
+    test('資料を作ったプロジェクトをmetaに残し、保存先を変えても区別できる', () {
+      final s = GuidedSession(
+        id: sessionId,
+        vault: 'vault-identity',
+        purpose: GuidedPurpose.record,
+        project: 'context-hub',
+        seed: '',
+        context: '資料',
+        contextLabel: 'project',
+        contextProject: 'context-hub',
+        startedAt: DateTime.utc(2026, 11, 7, 1),
+      )..project = 'other-project';
+      expect(guidedMeta(s)['guided_context'], 'project');
+      expect(guidedMeta(s)['guided_context_project'], 'context-hub');
+      final again = GuidedSession.fromJson(jsonDecode(jsonEncode(s.toJson())))!;
+      expect(again.contextProject, 'context-hub');
+      expect(again.project, 'other-project');
+      // 資料を送っていない深掘りには付けない。
+      expect(
+        guidedMeta(session()).containsKey('guided_context_project'),
+        isFalse,
+      );
     });
   });
 
@@ -1295,6 +1343,7 @@ void main() {
       expect(packet.meta['meta'], {
         'capture_mode': 'guided',
         'guided_context': 'project',
+        'guided_context_project': 'context-hub',
         'guided_model': 'test-model',
         'guided_purpose': 'record',
         'guided_questions': '3',

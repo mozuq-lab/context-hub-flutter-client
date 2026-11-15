@@ -241,6 +241,7 @@ class GuidedController extends ChangeNotifier {
       seed: text,
       context: included ? context.text : '',
       contextLabel: included ? context.label : 'none',
+      contextProject: included && context.label == 'project' ? project : null,
       startedAt: services.clock(),
     );
     active = s;
