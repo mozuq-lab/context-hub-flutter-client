@@ -24,20 +24,30 @@ class BasketStore {
   /// 1つのかごに入れられる記録の数（本体の`ctx bundle`と同じ上限）。
   static const maxItems = 50;
 
-  /// 残すVaultの数。超えたら最後に使ったのが古いVaultのかごから捨てる。
+  /// 残すVaultの数。超えたら最後にかごを変えたのが古いVaultのかごから捨てる。
   static const maxVaults = 10;
   static final _id = RegExp(r'^record-[a-f0-9]{24}$');
 
   Map<String, ({Basket basket, DateTime at})>? _vaults;
   Future<void>? _loading;
+
+  /// 状態ファイルを読めなかった（壊れた内容ではなく、読み出しそのものの失敗）。
+  /// ほかのVaultのかごを消さないよう、読めるまで書かずに次の操作で読み直す。
+  bool _unreadable = false;
   Future<void> _tail = Future.value();
 
   Future<void> _load() => _loading ??= _read();
 
   Future<void> _read() async {
     final vaults = <String, ({Basket basket, DateTime at})>{};
+    _unreadable = false;
+    String? raw;
     try {
-      final raw = await access.readState(fileName);
+      raw = await access.readState(fileName);
+    } catch (_) {
+      _unreadable = true;
+    }
+    try {
       final value = raw == null ? null : jsonDecode(raw);
       if (value is Map && value['version'] == 1 && value['vaults'] is Map) {
         for (final e in (value['vaults'] as Map).entries) {
@@ -69,13 +79,16 @@ class BasketStore {
   }
 
   Future<Basket> read(String identity) async {
+    if (_unreadable) _loading = null;
     await _load();
     return _vaults![identity]?.basket ?? const Basket();
   }
 
   Future<void> write(String identity, Basket basket) {
     final next = _tail.then((_) async {
+      if (_unreadable) _loading = null;
       await _load();
+      if (_unreadable) return;
       final vaults = _vaults!;
       if (basket.ids.isEmpty && basket.maxChars == Basket.defaultMaxChars) {
         vaults.remove(identity);

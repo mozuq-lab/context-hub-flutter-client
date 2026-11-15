@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
+import 'package:context_hub_client/core/models.dart';
 import 'package:context_hub_client/storage/basket_store.dart';
+import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'widget_test.dart' show MemoryUIAccess;
 import 'fixtures.dart';
@@ -21,7 +23,78 @@ Future<HubController> open(WidgetTester tester, MemoryUIAccess access) async {
   return c;
 }
 
+/// Vaultの読取や状態ファイルの読み出しを1回だけ失敗させる。
+class FlakyAccess extends MemoryUIAccess {
+  bool failSnapshot = false, failBasket = false;
+  @override
+  Future<VaultSnapshot> readSnapshot(VaultLocation location) {
+    if (failSnapshot) {
+      failSnapshot = false;
+      throw StateError('一時的に読めません');
+    }
+    return super.readSnapshot(location);
+  }
+
+  @override
+  Future<String?> readState(String name) async {
+    if (failBasket && name == BasketStore.fileName) {
+      failBasket = false;
+      throw StateError('一時的に読めません');
+    }
+    return super.readState(name);
+  }
+}
+
 void main() {
+  test('Vaultを開けなかった後の再読込でも、残したかごを読んでから変える', () async {
+    final access = FlakyAccess();
+    await access.init();
+    final first = HubController(
+      access,
+      sampleLoader: () async => fixture().files,
+    );
+    await first.useSample();
+    final recent = first.repository!.recent;
+    await first.toggleBasket(recent[0].id);
+    await first.toggleBasket(recent[1].id);
+    final target = first.location!;
+    first.dispose();
+
+    final c = HubController(access, sampleLoader: () async => fixture().files);
+    addTearDown(c.dispose);
+    access.failSnapshot = true;
+    await c.activate(target);
+    expect(c.error, isNotNull);
+    await c.reload();
+    expect(c.basket.ids, [recent[0].id, recent[1].id]);
+    await c.toggleBasket(recent[2].id);
+    expect(c.basket.ids, [recent[0].id, recent[1].id, recent[2].id]);
+  });
+
+  test('かごの状態ファイルを読めないときは書かず、ほかのVaultのかごを消さない', () async {
+    final access = FlakyAccess();
+    access.states[BasketStore.fileName] = jsonEncode({
+      'version': 1,
+      'vaults': {
+        'other-vault': {
+          'ids': ['record-${'1' * 24}'],
+          'max': 6000,
+          'at': '2026-11-01T00:00:00Z',
+        },
+      },
+    });
+    access.failBasket = true;
+    final store = BasketStore(access);
+    expect((await store.read('this-vault')).ids, isEmpty);
+    await store.write('this-vault', Basket(ids: ['record-${'2' * 24}']));
+    expect(access.states[BasketStore.fileName], contains('other-vault'));
+    // 次に読めたときは、ほかのVaultのかごを残したまま書く。
+    await store.write('this-vault', Basket(ids: ['record-${'2' * 24}']));
+    final saved = access.states[BasketStore.fileName]!;
+    expect(saved, contains('other-vault'));
+    expect(saved, contains('2' * 24));
+  });
+
   String? clipboard;
   setUp(() => clipboard = null);
   void wide(WidgetTester tester) {
