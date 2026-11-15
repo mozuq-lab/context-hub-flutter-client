@@ -23,6 +23,8 @@ object LaunchActions {
     const val CAPTURE = PREFIX + "CAPTURE"
     const val GUIDED = PREFIX + "GUIDED"
     const val NEXT = PREFIX + "NEXT"
+    /** 確認待ちの通知から、増えた判断待ちを判断できる画面を開く。 */
+    const val ATTENTION = PREFIX + "ATTENTION"
 
     /**
      * アイコン長押しのショートカットを登録する（Android 7.1以降）。
@@ -59,6 +61,7 @@ object LaunchActions {
             CAPTURE -> "capture"
             GUIDED -> "guided"
             NEXT -> "next"
+            ATTENTION -> "attention"
             else -> null
         }
     }

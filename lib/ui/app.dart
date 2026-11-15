@@ -108,10 +108,17 @@ class _HubShellState extends State<HubShell> {
       );
       return;
     }
-    if (action == 'next') {
-      // 記録の詳細などを開いていたら閉じて、次の一手の一覧へ戻る。
+    if (action == 'attention' &&
+        DateTime.now().difference(c.repository!.snapshot.loadedAt) >
+            const Duration(seconds: 10)) {
+      // アプリを開いたままだった場合は、通知のもとになった同期済みの内容を読み込んでから開く。
+      await c.reload();
+      if (!mounted) return;
+    }
+    if (action == 'next' || action == 'attention') {
+      // 記録の詳細などを開いていたら閉じて、次の一手の一覧（通知からは、増えた判断待ちを判断できる画面）へ戻る。
       navigator.popUntil((route) => route.isFirst);
-      setState(() => page = 'next');
+      show(action == 'next' ? 'next' : c.attentionLanding);
       return;
     }
     if (c.captureWarning != null) {
@@ -160,9 +167,48 @@ class _HubShellState extends State<HubShell> {
   String? get openProject =>
       page.startsWith('project:') ? page.substring(8) : null;
 
+  /// 画面を切り替える。開いた画面で判断できる判断待ちは、見たものとして既読にする。
+  void show(String target) {
+    setState(() => page = target);
+    c.showPage(target);
+  }
+
+  /// メニューに出す件数。[fresh]（まだ見ていない件数）があれば色と「新着」で示す。
+  Widget? countBadge(String name, int count, {int fresh = 0}) {
+    if (count == 0) return null;
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      label: fresh > 0 ? '$count件、うち新着$fresh件' : '$count件',
+      excludeSemantics: true,
+      child: Container(
+        key: Key('badge-$name'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: fresh > 0 ? scheme.primary : scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          fresh > 0 ? '$count · 新着$fresh' : '$count',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: fresh > 0 ? scheme.onPrimary : scheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// [target]の画面で判断できる判断待ちの件数。
+  Widget? attentionBadge(String target) => countBadge(
+    target,
+    c.attentionCount(target),
+    fresh: c.attentionFresh(target),
+  );
+
   void goTo(String target) {
     if (!idle || c.repository == null) return;
-    setState(() => page = target);
+    show(target);
     if (target == 'search') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) searchFocus.requestFocus();
@@ -449,9 +495,15 @@ class _HubShellState extends State<HubShell> {
                         ? '${item.$2}（${c.basket.ids.length}）'
                         : item.$2,
                   ),
+                  // 確認待ちは採用・却下を待つ候補、受付状況はこの端末で保存を確かめられていない操作の件数。
+                  trailing: switch (item.$1) {
+                    'review' => attentionBadge('review'),
+                    'intake' => countBadge('intake', c.pending.length),
+                    _ => null,
+                  },
                   selected: page == item.$1,
                   onTap: () {
-                    setState(() => page = item.$1);
+                    show(item.$1);
                     if (drawer) {
                       Navigator.pop(context);
                     }
@@ -499,9 +551,11 @@ class _HubShellState extends State<HubShell> {
                       : project.stale(DateTime.now())
                       ? const Text('停滞')
                       : null,
+                  // 作業記録の下書きと、手で書き換えて止まったNOW。
+                  trailing: attentionBadge('project:${project.id}'),
                   selected: page == 'project:${project.id}',
                   onTap: () {
-                    setState(() => page = 'project:${project.id}');
+                    show('project:${project.id}');
                     if (drawer) {
                       Navigator.pop(context);
                     }
@@ -578,6 +632,21 @@ class _HubShellState extends State<HubShell> {
                           },
                     icon: const Icon(Icons.widgets_outlined, size: 18),
                     label: const Text('ウィジェットの表示'),
+                  ),
+                if (c.attentionNotificationsSupported && c.repository != null)
+                  TextButton.icon(
+                    key: const Key('attention-settings'),
+                    onPressed: c.loading
+                        ? null
+                        : () async {
+                            if (drawer) Navigator.pop(context);
+                            await showAttentionSettings(context, c);
+                          },
+                    icon: const Icon(
+                      Icons.notifications_none_outlined,
+                      size: 18,
+                    ),
+                    label: const Text('確認待ちの通知'),
                   ),
               ],
             ),
@@ -683,7 +752,7 @@ class _HubShellState extends State<HubShell> {
                           ? HubView(
                               controller: c,
                               page: page,
-                              onNavigate: (p) => setState(() => page = p),
+                              onNavigate: show,
                               searchFocus: searchFocus,
                             )
                           : _welcome(),
@@ -834,4 +903,92 @@ Future<void> showHomeWidgetSettings(
   } catch (e) {
     if (context.mounted) notice(context, HubController.message(e));
   }
+}
+
+/// アプリを閉じている間に確認待ちが増えたとき、端末へ通知するかを選ぶ（Androidだけ）。
+Future<void> showAttentionSettings(
+  BuildContext context,
+  HubController c,
+) async {
+  var enabled = c.attentionNotify, busy = false;
+  String? problem = c.attentionNotify && c.attentionNotifyBlocked
+      ? '端末で通知が許可されていないため、いまは通知されません。端末の設定でContextHub Flutterの通知を許可してから、アプリを開き直してください。'
+      : null;
+  await showDialog<void>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        key: const Key('attention-dialog'),
+        title: const Text('確認待ちの通知'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'アプリを閉じている間も、数時間おきにこの端末に同期済みのVaultを読み、'
+                  '確認待ちの候補・作業記録の下書き・止まったNOWが増えたときだけ通知します。'
+                  '通知に出すのは件数と種類だけで、本文は出しません。'
+                  '読むのは端末内のフォルダーだけで、ネットワークには接続しません。'
+                  '同期が遅れていると、通知も遅れます。'
+                  '端末を再起動した後は、アプリを一度開くと確認を再開します。',
+                  style: TextStyle(fontSize: 13, height: 1.6),
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  key: const Key('attention-notify'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('確認待ちが増えたら通知する'),
+                  value: enabled,
+                  onChanged: busy
+                      ? null
+                      : (v) async {
+                          setState(() {
+                            busy = true;
+                            problem = null;
+                          });
+                          var ok = false;
+                          try {
+                            ok = await c.setAttentionNotify(v);
+                            if (!ok) {
+                              problem =
+                                  '端末で通知が許可されていません。端末の設定でContextHub Flutterの通知を許可してから、もう一度お試しください。';
+                            }
+                          } catch (e) {
+                            problem = HubController.message(e);
+                          }
+                          if (!context.mounted) return;
+                          setState(() {
+                            busy = false;
+                            if (ok) enabled = v;
+                          });
+                        },
+                ),
+                if (problem != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      problem!,
+                      key: const Key('attention-problem'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('閉じる'),
+          ),
+        ],
+      ),
+    ),
+  );
 }

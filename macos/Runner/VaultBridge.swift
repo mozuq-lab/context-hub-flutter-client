@@ -47,6 +47,12 @@ final class VaultBridge {
               ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { result(error()); return }
         result(NSWorkspace.shared.open(url) ? nil : error()); return
       }
+      if call.method == "setDockBadge" {
+        // ドックのアイコンに判断待ちの件数を出す。件数だけで、Vaultには触れない。
+        let count = args["count"] as? Int ?? 0
+        NSApp.dockTile.badgeLabel = count > 0 ? (count > 999 ? "999+" : String(count)) : nil
+        result(nil); return
+      }
       queue.async {
         do {
           let value = try self.invoke(call.method, args)
