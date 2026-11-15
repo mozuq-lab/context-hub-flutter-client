@@ -7,6 +7,7 @@ import '../app/controller.dart';
 import '../core/models.dart';
 import '../core/repository.dart';
 import '../storage/capture_service.dart';
+import '../storage/basket_store.dart';
 import '../storage/draft_store.dart';
 import 'markdown_view.dart';
 import 'review_view.dart';
@@ -276,7 +277,14 @@ class _HubViewState extends State<HubView> {
           ],
         ),
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (HubRepository.bundleKinds.contains(r.kind))
+            BasketToggle(controller: c, record: r),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
       onTap: () => open(r.id),
     ),
   );
@@ -505,6 +513,8 @@ class _HubViewState extends State<HubView> {
       );
     } else if (page == 'search') {
       children.addAll(searchView());
+    } else if (page == 'basket') {
+      children.addAll(basketView());
     } else if (page == 'intake') {
       children.add(
         title(
@@ -627,6 +637,174 @@ class _HubViewState extends State<HubView> {
         ),
       ),
     );
+  }
+
+  /// 文脈かご。選んだ記録を並べ、出典・方針付きの1つの文章としてコピーする。
+  List<Widget> basketView() {
+    final ids = c.basket.ids, missing = c.missingInBasket.toSet();
+    final out = <Widget>[
+      title(
+        'CONTEXT BASKET',
+        '文脈かご',
+        '別のAIに渡したい記録を、検索・最近のメモ・アイデア・記録の詳細から入れます。プロジェクトをまたいで選べます。まとめてコピーすると、選んだ順に、出典・訂正の注意・AI推定の区別と、関わるプロジェクトの方針を付けた1つの文章になります。かごの中身はこの端末だけに残し、Vaultには書きません。',
+      ),
+    ];
+    if (ids.isEmpty) {
+      out.add(
+        const Text(
+          'かごは空です。記録の一覧や詳細で ⊕ を押すと、ここに入ります。',
+          key: Key('basket-empty'),
+        ),
+      );
+      return out;
+    }
+    out.add(
+      Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          FilledButton.icon(
+            key: const Key('copy-bundle'),
+            onPressed: c.loading || missing.isNotEmpty
+                ? null
+                : () async {
+                    try {
+                      final result = await c.bundleContext();
+                      await Clipboard.setData(ClipboardData(text: result.text));
+                      if (mounted) {
+                        notice(
+                          context,
+                          result.omitted.isEmpty
+                              ? '${result.included.length}件をまとめてコピーしました'
+                              : '${result.included.length}件をコピーしました。上限に収まらない${result.omitted.length}件は省き、末尾にIDを示しています',
+                        );
+                      }
+                    } catch (e) {
+                      if (mounted) notice(context, HubController.message(e));
+                    }
+                  },
+            icon: const Icon(Icons.copy, size: 18),
+            label: Text('${ids.length}件をまとめてコピー'),
+          ),
+          SegmentedButton<int>(
+            key: const Key('basket-limit'),
+            segments: [
+              for (final limit in Basket.limits)
+                ButtonSegment(value: limit, label: Text('$limit字')),
+            ],
+            selected: {c.basket.maxChars},
+            onSelectionChanged: (v) => c.setBasketLimit(v.first),
+          ),
+          TextButton(
+            key: const Key('basket-clear'),
+            onPressed: () async {
+              final yes = await showDialog<bool>(
+                context: context,
+                builder: (dialog) => AlertDialog(
+                  title: const Text('かごを空にしますか'),
+                  content: Text('${ids.length}件をかごから外します。記録そのものは消えません。'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialog, false),
+                      child: const Text('やめる'),
+                    ),
+                    FilledButton(
+                      key: const Key('basket-clear-confirm'),
+                      onPressed: () => Navigator.pop(dialog, true),
+                      child: const Text('空にする'),
+                    ),
+                  ],
+                ),
+              );
+              if (yes == true) await c.clearBasket();
+            },
+            child: const Text('かごを空にする'),
+          ),
+        ],
+      ),
+    );
+    out.add(const SizedBox(height: 8));
+    out.add(
+      Text(
+        '上限（${c.basket.maxChars}字）に収まらない記録は、本文の途中で切らずに丸ごと省きます。方針は必ず含めます。',
+        style: const TextStyle(fontSize: 12, height: 1.7),
+      ),
+    );
+    if (missing.isNotEmpty) {
+      out.add(
+        const Padding(
+          padding: EdgeInsets.only(top: 12),
+          child: NoticeBox(
+            'このVaultで見つからない記録があります。同期を待つか、かごから外してからコピーしてください。',
+            error: true,
+          ),
+        ),
+      );
+    }
+    out.add(const SizedBox(height: 16));
+    for (var i = 0; i < ids.length; i++) {
+      final id = ids[i], record = repo.records[id];
+      out.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Card(
+            key: Key('basket-item-$i'),
+            child: ListTile(
+              contentPadding: const EdgeInsets.fromLTRB(20, 8, 8, 8),
+              leading: Text(
+                '${i + 1}',
+                style: const TextStyle(
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+              title: Text(
+                record == null || missing.contains(id)
+                    ? '見つからない記録'
+                    : record.title,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: record == null || missing.contains(id)
+                  ? const Text('同期で消えたか、まだ届いていません。')
+                  : Text(
+                      '${searchKindLabels[HubRepository.searchKindOf(record)] ?? record.kind} · ${originLabel(record.origin)} · ${timeLabel(record.at ?? record.generatedAt)}'
+                      '${(repo.correctionChainOf(id)?.length ?? 1) > 1 ? '\n訂正あり（最新の訂正の本文を渡します）' : ''}',
+                      style: const TextStyle(fontSize: 12, height: 1.7),
+                    ),
+              onTap: record == null || missing.contains(id)
+                  ? null
+                  : () => open(id),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    key: Key('basket-up-$i'),
+                    tooltip: '上へ',
+                    onPressed: i == 0 ? null : () => c.moveInBasket(i, i - 1),
+                    icon: const Icon(Icons.arrow_upward),
+                  ),
+                  IconButton(
+                    key: Key('basket-down-$i'),
+                    tooltip: '下へ',
+                    onPressed: i == ids.length - 1
+                        ? null
+                        : () => c.moveInBasket(i, i + 1),
+                    icon: const Icon(Icons.arrow_downward),
+                  ),
+                  IconButton(
+                    key: Key('basket-remove-$i'),
+                    tooltip: 'かごから外す',
+                    onPressed: () => c.removeFromBasket(id),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return out;
   }
 
   /// 検索画面。検索語と、プロジェクト・種類・期間・並び順の絞り込み。
@@ -1604,6 +1782,62 @@ class _HubViewState extends State<HubView> {
   }
 }
 
+/// 記録を文脈かごに入れる・外すボタン。かごの変化に合わせて表示を変える。
+class BasketToggle extends StatelessWidget {
+  const BasketToggle({
+    super.key,
+    required this.controller,
+    required this.record,
+    this.labeled = false,
+  });
+  final HubController controller;
+  final HubRecord record;
+
+  /// 記録の詳細では文字付きのボタンにする。
+  final bool labeled;
+
+  Future<void> _toggle(BuildContext context) async {
+    try {
+      final added = await controller.toggleBasket(record.id);
+      if (context.mounted) {
+        notice(
+          context,
+          added
+              ? '文脈かごに入れました（${controller.basket.ids.length}件）'
+              : '文脈かごから外しました',
+        );
+      }
+    } catch (e) {
+      if (context.mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final inside = controller.inBasket(record.id);
+      if (labeled) {
+        return TextButton.icon(
+          key: const Key('record-basket'),
+          onPressed: () => _toggle(context),
+          icon: Icon(
+            inside ? Icons.check_circle : Icons.add_circle_outline,
+            size: 18,
+          ),
+          label: Text(inside ? 'かごから外す' : '文脈かごに入れる'),
+        );
+      }
+      return IconButton(
+        key: Key('basket-toggle-${record.id}'),
+        tooltip: inside ? '文脈かごから外す' : '文脈かごに入れる',
+        onPressed: () => _toggle(context),
+        icon: Icon(inside ? Icons.check_circle : Icons.add_circle_outline),
+      );
+    },
+  );
+}
+
 class RecordView extends StatelessWidget {
   const RecordView({super.key, required this.controller, required this.record});
   final HubController controller;
@@ -1680,7 +1914,20 @@ class RecordView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('記録の詳細')),
+    appBar: AppBar(
+      title: const Text('記録の詳細'),
+      actions: [
+        if (HubRepository.bundleKinds.contains(record.kind))
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: BasketToggle(
+              controller: controller,
+              record: record,
+              labeled: true,
+            ),
+          ),
+      ],
+    ),
     body: Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 900),

@@ -34,6 +34,7 @@ String keyLabel(SingleActivator a) {
 }
 
 /// 画面の移動先。ナビゲーションの並びと同じ順に⌘1〜⌘8を割り当てる。
+/// 文脈かごは中身があるときだけナビゲーションに出るので、番号を割り当てない。
 const shortcutPages = [
   ('home', 'ホーム'),
   ('next', '次の一手'),

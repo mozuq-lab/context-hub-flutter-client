@@ -22,7 +22,7 @@
 
 - `lib/core/`: 上限付きsnapshotのMarkdown/frontmatter・receipt・訂正の読取、検索、context、候補一覧と方針の読取、選んで深掘りの依頼の組み立てと出力の検証（`guided.dart`）。
 - `lib/ai/`: 選んで深掘りのClaude API呼び出し（HTTPS）と、テストで差し替える外部とのやり取りの束ね（`GuidedServices`）。
-- `lib/storage/`: OSアクセス契約、本文を含まない操作journal、固定REQ IDによる保存確認、候補の採用・却下・適用停止要求の保存、選んで深掘りの途中の状態（`guided.json`）とAPIキーの保管。
+- `lib/storage/`: OSアクセス契約、本文を含まない操作journal、固定REQ IDによる保存確認、候補の採用・却下・適用停止要求の保存、選んで深掘りの途中の状態（`guided.json`）とAPIキーの保管、文脈かご（`basket.json`）。
 - `lib/app/` / `lib/ui/`: 共通画面、Vault切替の応答管理、安全なMarkdownリンク。
 - `macos/Runner/VaultBridge.swift` / `android/app/src/main/kotlin/.../VaultBridge.kt`: 限定されたネイティブアクセス（MethodChannel）。
 - `vendor/context-hub`: 本体の公開commitをsubmoduleで固定。protocol検査とfixture生成に使う。

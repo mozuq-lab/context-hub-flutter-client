@@ -147,6 +147,7 @@ class CaptureService {
     'settings.json',
     'drafts.json',
     'guided.json',
+    'basket.json',
   };
   Future<List<String>> _journalNames() async => [
     for (final name in await access.listJournals())
