@@ -393,6 +393,31 @@ class _HubViewState extends State<HubView> {
           '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
         ),
       );
+      final backupNow = DateTime.now();
+      for (final (index, warning) in repo.backup.warnings(backupNow).indexed) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: NoticeBox(
+              warning,
+              key: Key('home-backup-warning-$index'),
+              error: true,
+            ),
+          ),
+        );
+      }
+      if (repo.backup.line(backupNow) case final line?) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(
+              line,
+              key: const Key('home-backup'),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        );
+      }
       final actionable = repo.actionableProjects,
           nextCount = actionable.fold<int>(
             0,
@@ -1278,7 +1303,11 @@ class _HubViewState extends State<HubView> {
         verb = item.section == 'next' ? '完了' : '解決';
     if (!await confirmAction(
           resolve ? '$verbにする' : '未解決に戻す',
-          '${item.display}\n\n${resolve ? 'この項目をNOWの「解決済み・完了」へ移すよう依頼します。原文と整理結果は変わりません。' : 'この項目をNOWの元の欄へ戻すよう依頼します。'}',
+          '${item.display}\n\n${resolve
+              ? 'この項目をNOWの「解決済み・完了」へ移すよう依頼します。原文と整理結果は変わりません。'
+              : item.excluded
+              ? 'この項目をNOWの元の欄へ戻すよう依頼します。誤りとして外したときの読み直しと、プロジェクトとの関連の変更も元に戻ります。'
+              : 'この項目をNOWの元の欄へ戻すよう依頼します。'}',
           resolve ? '$verbにする' : '戻す',
         ) ||
         !mounted) {
@@ -1289,6 +1318,37 @@ class _HubViewState extends State<HubView> {
         project.id,
         item.key,
         action,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '報告を保存しました。Miniで受け付けられるとNOWに反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// AIの読み違いなどを、理由を選んで「誤り」として外すよう依頼する。完了・解決には数えない。
+  Future<void> excludeItem(HubProject project, NowItemRef item) async {
+    final choice = await showDialog<({String reason, String? note})>(
+      context: context,
+      builder: (_) => ExcludeDialog(
+        item: item,
+        owned: repo.itemOwnedByProject(project.id, item),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      final result = await c.requestItemResolution(
+        project.id,
+        item.key,
+        'exclude',
+        reason: choice.reason,
+        note: choice.note,
       );
       if (mounted) {
         notice(
@@ -1611,6 +1671,20 @@ class _HubViewState extends State<HubView> {
                             : '日付を付ける',
                       ),
                     ),
+            // 報告が反映待ちの間は、重ねて依頼させない。
+            if (entry.itemKey case final key?
+                when repo.itemRequestIdFor(key) == null)
+              TextButton.icon(
+                key: Key('exclude-${key.substring(0, 12)}'),
+                onPressed: busy
+                    ? null
+                    : () => excludeItem(
+                        project,
+                        project.nowItems.firstWhere((i) => i.key == key),
+                      ),
+                icon: const Icon(Icons.report_gmailerrorred_outlined, size: 15),
+                label: const Text('誤りとして外す'),
+              ),
             for (final id in entry.references)
               TextButton.icon(
                 key: const Key('source-record'),
@@ -2023,6 +2097,52 @@ class _HubViewState extends State<HubView> {
                       Expanded(
                         child: Text(
                           '${item.section == 'next' ? '完了' : '解決'}: ${item.display}（${timeLabel(item.resolvedAt)}）',
+                        ),
+                      ),
+                      repo.itemRequestIdFor(item.key) != null
+                          ? const Text(
+                              '報告済み（反映待ち）',
+                              style: TextStyle(fontSize: 12),
+                            )
+                          : TextButton(
+                              key: Key('reopen-${item.key.substring(0, 12)}'),
+                              onPressed: busy
+                                  ? null
+                                  : () => reportItem(project, item, 'reopen'),
+                              child: const Text('未解決に戻す'),
+                            ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 28),
+      ],
+      if (project.excludedItems.isNotEmpty) ...[
+        const Text(
+          '誤りとして外した項目（本人報告）',
+          style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '完了・解決には数えません。理由と一言は、次からの整理でAIへ渡します。',
+          style: TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          key: const Key('excluded-items'),
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final item in project.excludedItems)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${item.section == 'next' ? '次の一手' : '未解決'}: ${item.display}\n理由: ${exclusionReasonLabels[item.exclusionReason]}${item.exclusionNote == null ? '' : '（${item.exclusionNote}）'}（${timeLabel(item.resolvedAt)}）',
                         ),
                       ),
                       repo.itemRequestIdFor(item.key) != null
@@ -3345,6 +3465,115 @@ class PinOrderDialog extends StatelessWidget {
       );
     },
   );
+}
+
+/// NOWの項目を「誤り」として外す理由と一言を選ぶ。完了・解決とは別の報告にする。
+class ExcludeDialog extends StatefulWidget {
+  const ExcludeDialog({super.key, required this.item, required this.owned});
+  final NowItemRef item;
+
+  /// 元のメモが、本人がこのプロジェクトを指定して保存したものか。
+  final bool owned;
+  @override
+  State<ExcludeDialog> createState() => _ExcludeDialogState();
+}
+
+class _ExcludeDialogState extends State<ExcludeDialog> {
+  String? reason;
+  final note = TextEditingController();
+
+  @override
+  void dispose() {
+    note.dispose();
+    super.dispose();
+  }
+
+  String effect(String reason) => switch (reason) {
+    'misread' => 'メモはそう言っていない。Miniが次の整理で、このメモを読み直します。',
+    'wrong-project' =>
+      widget.owned
+          ? 'このプロジェクトの話ではない。プロジェクトを指定して保存したメモなので、関連付けは変えず、この項目だけを外します。'
+          : 'このプロジェクトの話ではない。AIが推定した関連付けなので、このメモをこのプロジェクトから外し、読み直して関連先を見直します。このメモから出たほかの項目も、このプロジェクトから外れます。',
+    _ => '読みは合っているが、今は当てはまらない。項目を外すだけで、読み直しません。',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final text = note.text.trim(),
+        valid = text.isEmpty || validExclusionNote(text);
+    return AlertDialog(
+      key: const Key('exclude-dialog'),
+      title: const Text('誤りとして外す'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.item.display,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              for (final r in exclusionReasons)
+                ListTile(
+                  key: Key('exclude-reason-$r'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    reason == r
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  title: Text(exclusionReasonLabels[r]!),
+                  subtitle: Text(
+                    effect(r),
+                    style: const TextStyle(fontSize: 12, height: 1.6),
+                  ),
+                  onTap: () => setState(() => reason = r),
+                ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('exclude-note'),
+                controller: note,
+                maxLength: exclusionNoteChars,
+                maxLines: 1,
+                decoration: InputDecoration(
+                  labelText: '一言（任意）',
+                  helperText: '例: 検討しただけで、まだ決めていない',
+                  errorText: valid
+                      ? null
+                      : '1行・$exclusionNoteChars文字以内で入力してください。',
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '完了・解決には数えません。原文は変わりません。外した項目の本文・理由・一言は、同じ読み違いを減らすために、次からの整理でAIへ渡します。Miniが受け付けるとNOWに反映され、プロジェクトの画面から未解決に戻せます。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('exclude-submit'),
+          onPressed: reason == null || !valid
+              ? null
+              : () => Navigator.pop(context, (
+                  reason: reason!,
+                  note: text.isEmpty ? null : text,
+                )),
+          child: const Text('誤りとして外す'),
+        ),
+      ],
+    );
+  }
 }
 
 class ScheduleDialog extends StatefulWidget {

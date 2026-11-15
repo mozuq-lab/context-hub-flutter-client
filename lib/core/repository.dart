@@ -29,6 +29,16 @@ class HubRepository {
   final Map<String, String> _outstandingDefinition = {};
   final Map<String, DateTime> _resolutionTimes = {};
   final Map<String, String> _latestResolutions = {};
+
+  /// 今も有効な「誤りとして外す」記録（項目ごとの最後の記録が外す操作のもの）。項目キー → 記録。
+  final Map<
+    String,
+    ({String id, String projectId, String inputId, String reason, DateTime at})
+  >
+  _exclusions = {};
+
+  /// バックアップから復元できるかの確認結果（本体の`ctx backup verify`の記録）。
+  BackupStatus backup = const BackupStatus();
   final Map<String, String> _outstandingItems = {};
   final Map<String, DateTime> _scheduleTimes = {};
   final Map<String, String> _latestSchedules = {};
@@ -261,6 +271,7 @@ class HubRepository {
         _problem(path);
       }
     }
+    _readResolutions();
     _corrections();
     _readStatusChanges();
     _readDefinitionChanges();
@@ -270,10 +281,64 @@ class HubRepository {
     _readIdeaIndex();
     _readIntake();
     _readDigest();
+    _readBackupChecks();
   }
 
-  /// 本体がNOWと同時に書く項目一覧を読み、NOWの各行に項目キーを結び付ける。
-  void _readNowItems() {
+  /// バックアップの確認結果を読む。最後の確認と、最後に復元できた確認だけを使う。
+  void _readBackupChecks() {
+    final pattern = RegExp(
+      r'^90_system/backup-checks/(BKC-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    final checks = <BackupCheck>[];
+    for (final e in snapshot.files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final created = timestamp(j['archive_created_at']),
+            checked = timestamp(j['checked_at']),
+            issues = j['issues'],
+            days = j['verify_max_age_days'];
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['archive'] is! String ||
+            (j['archive'] as String).isEmpty ||
+            RegExp(r'[/\\\p{Cc}]', unicode: true).hasMatch(j['archive']) ||
+            created == null ||
+            checked == null ||
+            !['ok', 'failed'].contains(j['status']) ||
+            issues is! List ||
+            (j['status'] == 'ok') != issues.isEmpty ||
+            days is! int ||
+            days < 1) {
+          throw const FormatException();
+        }
+        checks.add(
+          BackupCheck(
+            id: j['id'] as String,
+            archive: j['archive'] as String,
+            archiveCreatedAt: created,
+            checkedAt: checked,
+            ok: j['status'] == 'ok',
+            issueCount: issues.length,
+            maxAgeDays: days,
+          ),
+        );
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    if (checks.isEmpty) return;
+    checks.sort((a, b) => a.id.compareTo(b.id));
+    backup = BackupStatus(
+      latest: checks.last,
+      restorePoint: checks.where((c) => c.ok).lastOrNull,
+    );
+  }
+
+  /// 完了・解決の報告と、誤りとして外した記録を読む。依頼の反映を確かめる時刻、項目ごとの最新の記録ID、
+  /// 今も有効な「外す」記録（メモとプロジェクトの関連を本体と同じに読むために使う）を控える。
+  void _readResolutions() {
     final resolution = RegExp(
       r'^90_system/item-resolutions/(RES-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
@@ -283,11 +348,19 @@ class HubRepository {
       try {
         final j = jsonDecode(e.value) as Map<String, dynamic>;
         final at = timestamp(j['created_at']);
+        final exclude = j['action'] == 'exclude';
         if (j['schema_version'] != 1 ||
             j['id'] != match.group(1) ||
-            !['resolve', 'reopen'].contains(j['action']) ||
+            !['resolve', 'reopen', 'exclude'].contains(j['action']) ||
             j['item_key'] is! String ||
-            at == null) {
+            at == null ||
+            (exclude
+                ? !exclusionReasons.contains(j['reason']) ||
+                      (j['note'] != null && !validExclusionNote(j['note'])) ||
+                      j['project_id'] is! String ||
+                      j['input_id'] is! String ||
+                      !inputIdPattern.hasMatch(j['input_id'])
+                : j['reason'] != null || j['note'] != null)) {
           throw const FormatException();
         }
         final id = j['id'] as String, key = j['item_key'] as String;
@@ -295,11 +368,26 @@ class HubRepository {
         final last = _latestResolutions[key];
         if (last == null || id.compareTo(last) > 0) {
           _latestResolutions[key] = id;
+          if (exclude) {
+            _exclusions[key] = (
+              id: id,
+              projectId: j['project_id'] as String,
+              inputId: j['input_id'] as String,
+              reason: j['reason'] as String,
+              at: at,
+            );
+          } else {
+            _exclusions.remove(key);
+          }
         }
       } catch (_) {
         _problem(e.key);
       }
     }
+  }
+
+  /// 本体がNOWと同時に書く項目一覧を読み、NOWの各行に項目キーを結び付ける。
+  void _readNowItems() {
     // 期日・見直す日の記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（有効な日付は項目一覧のscheduleを使う）。
     final schedule = RegExp(
       r'^90_system/item-schedules/(SCH-[0-9A-HJKMNP-TV-Z]{26})\.json$',
@@ -355,7 +443,15 @@ class HubRepository {
                       r['id'] is! String ||
                       !RegExp(
                         r'^RES-[0-9A-HJKMNP-TV-Z]{26}$',
-                      ).hasMatch(r['id']))) ||
+                      ).hasMatch(r['id']) ||
+                      // 誤りとして外した項目だけが、理由と一言を持つ。
+                      (r['action'] == 'exclude'
+                          ? !exclusionReasons.contains(r['reason']) ||
+                                (r['note'] != null &&
+                                    !validExclusionNote(r['note']))
+                          : r['action'] != null ||
+                                r['reason'] != null ||
+                                r['note'] != null))) ||
               (sc != null &&
                   (sc is! Map ||
                       sc['id'] is! String ||
@@ -400,6 +496,8 @@ class HubRepository {
               inputId: i['input_id'],
               resolutionId: r is Map ? r['id'] as String : null,
               resolvedAt: r is Map ? timestamp(r['at']) : null,
+              exclusionReason: r is Map ? r['reason'] as String? : null,
+              exclusionNote: r is Map ? r['note'] as String? : null,
               scheduleId: sc is Map ? sc['id'] as String : null,
               due: sc is Map ? sc['due'] as String? : null,
               reviewAfter: sc is Map ? sc['review_after'] as String? : null,
@@ -637,6 +735,11 @@ class HubRepository {
 
   /// この項目の最新の解決・再開記録のID。記録がなければnull。
   String? latestResolutionIdFor(String itemKey) => _latestResolutions[itemKey];
+
+  /// 項目の元のメモが、本人がそのプロジェクトを指定して保存したものか。
+  /// そうでなければ、プロジェクトとの関連はAIの推定（「別のプロジェクトの話」として外すと関連も外れる）。
+  bool itemOwnedByProject(String projectId, NowItemRef item) =>
+      _unitBySource[item.inputId]?.root.metadata['project'] == projectId;
 
   /// 反映を待っている、この下書きの見送り・入力化の依頼。
   String? draftRequestIdFor(String draftId) => _outstandingDrafts[draftId];
@@ -895,6 +998,56 @@ class HubRepository {
     }
   }
 
+  /// 本体が重ねている読み直し（item-rereads）の関連候補。本体のappliedRereadと同じ条件で、
+  /// 同じ根拠・同じ処理記録・同じ「外す」記録の組に対する読み直しだけを使う。なければnull。
+  ({Object? candidates, DateTime at})? _appliedReread(
+    HubRecord root,
+    HubRecord latest,
+    Map<String, dynamic> receipt,
+    String evidenceHash,
+  ) {
+    final path = '90_system/item-rereads/${root.sourceId}.json',
+        raw = snapshot.files[path];
+    // 訂正がまだ整理されていない間は、訂正を含めた整理を待つ。
+    if (raw == null || receipt['input_id'] != latest.sourceId) return null;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      final at = timestamp(j['reread_at']), ids = j['resolution_ids'];
+      if (j['schema_version'] != 1 ||
+          j['input_id'] != root.sourceId ||
+          !['reread', 'failed'].contains(j['status']) ||
+          ids is! List ||
+          at == null) {
+        throw const FormatException();
+      }
+      if (j['status'] != 'reread') return null;
+      final result = j['result'];
+      if (result is! Map) throw const FormatException();
+      final organized = timestamp(receipt['organized_at']);
+      if (organized == null ||
+          j['latest_input_id'] != latest.sourceId ||
+          j['evidence_hash'] != evidenceHash ||
+          j['receipt_organized_at'] != receipt['organized_at']) {
+        return null;
+      }
+      // 今の処理記録より後に外した、読み直しを求める記録（読み違い、AIが推定した関連への「別のプロジェクトの話」）。
+      final wanted = [
+        for (final x in _exclusions.values)
+          if (x.inputId == root.sourceId &&
+              !x.at.isBefore(organized) &&
+              (x.reason == 'misread' ||
+                  (x.reason == 'wrong-project' &&
+                      x.projectId != root.metadata['project'])))
+            x.id,
+      ]..sort();
+      if (jsonEncode(ids) != jsonEncode(wanted)) return null;
+      return (candidates: result['project_candidates'], at: at);
+    } catch (_) {
+      _problem(path);
+      return null;
+    }
+  }
+
   final List<_Unit> _units = [];
   void _corrections() {
     const pendingNotice = '訂正未反映です。旧要約の可能性があるため、訂正原文を確認してください。';
@@ -979,6 +1132,14 @@ class HubRepository {
             .take(processedIndex + 1)
             .map((r) => '${r.sourceId}:${digest(snapshot.files[r.path]!)}')
             .join('\n');
+        // 誤りとして外した項目のメモを本体が読み直していれば、その関連候補を使う。
+        final reread = _appliedReread(
+          root,
+          chain.last,
+          receipt,
+          digest(evidence),
+        );
+        if (reread != null) candidates = reread.candidates;
         final associationPath =
             '90_system/associations/${root.sourceId}/${digest(evidence)}.$registry.json';
         if (snapshot.files.containsKey(associationPath)) {
@@ -991,18 +1152,31 @@ class HubRepository {
               throw const FormatException();
             }
             if (association['status'] == 'associated') {
-              candidates = association['project_candidates'];
+              final at = timestamp(association['associated_at']);
+              // 本体と同じく、関連の見直しより後の読み直しを優先する。
+              if (reread == null || at == null || reread.at.isBefore(at)) {
+                candidates = association['project_candidates'];
+              }
             }
           } catch (_) {
             _problem(associationPath);
           }
         }
+        // 本人が「別のプロジェクトの話」として外したプロジェクトは、AIが推定した関連から除く（本人が指定したプロジェクトは変えない）。
+        final wrong = {
+          for (final x in _exclusions.values)
+            if (x.inputId == root.sourceId &&
+                x.reason == 'wrong-project' &&
+                x.projectId != root.metadata['project'])
+              x.projectId,
+        };
         if (candidates is List) {
           for (final c in candidates) {
             if (c is Map &&
                 c['id'] is String &&
                 c['confidence'] is num &&
                 c['confidence'] >= 0.7 &&
+                !wrong.contains(c['id']) &&
                 projects.containsKey(c['id'])) {
               related.add(c['id']);
             }
@@ -1149,7 +1323,12 @@ class HubRepository {
                 !projectIdPattern.hasMatch(m['project_id']) ||
                 m['item_key'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
-                !['resolve', 'reopen'].contains(m['action']))) {
+                !['resolve', 'reopen', 'exclude'].contains(m['action']) ||
+                (m['action'] == 'exclude'
+                    ? !exclusionReasons.contains(m['reason']) ||
+                          (m.containsKey('note') &&
+                              !validExclusionNote(m['note']))
+                    : m.containsKey('reason') || m.containsKey('note')))) {
           throw const FormatException();
         }
         final itemSchedule = m['operation'] == 'item-schedule';
@@ -1312,7 +1491,11 @@ class HubRepository {
               : definitionChange
               ? '呼び名とキーワードの変更依頼: ${m['title']}'
               : itemReport
-              ? '${m['action'] == 'resolve' ? '完了・解決' : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
+              ? '${m['action'] == 'resolve'
+                    ? '完了・解決'
+                    : m['action'] == 'exclude'
+                    ? '誤りとして外す（${exclusionReasonLabels[m['reason']]}）'
+                    : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemSchedule
               ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : hintDismiss

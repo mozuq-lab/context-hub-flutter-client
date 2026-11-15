@@ -891,19 +891,33 @@ class HubController extends ChangeNotifier {
     }
   }
 
-  /// NOWの項目を完了・解決（resolve）または未解決へ戻す（reopen）報告を保存する。
+  /// NOWの項目を完了・解決（resolve）、誤りとして外す（exclude）、または未解決へ戻す（reopen）報告を保存する。
+  /// 誤りとして外すときは理由（[exclusionReasons]）を付け、一言（[note]）は任意。
   Future<CaptureResult> requestItemResolution(
     String projectId,
     String itemKey,
-    String action,
-  ) {
+    String action, {
+    String? reason,
+    String? note,
+  }) {
+    final exclude = action == 'exclude';
+    if (!['resolve', 'reopen', 'exclude'].contains(action) ||
+        (exclude
+            ? !exclusionReasons.contains(reason)
+            : reason != null || note != null)) {
+      throw StateError('項目と操作を確認してください。');
+    }
+    if (note != null && !validExclusionNote(note)) {
+      throw StateError('一言は1行・$exclusionNoteChars文字以内で入力してください。');
+    }
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;
-        if (found == null || (action == 'resolve') == found.resolved) {
+        // 戻せるのは欄から外れている項目だけ、完了・解決にする・外すのは欄にある項目だけ。
+        if (found == null || (action != 'reopen') == found.resolved) {
           throw StateError('NOWが更新されています。表示を確認してから操作してください。');
         }
         if (parsed.itemRequestIdFor(itemKey) != null) {
@@ -911,10 +925,17 @@ class HubController extends ChangeNotifier {
         }
         item = found;
         // 最新の解決・再開記録を含め、解決→再開→解決のように同じ操作を繰り返しても過去の操作と混ざらないようにする。
-        return 'item/$projectId/$itemKey/$action/${parsed.latestResolutionIdFor(itemKey) ?? '-'}';
+        // 外す操作は理由と一言も含め、内容を変えた依頼を同じ操作として扱わない。
+        return 'item/$projectId/$itemKey/$action/${parsed.latestResolutionIdFor(itemKey) ?? '-'}${exclude ? '/${digest('$reason\n${note ?? ''}')}' : ''}';
       },
-      (service, parsed, operation) =>
-          service.saveItemResolution(operation, projectId, item, action),
+      (service, parsed, operation) => service.saveItemResolution(
+        operation,
+        projectId,
+        item,
+        action,
+        reason: reason,
+        note: note,
+      ),
     );
   }
 

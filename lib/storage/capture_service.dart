@@ -428,18 +428,26 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
-  /// NOWの項目を完了・解決（resolve）または未解決へ戻す（reopen）報告。
+  /// NOWの項目を完了・解決（resolve）、誤りとして外す（exclude）、または未解決へ戻す（reopen）報告。
+  /// 誤りとして外すときは理由（[exclusionReasons]）が要り、一言は任意。
   Future<CaptureResult> saveItemResolution(
     String operationId,
     String projectId,
     NowItemRef item,
-    String action,
-  ) => _serial(() async {
+    String action, {
+    String? reason,
+    String? note,
+  }) => _serial(() async {
+    final exclude = action == 'exclude';
     if (!_uuid.hasMatch(operationId) ||
         !projectIdPattern.hasMatch(projectId) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
-        !['resolve', 'reopen'].contains(action) ||
-        (action == 'resolve') == item.resolved) {
+        !['resolve', 'reopen', 'exclude'].contains(action) ||
+        (action != 'reopen') == item.resolved ||
+        (exclude
+            ? !exclusionReasons.contains(reason) ||
+                  (note != null && !validExclusionNote(note))
+            : reason != null || note != null)) {
       throw const FormatException('項目と操作を確認してください。');
     }
     final fields = <String, dynamic>{
@@ -447,6 +455,8 @@ class CaptureService {
       'project_id': projectId,
       'item_key': item.key,
       'action': action,
+      'reason': ?reason,
+      'note': ?note,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
