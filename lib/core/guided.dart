@@ -527,7 +527,11 @@ String _contextBlock(GuidedSession s) => s.context.isEmpty
 
 /// きっかけ・問い・回答は1件ずつ伏せる。まとめて伏せると、終わりのない秘密鍵の見出しが
 /// 後ろの問答と依頼まで消してしまう。
-String _turn(GuidedSession s, {String? projectTitle}) {
+String _turn(
+  GuidedSession s, {
+  String? projectTitle,
+  SecretPolicy secrets = SecretPolicy.builtin,
+}) {
   final b = StringBuffer()
     ..writeln('# 目的')
     ..writeln(
@@ -547,35 +551,45 @@ String _turn(GuidedSession s, {String? projectTitle}) {
   }
   b
     ..writeln('# 本人の一言')
-    ..writeln(s.seed.isEmpty ? 'なし' : '「${redactSecrets(s.seed)}」')
+    ..writeln(s.seed.isEmpty ? 'なし' : '「${secrets.redact(s.seed)}」')
     ..writeln()
     ..writeln('# これまでの問答');
   if (s.steps.isEmpty) b.writeln('まだありません');
   for (final (i, step) in s.steps.indexed) {
     b.writeln(
-      '${i + 1}. ${redactSecrets(step.question.text)} → ${redactSecrets(step.answer.display)}',
+      '${i + 1}. ${secrets.redact(step.question.text)} → ${secrets.redact(step.answer.display)}',
     );
   }
   if (s.understanding.isNotEmpty) {
     b
       ..writeln()
       ..writeln('# 前回までの理解')
-      ..writeln(redactSecrets(s.understanding));
+      ..writeln(secrets.redact(s.understanding));
   }
   return b.toString();
 }
 
+/// 追加規則を確かめられないときは、取りこぼしを避けるため依頼を組み立てない。
+void _requireUsable(SecretPolicy secrets) {
+  if (!secrets.usable) throw StateError(secrets.problem!);
+}
+
 /// 次の問いを作る依頼。[retryNote]は、前回の出力が使えなかった理由。
+///
+/// [secrets]は伏せ字の規則（本体の設定で追加した規則を含む）。確かめられない規則では組み立てない。
 GuidedPrompt guidedQuestionPrompt(
   GuidedSession s, {
   String? projectTitle,
   String? retryNote,
+  SecretPolicy secrets = SecretPolicy.builtin,
 }) {
+  _requireUsable(secrets);
   final n = s.steps.length + 1;
-  final turn = StringBuffer(_turn(s, projectTitle: projectTitle))
-    ..writeln()
-    ..writeln('# 依頼')
-    ..writeln('$n問目の問いを作ってください（最大$guidedMaxQuestions問）。');
+  final turn =
+      StringBuffer(_turn(s, projectTitle: projectTitle, secrets: secrets))
+        ..writeln()
+        ..writeln('# 依頼')
+        ..writeln('$n問目の問いを作ってください（最大$guidedMaxQuestions問）。');
   if (retryNote != null) {
     turn.writeln('前回の出力は使えませんでした（$retryNote）。決まりを守って作り直してください。');
   }
@@ -583,8 +597,8 @@ GuidedPrompt guidedQuestionPrompt(
     system: _questionSystem,
     // 資料・きっかけ・回答に紛れた秘密情報らしい文字列は、送る前に伏せる。
     // きっかけと回答は[_turn]で1件ずつ伏せ、ここでは1行に収まる値の取りこぼしを防ぐ。
-    context: redactSecretLines(_contextBlock(s)),
-    turn: redactSecretLines(turn.toString()),
+    context: secrets.redactLines(_contextBlock(s)),
+    turn: secrets.redactLines(turn.toString()),
     schema: _questionSchema,
     effort: 'low',
     maxTokens: 16000,
@@ -597,11 +611,14 @@ GuidedPrompt guidedSummaryPrompt(
   GuidedSession s, {
   String? projectTitle,
   String? retryNote,
+  SecretPolicy secrets = SecretPolicy.builtin,
 }) {
-  final turn = StringBuffer(_turn(s, projectTitle: projectTitle))
-    ..writeln()
-    ..writeln('# 依頼')
-    ..writeln('上の問答から、${s.purpose.label}のメモの下書きを項目ごとに書いてください。');
+  _requireUsable(secrets);
+  final turn =
+      StringBuffer(_turn(s, projectTitle: projectTitle, secrets: secrets))
+        ..writeln()
+        ..writeln('# 依頼')
+        ..writeln('上の問答から、${s.purpose.label}のメモの下書きを項目ごとに書いてください。');
   if (retryNote != null) {
     turn.writeln('前回の出力は使えませんでした（$retryNote）。決まりを守って書き直してください。');
   }
@@ -609,8 +626,8 @@ GuidedPrompt guidedSummaryPrompt(
     system: _summarySystem,
     // 資料・きっかけ・回答に紛れた秘密情報らしい文字列は、送る前に伏せる。
     // きっかけと回答は[_turn]で1件ずつ伏せ、ここでは1行に収まる値の取りこぼしを防ぐ。
-    context: redactSecretLines(_contextBlock(s)),
-    turn: redactSecretLines(turn.toString()),
+    context: secrets.redactLines(_contextBlock(s)),
+    turn: secrets.redactLines(turn.toString()),
     schema: _summarySchema(s.purpose),
     effort: 'medium',
     maxTokens: 16000,
@@ -661,9 +678,13 @@ String guidedSummary(GuidedPurpose purpose, String raw) {
 }
 
 /// 問答の記録。AIの選択肢から選んだ答えと本人の言葉を区別し、このメモの原文として残す。
-String guidedLog(GuidedSession s, {bool redact = false}) {
+String guidedLog(
+  GuidedSession s, {
+  bool redact = false,
+  SecretPolicy secrets = SecretPolicy.builtin,
+}) {
   // 伏せるときは、きっかけ・問い・回答を1件ずつ伏せる。
-  String show(String text) => redact ? redactSecrets(text) : text;
+  String show(String text) => redact ? secrets.redact(text) : text;
   final b = StringBuffer('## 問答の記録\n')
     ..write('選んで深掘り（${s.purpose.label}）で作成。選択肢はAIが作り、本人が選んだ。「」内は本人の入力。');
   if (s.seed.isNotEmpty) b.write('\nきっかけ: 「${show(_oneLine(s.seed))}」');
@@ -677,9 +698,14 @@ String guidedLog(GuidedSession s, {bool redact = false}) {
 
 /// 保存するメモの本文。本人が直したまとめのあとに問答の記録を付ける。
 /// [redact]なら、秘密情報らしい文字列を伏せ字にした本文を返す。
-String guidedBody(String summary, GuidedSession s, {bool redact = false}) {
-  final head = redact ? redactSecrets(summary.trim()) : summary.trim();
-  final log = guidedLog(s, redact: redact);
+String guidedBody(
+  String summary,
+  GuidedSession s, {
+  bool redact = false,
+  SecretPolicy secrets = SecretPolicy.builtin,
+}) {
+  final head = redact ? secrets.redact(summary.trim()) : summary.trim();
+  final log = guidedLog(s, redact: redact, secrets: secrets);
   return head.isEmpty ? log : '$head\n\n$log';
 }
 

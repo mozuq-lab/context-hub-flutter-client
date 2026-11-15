@@ -247,7 +247,16 @@ class _GuidedPageState extends State<GuidedPage> {
     final material = includeContext ? _materialOf(project) : null;
     final sendsMaterial = material != null && material.text.isNotEmpty;
     final locked = previous?.operationId != null || g.otherVaultLocked;
+    final secretProblem = g.secretPolicy.problem;
     return [
+      if (secretProblem != null) ...[
+        NoticeBox(
+          secretProblem,
+          error: true,
+          key: const Key('guided-secret-problem'),
+        ),
+        const SizedBox(height: 12),
+      ],
       if (!g.hasKey) ...[
         if (g.keyProblem != null)
           NoticeBox(
@@ -458,7 +467,9 @@ class _GuidedPageState extends State<GuidedPage> {
         alignment: Alignment.centerLeft,
         child: FilledButton.icon(
           key: const Key('guided-start'),
-          onPressed: !g.hasKey || g.busy || locked ? null : _start,
+          onPressed: !g.hasKey || g.busy || locked || secretProblem != null
+              ? null
+              : _start,
           icon: const Icon(Icons.play_arrow, size: 18),
           label: const Text('始める'),
         ),
@@ -709,7 +720,11 @@ class _GuidedPageState extends State<GuidedPage> {
     final s = g.active, summary = s?.summary;
     if (s == null || summary == null) return;
     final body = guidedBody(summary, s);
-    final checked = await checkSecretsBeforeSave(context, body);
+    final checked = await checkSecretsBeforeSave(
+      context,
+      body,
+      secrets: g.secretPolicy,
+    );
     if (checked == null || !mounted) return;
     await g.save(redact: checked != body);
   }

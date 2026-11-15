@@ -75,6 +75,19 @@ class HubRepository {
 
   /// 本体が生成する直近の期間のふりかえり（REVIEW.md）。未生成ならnull。
   HubDigest? digestDocument;
+
+  /// 伏せ字の規則（組み込み規則と、本体の設定で追加した規則）。
+  late final SecretPolicy secretPolicy = SecretPolicy.fromSnapshot(
+    snapshot.files,
+    snapshot.warnings,
+  );
+
+  /// 追加規則を確かめられないときは、別AIへ渡す資料を作らない（取りこぼしを避ける）。
+  void _requireSecretPolicy() {
+    final problem = secretPolicy.problem;
+    if (problem != null) throw FormatException(problem);
+  }
+
   HubRepository(this.snapshot) {
     if (!snapshot.recognized) {
       throw const FormatException('ContextHubのVaultフォルダーを選んでください。');
@@ -2377,8 +2390,10 @@ class HubRepository {
     if (warnings.isNotEmpty || _blocksContext(project)) {
       throw const FormatException('欠損・整合性・訂正の反映を確認して再読込してください。');
     }
+    _requireSecretPolicy();
     // 別AIへ渡す資料なので、秘密情報らしい文字列は伏せる（本体のcontextと同じ）。抜粋で値が途切れないよう、切る前に伏せる。
-    final policy = '${redactSecrets(PolicyReader(snapshot).read(id).text)}\n\n';
+    final policy =
+        '${secretPolicy.redact(PolicyReader(snapshot).read(id).text)}\n\n';
     if (policy.length + 100 > maxChars) {
       throw const FormatException('必須方針がコピー上限に収まりません。');
     }
@@ -2408,7 +2423,7 @@ class HubRepository {
       for (final u in units) {
         final r = u.root;
         out.writeln(
-          '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecretsHead(r.body, 300), 300).replaceAll('\n', ' ')}',
+          '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(secretPolicy.redactHead(r.body, 300), 300).replaceAll('\n', ' ')}',
         );
         if (u.summary != null) out.writeln('  有効解釈: ${u.summary}');
         if (u.chain.length > 1) {
@@ -2422,7 +2437,7 @@ class HubRepository {
         }
       }
     }
-    final text = redactSecretLines(out.toString()),
+    final text = secretPolicy.redactLines(out.toString()),
         suffix = '\n…（省略。全文は記録の詳細から確認）';
     return policy +
         (text.length <= optionalMax
@@ -2525,6 +2540,7 @@ class HubRepository {
     if (warnings.isNotEmpty) {
       throw const FormatException('欠損・整合性・訂正の反映を確認して再読込してください。');
     }
+    _requireSecretPolicy();
     String projectLabel(String id) => '${projects[id]?.title ?? id}（$id）';
     final blocks = <({String id, String text})>[], seen = <String>{};
     final policyProjects = <String>{};
@@ -2565,7 +2581,7 @@ class HubRepository {
         }
         if (unit.summary != null) {
           out.writeln(
-            '有効解釈（AI整理・未検証）: ${_oneLine(redactSecrets(unit.summary!))}',
+            '有効解釈（AI整理・未検証）: ${_oneLine(secretPolicy.redact(unit.summary!))}',
           );
         }
         out.writeln(
@@ -2573,7 +2589,7 @@ class HubRepository {
               ? '本文（最新の訂正 [${latest.sourceId}](${latest.path})）:'
               : '本文:',
         );
-        out.write(fenced(redactSecrets(latest.body)));
+        out.write(fenced(secretPolicy.redact(latest.body)));
         blocks.add((id: root.sourceId, text: out.toString()));
         continue;
       }
@@ -2594,7 +2610,7 @@ class HubRepository {
         final now = StringBuffer();
         _writeNowSections(now, project, '###', notices: true);
         out.writeln('本文（自動領域）:');
-        out.write(fenced(redactSecrets(now.toString())));
+        out.write(fenced(secretPolicy.redact(now.toString())));
         blocks.add((id: project.id, text: out.toString()));
         continue;
       }
@@ -2649,11 +2665,11 @@ class HubRepository {
         out.writeln('注意: $w');
       }
       out.writeln('本文:');
-      out.write(fenced(redactSecrets(record.body)));
+      out.write(fenced(secretPolicy.redact(record.body)));
       blocks.add((id: record.sourceId, text: out.toString()));
     }
     // 別AIへ渡す資料なので、contextと同じく秘密情報らしい文字列は伏せる。本文は記録ごとに伏せる。
-    final policy = redactSecrets(
+    final policy = secretPolicy.redact(
       PolicyReader(
         snapshot,
       ).read().textFor(policyProjects.where(projects.containsKey)),
@@ -2699,7 +2715,9 @@ class HubRepository {
     if (warnings.isNotEmpty) {
       throw const FormatException('欠損・整合性・訂正の反映を確認して再読込してください。');
     }
-    final policy = '${redactSecrets(PolicyReader(snapshot).read().text)}\n\n';
+    _requireSecretPolicy();
+    final policy =
+        '${secretPolicy.redact(PolicyReader(snapshot).read().text)}\n\n';
     if (policy.length + 100 > maxChars) {
       throw const FormatException('必須方針がコピー上限に収まりません。');
     }
@@ -2718,10 +2736,10 @@ class HubRepository {
     if (items.isEmpty) out.writeln('見つかりません');
     for (final r in items) {
       out.writeln(
-        '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecretsHead(r.body, 200), 200).replaceAll('\n', ' ')}',
+        '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(secretPolicy.redactHead(r.body, 200), 200).replaceAll('\n', ' ')}',
       );
     }
-    final text = redactSecretLines(out.toString()), suffix = '\n…（省略）';
+    final text = secretPolicy.redactLines(out.toString()), suffix = '\n…（省略）';
     return policy +
         (text.length <= optionalMax
             ? text

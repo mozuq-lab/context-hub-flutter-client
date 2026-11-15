@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../ai/claude_client.dart';
 import '../ai/guided_services.dart';
 import '../core/guided.dart';
+import '../core/secrets.dart';
 import '../storage/capture_service.dart';
 import '../storage/guided_store.dart';
 import '../storage/secret_store.dart';
@@ -144,6 +145,12 @@ class GuidedController extends ChangeNotifier {
     _changed();
   }
 
+  /// 伏せ字の規則（本体の設定で追加した規則を含む）。確かめられなければ[SecretPolicy.problem]を持ち、
+  /// その間はClaude APIを呼ばない（追加規則で伏せるはずの内容を送らないため）。
+  SecretPolicy get secretPolicy =>
+      hub.repository?.secretPolicy ??
+      SecretPolicy.unavailable('Vaultを読み込めていません');
+
   String? _title(GuidedSession s) =>
       s.project == null ? null : hub.repository?.projects[s.project]?.title;
 
@@ -248,8 +255,15 @@ class GuidedController extends ChangeNotifier {
   }
 
   /// Claude APIを1回呼ぶ。月の上限を超えるなら呼ばない。回数は送る前に数える。
-  Future<ModelReply> _call(GuidedPrompt prompt, int epoch) async {
+  /// 伏せ字の追加規則を確かめられなければ呼ばない（回数も数えない）。
+  Future<ModelReply> _call(
+    GuidedPrompt Function(SecretPolicy secrets) build,
+    int epoch,
+  ) async {
     final st = state!;
+    final secrets = secretPolicy;
+    if (!secrets.usable) throw ModelException(secrets.problem!);
+    final prompt = build(secrets);
     final usage = st.usage.current(services.clock());
     if (usage.calls >= st.monthlyLimit) {
       throw ModelException(
@@ -300,7 +314,12 @@ class GuidedController extends ChangeNotifier {
       String? note;
       for (var attempt = 0; attempt < 2; attempt++) {
         final reply = await _call(
-          guidedQuestionPrompt(s, projectTitle: _title(s), retryNote: note),
+          (secrets) => guidedQuestionPrompt(
+            s,
+            projectTitle: _title(s),
+            retryNote: note,
+            secrets: secrets,
+          ),
           epoch,
         );
         if (epoch != _epoch) return;
@@ -390,7 +409,12 @@ class GuidedController extends ChangeNotifier {
       String? note;
       for (var attempt = 0; attempt < 2; attempt++) {
         final reply = await _call(
-          guidedSummaryPrompt(s, projectTitle: _title(s), retryNote: note),
+          (secrets) => guidedSummaryPrompt(
+            s,
+            projectTitle: _title(s),
+            retryNote: note,
+            secrets: secrets,
+          ),
           epoch,
         );
         if (epoch != _epoch) return;
@@ -512,7 +536,7 @@ class GuidedController extends ChangeNotifier {
         result?.saved == true) {
       return;
     }
-    final body = guidedBody(summary, s, redact: redact);
+    final body = guidedBody(summary, s, redact: redact, secrets: secretPolicy);
     final problem =
         bodyProblem ??
         (body.length > guidedBodyChars

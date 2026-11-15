@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 /// メモに紛れたAPIキー・トークン・パスワード・秘密鍵らしい文字列を見つけて伏せる。
@@ -101,6 +102,127 @@ final List<SecretRule> secretRules = [
   ),
 ];
 
+/// 本体が設定の追加規則（`privacy.patterns`）を書き出すファイル。形式は本体と共有する取り決めで、
+/// `{"schema_version":1,"redact_secrets":<bool>,"patterns":[{"label":"…","pattern":"…"}]}`。
+/// patternはJavaScriptの正規表現で、本体は`gu`フラグで評価する。
+const privacyPatternsPath = '90_system/privacy/patterns.json';
+
+/// 本体の設定の上限（packages/core/src/config.tsのprivacy.patterns）。
+const _maxPatterns = 50, _maxLabel = 40, _maxPattern = 500;
+
+/// 伏せ字に使う規則。組み込み規則に、本体の設定で追加した規則を足す。
+///
+/// 追加規則のファイルが壊れている・形式の版が未知・Dartで解釈できない規則がある・読取の上限で
+/// 確かめられないときは[problem]を持つ。その場合、選んで深掘りやcontextのコピーでVaultの内容を
+/// 外へ渡さない（取りこぼしを避けるため）。保存の前に知らせるだけの検査は組み込み規則で続ける。
+///
+/// 本体は`redact_secrets: false`のとき伏せ字そのものを止めるが、アプリはClaude APIへ送る内容と
+/// 別AI向けのコピーを常に伏せる（組み込み規則と同じく、追加規則も設定に関わらず当てる）。
+class SecretPolicy {
+  const SecretPolicy._(this.extra, this.problem);
+
+  /// 追加規則のファイルがない（本体が古い・設定がない）とき。組み込み規則だけを使う。
+  static const builtin = SecretPolicy._([], null);
+
+  /// 規則を確かめる前（Vaultを読み込めていないなど）。
+  factory SecretPolicy.unavailable(String reason) =>
+      SecretPolicy._(const [], _failed(reason));
+
+  /// 本体の設定で追加した規則。
+  final List<SecretRule> extra;
+
+  /// 追加規則を確かめられない理由。
+  final String? problem;
+  bool get usable => problem == null;
+
+  static String _failed(String reason) =>
+      '本体の伏せ字の追加規則（$privacyPatternsPath）を確かめられません（$reason）。'
+      '取りこぼしを避けるため、Vaultの内容を外へ送りません。本体の設定と同期を確かめてください。';
+
+  /// ファイルの本文を読む。
+  static SecretPolicy parse(String raw) {
+    final Object? value;
+    try {
+      value = jsonDecode(raw);
+    } on FormatException {
+      return SecretPolicy._(const [], _failed('JSONとして読めません'));
+    }
+    if (value is! Map) return SecretPolicy._(const [], _failed('形式が不正です'));
+    final version = value['schema_version'];
+    if (version is int && version > 1) {
+      return SecretPolicy._(
+        const [],
+        _failed('本体が新しい形式（版$version）で書いています。アプリを更新してください'),
+      );
+    }
+    final patterns = value['patterns'];
+    if (version != 1 ||
+        value['redact_secrets'] is! bool ||
+        patterns is! List ||
+        patterns.length > _maxPatterns) {
+      return SecretPolicy._(const [], _failed('形式が不正です'));
+    }
+    final rules = <SecretRule>[];
+    for (final (i, item) in patterns.indexed) {
+      final label = item is Map ? item['label'] : null;
+      final pattern = item is Map ? item['pattern'] : null;
+      // 知らない項目（フラグなど）は解釈を変えうるので、読めないものとして扱う。
+      if (item is! Map ||
+          item.length != 2 ||
+          label is! String ||
+          label.isEmpty ||
+          label.length > _maxLabel ||
+          label.contains(RegExp(r'[\]\r\n]')) ||
+          pattern is! String ||
+          pattern.isEmpty ||
+          pattern.length > _maxPattern) {
+        return SecretPolicy._(const [], _failed('${i + 1}件目の規則の形式が不正です'));
+      }
+      final RegExp compiled;
+      try {
+        // 本体は`gu`で評価する。Dartの正規表現はJavaScriptと同じ構文で、unicodeで`u`に合わせる。
+        compiled = RegExp(pattern, unicode: true);
+      } on FormatException {
+        return SecretPolicy._(
+          const [],
+          _failed('${i + 1}件目の規則「$label」をこのアプリで解釈できません'),
+        );
+      }
+      rules.add(SecretRule('custom-${i + 1}', label, compiled));
+    }
+    return SecretPolicy._(List.unmodifiable(rules), null);
+  }
+
+  /// Vaultのsnapshotから読む。ファイルがなければ組み込み規則だけを使う。
+  /// ただし読取の注意（上限・読めないファイル・中断したフォルダー）でファイルが欠けた可能性があれば確かめられない。
+  static SecretPolicy fromSnapshot(
+    Map<String, String> files,
+    List<String> warnings,
+  ) {
+    final raw = files[privacyPatternsPath];
+    if (raw != null) return parse(raw);
+    for (final w in warnings) {
+      final at = w.indexOf(': ');
+      final path = at < 0 ? '' : w.substring(at + 2).trim();
+      if (w.contains('90_system/privacy') ||
+          w.startsWith('読取の上限') ||
+          w.startsWith('深さの上限') ||
+          (path.isNotEmpty &&
+              (privacyPatternsPath == path ||
+                  privacyPatternsPath.startsWith('$path/')))) {
+        return SecretPolicy._(const [], _failed('Vaultの読取が途中で止まりました'));
+      }
+    }
+    return builtin;
+  }
+
+  List<SecretFinding> find(String text) => findSecrets(text, extra: extra);
+  String redact(String text) => redactSecrets(text, extra: extra);
+  String redactLines(String text) => redactSecretLines(text, extra: extra);
+  String redactHead(String text, int size) =>
+      redactSecretsHead(text, size, extra: extra);
+}
+
 final _highEntropy = RegExp(
   r'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])',
 );
@@ -127,19 +249,24 @@ const secretUnscannedLabel = '検査できない長い文字列';
 ///
 /// 空白のない数万文字の並びでは、端末向けビルドの正規表現が後戻りの上限に達して失敗する。
 /// その場合は値を出さない側に倒し、全体を1つの検出として返す（本体のJavaScriptでは起きない）。
-List<SecretFinding> findSecrets(String text) {
+///
+/// [extra]は本体の設定で追加した規則（[SecretPolicy.extra]）。組み込み規則のあとに当てる（本体と同じ順）。
+List<SecretFinding> findSecrets(
+  String text, {
+  List<SecretRule> extra = const [],
+}) {
   try {
-    return _findSecrets(text);
+    return _findSecrets(text, extra);
   } on StackOverflowError {
     return [SecretFinding('unscanned', secretUnscannedLabel, 0, text.length)];
   }
 }
 
-List<SecretFinding> _findSecrets(String text) {
+List<SecretFinding> _findSecrets(String text, List<SecretRule> extra) {
   if (text.isEmpty) return const [];
   final all = <(SecretFinding, int)>[];
   var order = 0;
-  for (final rule in secretRules) {
+  for (final rule in [...secretRules, ...extra]) {
     for (final m in rule.pattern.allMatches(text)) {
       final whole = m.group(0)!;
       if (whole.isEmpty) continue;
@@ -207,8 +334,8 @@ String describeSecrets(List<SecretFinding> findings) {
 }
 
 /// 見つかった箇所を伏せ字に置き換える。
-String redactSecrets(String text) {
-  final findings = findSecrets(text);
+String redactSecrets(String text, {List<SecretRule> extra = const []}) {
+  final findings = findSecrets(text, extra: extra);
   if (findings.isEmpty) return text;
   final out = StringBuffer();
   var at = 0;
@@ -226,14 +353,18 @@ String redactSecrets(String text) {
 ///
 /// 各部分は組み立てる前に伏せておき、これは1行に収まる値の取りこぼしを防ぐために使う。
 /// 文書全体を一度に伏せると、終わりのない秘密鍵の見出しがその後ろの内容をすべて消してしまう。
-String redactSecretLines(String text) =>
-    text.split('\n').map(redactSecrets).join('\n');
+String redactSecretLines(String text, {List<SecretRule> extra = const []}) =>
+    text.split('\n').map((l) => redactSecrets(l, extra: extra)).join('\n');
 
 /// 先頭[size]文字だけを使う場面で、切る前に伏せる。
 ///
 /// 切る位置をまたぐ値を伏せ残さないよう、余裕を持たせた範囲を検査してから切る。
 /// 全文を検査しないため、長い記録でも時間がかからない。
-String redactSecretsHead(String text, int size) {
+String redactSecretsHead(
+  String text,
+  int size, {
+  List<SecretRule> extra = const [],
+}) {
   const margin = 4096;
   var end = text.length > size + margin ? size + margin : text.length;
   // サロゲートペアの途中で切らない。
@@ -243,5 +374,5 @@ String redactSecretsHead(String text, int size) {
       text.codeUnitAt(end - 1) <= 0xDBFF) {
     end--;
   }
-  return redactSecrets(text.substring(0, end));
+  return redactSecrets(text.substring(0, end), extra: extra);
 }
