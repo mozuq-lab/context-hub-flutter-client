@@ -3292,9 +3292,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
     _persist();
   }
 
+  /// 書きかけを残さない設定では、保存を試みた操作IDだけを残す（本文は[DraftStore]が外す）。
   Future<void> _persist() async {
     final key = _draftKey;
-    if (key == null || !_ready || !_keepDrafts || _finished) return;
+    if (key == null || !_ready || _finished) return;
+    if (!_keepDrafts && !locked) return;
     await _drafts.write(
       key,
       WritingDraft(
