@@ -129,6 +129,12 @@
 - Swift・Kotlinの変更は、状態ファイルの許可一覧に`templates.json`を加えた1行ずつです。この環境にXcode・Android SDKがないため、ビルド・実アプリでは未確認です。`scripts/build.sh android`（Macは`scripts/build.sh macos`）と実機での確認が必要です。
 - 未検証: Mac・Androidの実アプリでの表示と操作。資料のURLを外部のブラウザで開く動作は実機で未確認です。選んで深掘りのプロジェクト選択から統合済みを外すこと、統合済みのプロジェクトのNOW項目への依頼を保存しないこと、幅の狭い画面でのひな形の一覧は、テストを追加していません（コードの確認だけです）。
 
+## 全体レビューの指摘への対応（2026-11-15）
+
+- 本体の固定参照を、全体レビューの指摘を直した本体PR（mozuq-lab/context-hub#19）のコミット（`9450e4d`）へ進め、読取fixture（`assets/sample.json`・`assets/review.json`・`assets/scoped-policy.json`）を再生成した。形式の差は、本体が書き出すようになった`90_system/privacy/patterns.json`（設定の追加の伏せ字規則）の追加。`test/fixtures/numeric-policy.json`は形式が変わらないことを確認済み（再生成していません）。
+- 伏せ字の組み込み規則は、本体の試験データ（`secret-cases.json`）で本体と同じ結果になることを確認。submoduleを進めるまで同じ例を確かめていた`test/secrets_rules_test.dart`は、本体の試験データで確かめられるため削除。
+- 本体が受付の後に停止回復の記録（`90_system/intake/pending/`）を片付けるようになり、メモ40件のVaultの全件が302件から263件へ減ったため、`test/growth_test.dart`の「読み除く前の件数」の基準を合わせた。
+
 ## 制限・追加確認
 
 - MacのNSOpenPanelによるフォルダー選択、bookmarkの別プロセス再起動復元・再選択は未完了です。サンプルの実bridge検査とは区別します。
