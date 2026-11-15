@@ -11,7 +11,7 @@ final class VaultBridge {
   /// Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
   private let rootFiles = ["POLICY.md", "REVIEW.md"]
   /// 操作journal以外の状態ファイル。保存先の設定、端末に残す書きかけのメモ、選んで深掘りの途中の状態。
-  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json", "guided.json", "basket.json"]
+  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json", "guided.json", "basket.json", "templates.json"]
   /// キーチェーンに置く秘密の名前。選んで深掘りで使うClaudeのAPIキーだけ。
   private let secretNames: Set<String> = ["anthropic-api-key"]
   private let maxFile = 1_048_576

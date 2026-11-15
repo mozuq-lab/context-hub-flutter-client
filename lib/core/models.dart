@@ -244,6 +244,9 @@ class GitDraft {
   final DateTime? createdAt;
 }
 
+/// 本体のproject-mergesと同じ操作。
+const projectMergeActions = ['merge', 'unmerge'];
+
 /// 本体のproject-statusと同じ状態。旧版の自由記述は進行中として扱う。
 const projectLifecycles = ['active', 'paused', 'done'];
 const projectLifecycleLabels = {'active': '進行中', 'paused': '休止', 'done': '完了'};
@@ -271,6 +274,18 @@ class HubProject {
   /// 本体が生成するプロジェクトの経緯（HISTORY.md）。古い本体や未生成ならnull。
   HubDigest? history;
 
+  /// 本体が生成するプロジェクトの資料（REFERENCES.md）。参考資料に分類されたメモとURLの一覧。
+  /// 古い本体や、資料のないプロジェクトではnull。
+  HubDigest? shelf;
+
+  /// project.mdに書かれた統合先（`merged_into`）。統合されていなければnull。
+  final String? mergedInto;
+
+  /// 統合先をたどった最後のプロジェクトID。統合されていない、または統合先が見つからない・循環している場合はnull。
+  /// 統合済みのプロジェクトの入力・完了報告・日付は、このプロジェクトのものとして読む（本体と同じ）。
+  String? mergeTarget;
+  bool get merged => mergeTarget != null;
+
   /// 本体のNOW項目一覧。古い本体では空。
   final List<NowItemRef> nowItems = [];
   DateTime? nowItemsGeneratedAt;
@@ -296,10 +311,14 @@ class HubProject {
     this.aliases = const [],
     this.keywords = const [],
     this.definitionHash,
+    this.mergedInto,
   });
   String get lifecycle =>
       status == 'paused' || status == 'done' ? status : 'active';
   String get lifecycleLabel => projectLifecycleLabels[lifecycle]!;
+
+  /// 進行中として扱うか。統合済みのプロジェクトは、状態が進行中のままでも統合先に含めて扱うので数えない（本体と同じ）。
+  bool get active => lifecycle == 'active' && mergeTarget == null;
 
   /// 最終根拠からの経過日数。NOWが未生成なら不明。
   int? daysSinceEvidence(DateTime now) {
@@ -310,7 +329,7 @@ class HubProject {
   }
 
   bool stale(DateTime now) =>
-      lifecycle == 'active' &&
+      active &&
       lastEvidenceAt != null &&
       now.difference(lastEvidenceAt!) > const Duration(days: projectStaleDays);
 }
@@ -399,6 +418,7 @@ class IntakeStatus {
 }
 
 /// 検索の種類。本体の `ctx find --kind` と同じ名前。
+/// referenceは記録の種類ではなく、整理でAIが参考資料に分類したメモ・作業要約（訂正を含む）に当たる。
 const searchKinds = [
   'memo',
   'work-summary',
@@ -406,6 +426,7 @@ const searchKinds = [
   'idea',
   'knowledge',
   'now',
+  'reference',
 ];
 const searchKindLabels = {
   'memo': 'メモ',
@@ -414,6 +435,7 @@ const searchKindLabels = {
   'idea': 'アイデア',
   'knowledge': '知識',
   'now': 'NOW',
+  'reference': '資料',
 };
 
 /// 検索の絞り込み条件。本体の `ctx find` の --project・--kind・--since・--until・--sort に対応する。

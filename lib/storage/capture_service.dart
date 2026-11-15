@@ -148,6 +148,7 @@ class CaptureService {
     'drafts.json',
     'guided.json',
     'basket.json',
+    'templates.json',
   };
   Future<List<String>> _journalNames() async => [
     for (final name in await access.listJournals())
@@ -358,6 +359,39 @@ class CaptureService {
       'project_id': project.id,
       'project_hash': hash,
       'status': status,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// プロジェクトの統合（[unmerge]なら取り消し）の依頼。確認した統合元と統合先の定義hashに結び付ける。
+  Future<CaptureResult> saveProjectMerge(
+    String operationId,
+    HubProject from,
+    HubProject into, {
+    bool unmerge = false,
+  }) => _serial(() async {
+    final fromHash = from.definitionHash, intoHash = into.definitionHash;
+    final sha = RegExp(r'^[a-f0-9]{64}$');
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(from.id) ||
+        !projectIdPattern.hasMatch(into.id) ||
+        from.id == into.id ||
+        fromHash == null ||
+        intoHash == null ||
+        !sha.hasMatch(fromHash) ||
+        !sha.hasMatch(intoHash) ||
+        (unmerge
+            ? from.mergedInto != into.id
+            : from.mergedInto != null || into.mergedInto != null)) {
+      throw const FormatException('統合元と統合先のプロジェクトを確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': unmerge ? 'project-unmerge' : 'project-merge',
+      'project_id': from.id,
+      'project_hash': fromHash,
+      'into_id': into.id,
+      'into_hash': intoHash,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

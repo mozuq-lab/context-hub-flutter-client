@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
+import '../storage/template_store.dart';
 import '../storage/basket_store.dart';
 import '../core/repository.dart';
 import '../core/attention.dart';
@@ -712,6 +713,9 @@ class HubController extends ChangeNotifier {
   /// 書きかけのメモ（端末内のみ）。
   late final DraftStore drafts = DraftStore(access);
 
+  /// メモのひな形（端末内のみ）。
+  late final TemplateStore templates = TemplateStore(access);
+
   /// 現在のVaultでの書きかけのキー。Vaultが未選択ならnull。
   String? draftKey({String? gitDraftId}) {
     final target = location;
@@ -943,6 +947,7 @@ class HubController extends ChangeNotifier {
       if (parsed.projectDefinitionRequestIdFor(projectId) != null) {
         throw StateError('呼び名とキーワードの変更が反映されるまで待ってから依頼してください。');
       }
+      _refuseMerged(parsed, project);
       if (pending.isNotEmpty) {
         throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
       }
@@ -967,6 +972,74 @@ class HubController extends ChangeNotifier {
     }
   }
 
+  /// 統合済みのプロジェクトと、統合・取り消しの反映を待っているプロジェクトへの定義の変更を止める。
+  static void _refuseMerged(HubRepository parsed, HubProject project) {
+    if (parsed.projectMergeRequestIdFor(project.id) != null) {
+      throw StateError('統合の依頼が反映されるまで待ってから依頼してください。');
+    }
+    final target = project.mergeTarget;
+    if (target != null) {
+      throw StateError(
+        'このプロジェクトは「${parsed.projects[target]?.title ?? target}」に統合済みです。統合先で操作してください。',
+      );
+    }
+  }
+
+  /// 表示中の2つの定義hashに結び付けて、プロジェクトの統合（[unmerge]なら取り消し）をInputへ依頼する。
+  ///
+  /// 統合すると、統合元の入力・完了報告・日付を統合先のものとして読む（原文と記録は動かさない）。
+  Future<CaptureResult> requestProjectMerge(
+    String fromId,
+    String fromHash,
+    String intoId,
+    String intoHash, {
+    bool unmerge = false,
+  }) {
+    late HubProject from, into;
+    return _confirmedRequest(
+      (parsed) {
+        final a = parsed.projects[fromId], b = parsed.projects[intoId];
+        if (a == null ||
+            b == null ||
+            a.definitionHash != fromHash ||
+            b.definitionHash != intoHash) {
+          throw StateError('プロジェクト定義が変更されています。表示を確認してから操作してください。');
+        }
+        for (final p in [a, b]) {
+          if (parsed.projectMergeRequestIdFor(p.id) != null ||
+              parsed.projectDefinitionRequestIdFor(p.id) != null ||
+              parsed.projectStatusRequestIdFor(p.id) != null) {
+            throw StateError('「${p.title}」への依頼が反映待ちです。受付状況を確認してください。');
+          }
+        }
+        if (unmerge) {
+          if (a.mergedInto != intoId) {
+            throw StateError('統合先が変わっています。表示を確認してから操作してください。');
+          }
+        } else {
+          if (fromId == intoId) throw StateError('別のプロジェクトを統合先に選んでください。');
+          if (a.mergedInto != null) {
+            throw StateError('「${a.title}」は既に統合済みです。');
+          }
+          if (b.mergedInto != null) {
+            throw StateError('「${b.title}」は統合済みです。統合先を選び直してください。');
+          }
+          if (parsed.projects.values.any((p) => p.mergedInto == fromId)) {
+            throw StateError(
+              '「${a.title}」にはほかのプロジェクトが統合されています。先にそちらの統合を取り消してください。',
+            );
+          }
+        }
+        from = a;
+        into = b;
+        // 最新の統合の記録を含め、取り消した後の同じ定義への依頼が過去の操作と混ざらないようにする。
+        return 'project-${unmerge ? 'unmerge' : 'merge'}/$fromId/$fromHash/$intoId/$intoHash/${parsed.latestMergeChangeId(fromId) ?? '-'}';
+      },
+      (service, parsed, operation) =>
+          service.saveProjectMerge(operation, from, into, unmerge: unmerge),
+    );
+  }
+
   /// 表示中の定義hashに結び付けて、名前・別名・キーワードの変更をInputへ依頼する。
   Future<CaptureResult> requestProjectDefinition(
     String projectId,
@@ -984,6 +1057,7 @@ class HubController extends ChangeNotifier {
             parsed.projectStatusRequestIdFor(projectId) != null) {
           throw StateError('このプロジェクトへの依頼が反映待ちです。受付状況を確認してください。');
         }
+        _refuseMerged(parsed, found);
         final problem = next.problem;
         if (problem != null) throw StateError(problem);
         if (next.sameAs(found)) {
@@ -1069,6 +1143,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;
@@ -1105,6 +1183,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;
@@ -1146,6 +1228,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;

@@ -66,7 +66,9 @@ class _GuidedPageState extends State<GuidedPage> {
   @override
   void initState() {
     super.initState();
-    project = _projects.containsKey(widget.project) ? widget.project : null;
+    // 統合済みのプロジェクトから始めたときは、統合先のプロジェクトとして深掘りする。
+    final given = _projects[widget.project];
+    project = given == null ? null : given.mergeTarget ?? given.id;
     g.addListener(_sync);
     _lifecycle = AppLifecycleListener(
       onInactive: g.flush,
@@ -225,7 +227,8 @@ class _GuidedPageState extends State<GuidedPage> {
     decoration: const InputDecoration(labelText: 'プロジェクト（任意）'),
     items: [
       const DropdownMenuItem(value: '', child: Text('指定しない')),
-      for (final p in _projects.values)
+      // 統合済みのプロジェクトは選ばせない（統合先を選ぶ）。
+      for (final p in _projects.values.where((p) => !p.merged || p.id == value))
         DropdownMenuItem(
           value: p.id,
           child: Text(p.title, overflow: TextOverflow.ellipsis),

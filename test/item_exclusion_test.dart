@@ -142,6 +142,63 @@ void main() {
     expect(validExclusionNote(null), isFalse);
   });
 
+  test('統合元へAIが推定した関連は、統合先で「別のプロジェクトの話」として外すと統合先から外す（本体と同じ）', () {
+    final files = fixtureFiles();
+    // context-hub を keep へ統合した（手で書いた統合先でも、本体と同じく読み替える）。
+    const path = '10_projects/$projectId/project.md';
+    files['10_projects/keep/project.md'] = encodePacket({
+      'schema_version': 1,
+      'id': 'keep',
+      'title': '残すほう',
+      'aliases': <String>[],
+      'keywords': <String>[],
+      'status': 'active',
+    }, '# 残すほう\n');
+    final doc = parseMarkdown(files[path]!);
+    files[path] = encodePacket({
+      ...doc.meta,
+      'status': 'done',
+      'merged_into': 'keep',
+    }, doc.body);
+    final base = HubRepository(fixture(files));
+    expect(
+      base.projectRelation(base.inputRecord(ideaInput)!, 'keep'),
+      'estimated',
+    );
+    final item = NowItemRef(
+      key: 'a' * 64,
+      section: 'next',
+      label: '',
+      text: '別の話',
+      inputId: ideaInput,
+    );
+    // 外した記録が統合先のものでも、統合前に統合元で外したものでも、統合先との関連を外す。
+    for (final project in ['keep', projectId]) {
+      final repo = HubRepository(
+        fixture({
+          ...files,
+          '90_system/item-resolutions/$resA.json': resolutionJson(
+            resA,
+            item,
+            'exclude',
+            reason: 'wrong-project',
+            project: project,
+          ),
+        }),
+      );
+      expect(
+        repo.projectRelation(repo.inputRecord(ideaInput)!, 'keep'),
+        isNull,
+        reason: project,
+      );
+      expect(
+        repo.projectRelation(repo.inputRecord(ideaInput)!, projectId),
+        isNull,
+        reason: project,
+      );
+    }
+  });
+
   test('「別のプロジェクトの話」として外すと、AIが推定した関連を本体と同じく外して読む', () {
     final files = fixtureFiles(),
         base = HubRepository(fixture(files)),
