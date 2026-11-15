@@ -2564,7 +2564,7 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
               ('3日後', 3),
               ('1週間後', 7),
               ('2週間後', 14),
-              ('1か月後', 30),
+              ('30日後', 30),
             ])
               ActionChip(
                 key: Key('schedule-$key-$days'),
