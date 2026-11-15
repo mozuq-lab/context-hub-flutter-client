@@ -29,6 +29,7 @@ class HubRepository {
   final Map<String, DateTime> _resolutionTimes = {};
   final Map<String, String> _latestResolutions = {};
   final Map<String, String> _outstandingItems = {};
+  final Map<String, String> _outstandingHintDismissals = {};
   final Map<String, String> _outstandingDrafts = {};
 
   /// プロジェクトID → 反映待ちの「NOWを生成版に戻す」依頼のREQ ID。
@@ -312,6 +313,27 @@ class HubRepository {
                       ).hasMatch(r['id'])))) {
             throw const FormatException();
           }
+          final hints = <NowItemHint>[];
+          final rawHints = i['hints'];
+          if (rawHints != null) {
+            if (rawHints is! List) throw const FormatException();
+            for (final h in rawHints) {
+              if (h is! Map ||
+                  h['input_id'] is! String ||
+                  !inputIdPattern.hasMatch(h['input_id']) ||
+                  h['quote'] is! String ||
+                  (h['quote'] as String).isEmpty) {
+                throw const FormatException();
+              }
+              hints.add(
+                NowItemHint(
+                  inputId: h['input_id'] as String,
+                  quote: h['quote'] as String,
+                  at: timestamp(h['at']),
+                ),
+              );
+            }
+          }
           items.add(
             NowItemRef(
               key: i['key'],
@@ -321,6 +343,7 @@ class HubRepository {
               inputId: i['input_id'],
               resolutionId: r is Map ? r['id'] as String : null,
               resolvedAt: r is Map ? timestamp(r['at']) : null,
+              hints: r == null ? hints : const [],
             ),
           );
         }
@@ -402,6 +425,13 @@ class HubRepository {
 
   /// 反映を待っている、この項目への完了・解決（または再開）の報告。
   String? itemRequestIdFor(String itemKey) => _outstandingItems[itemKey];
+
+  /// 反映を待っている、この項目へのこのメモからの「片付いたかも」の見送り。
+  String? hintDismissRequestIdFor(String itemKey, String inputId) =>
+      _outstandingHintDismissals['$itemKey/$inputId'];
+
+  /// 本体の入力ID（IN-…）に対応する記録。見つからなければnull。
+  HubRecord? inputRecord(String inputId) => _inputs[inputId];
 
   /// この項目の最新の解決・再開記録のID。記録がなければnull。
   String? latestResolutionIdFor(String itemKey) => _latestResolutions[itemKey];
@@ -870,6 +900,7 @@ class HubRepository {
               'project-status',
               'project-definition',
               'item-resolution',
+              'item-hint-dismiss',
               'git-draft-dismiss',
               'project-create',
               'conflict-resolve',
@@ -914,6 +945,18 @@ class HubRepository {
                 m['item_key'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !['resolve', 'reopen'].contains(m['action']))) {
+          throw const FormatException();
+        }
+        final hintDismiss = m['operation'] == 'item-hint-dismiss';
+        if (hintDismiss &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                m['input_id'] is! String ||
+                !inputIdPattern.hasMatch(m['input_id']))) {
           throw const FormatException();
         }
         if (draftDismiss &&
@@ -1030,6 +1073,8 @@ class HubRepository {
               ? '呼び名とキーワードの変更依頼: ${m['title']}'
               : itemReport
               ? '${m['action'] == 'resolve' ? '完了・解決' : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : hintDismiss
+              ? '「片付いたかも」の見送り: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
               ? '下書きの見送り: ${gitDrafts[m['draft_id']]?.repo ?? m['draft_id']}'
               : retiring
@@ -1134,6 +1179,19 @@ class HubRepository {
                 throw const FormatException();
               }
               acceptedMemo = r['memoInputId'] is String;
+            }
+            if (hintDismiss) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['hintInputId'] != m['input_id'] ||
+                  r['dismissalId'] is! String ||
+                  !RegExp(
+                    r'^HDM-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['dismissalId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
             }
             if (draftDismiss) {
               final r = ack['result'] as Map;
@@ -1257,6 +1315,7 @@ class HubRepository {
           }
         }
         if (itemReport) _itemRequest(item, m, resolutionId);
+        if (hintDismiss) _hintDismissRequest(item, m);
         if (draftDismiss &&
             ['waiting', 'accepted'].contains(item.state) &&
             gitDrafts.containsKey(m['draft_id'])) {
@@ -1349,6 +1408,24 @@ class HubRepository {
       outstanding = true;
     }
     if (outstanding) _outstandingItems[key] = item.id;
+  }
+
+  /// 「片付いたかも」の見送りの反映状況。NOWの項目一覧からその候補が消えていれば反映済みとする。
+  void _hintDismissRequest(IntakeStatus item, Map<String, dynamic> m) {
+    final key = m['item_key'] as String, input = m['input_id'] as String;
+    final shown =
+        projects[m['project_id']]?.nowItems
+            .where((i) => i.key == key)
+            .firstOrNull
+            ?.hints
+            .any((h) => h.inputId == input) ??
+        false;
+    if (item.state == 'waiting' || (item.state == 'accepted' && shown)) {
+      _outstandingHintDismissals['$key/$input'] = item.id;
+      if (item.state == 'accepted') item.detail = 'Mini受領済み。NOWの同期を待っています。';
+    } else if (item.state == 'accepted') {
+      item.detail = '見送りをMiniが反映しました。';
+    }
   }
 
   /// 進行中のプロジェクトを、最新の根拠が新しい順に並べる。根拠のないものは後ろへ置き、同じ日時ならID順。

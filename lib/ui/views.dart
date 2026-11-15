@@ -1020,6 +1020,105 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 「片付いたかも」が違うときに、そのメモからの候補を見送る。項目は未解決のまま残る。
+  Future<void> dismissHint(
+    HubProject project,
+    NowItemRef item,
+    NowItemHint hint,
+  ) async {
+    if (!await confirmAction(
+          '「片付いたかも」を見送る',
+          '${item.display}\n\n根拠のメモ: 「${hint.quote}」\n\nこのメモからの候補を見送るよう依頼します。項目は${item.section == 'next' ? '次の一手' : '未解決'}に残ります。',
+          '見送る',
+        ) ||
+        !mounted) {
+      return;
+    }
+    try {
+      final result = await c.requestHintDismiss(
+        project.id,
+        item.key,
+        hint.inputId,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '見送りを保存しました。Miniで受け付けられるとNOWに反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// AIが「片付いたかも」と示した根拠。完了にするかは本人が決める。
+  Widget hintBox(HubProject project, NowItemRef item, NowItemHint hint) {
+    final scheme = Theme.of(context).colorScheme,
+        memo = repo.inputRecord(hint.inputId),
+        pending = repo.hintDismissRequestIdFor(item.key, hint.inputId) != null;
+    return Container(
+      key: Key('hint-${item.key.substring(0, 12)}-${hint.inputId}'),
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '片付いたかも（AIの推定・未確認）',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: scheme.onSecondaryContainer,
+            ),
+          ),
+          const SizedBox(height: 2),
+          SelectableText(
+            '「${hint.quote}」',
+            style: const TextStyle(fontSize: 13),
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              if (memo != null)
+                TextButton.icon(
+                  key: const Key('hint-memo'),
+                  onPressed: () => open(memo.id),
+                  icon: const Icon(Icons.article_outlined, size: 15),
+                  label: Text(
+                    memo.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              pending
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Text(
+                        '見送り済み（反映待ち）',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    )
+                  : TextButton.icon(
+                      key: Key('dismiss-hint-${item.key.substring(0, 12)}'),
+                      onPressed: busy
+                          ? null
+                          : () => dismissHint(project, item, hint),
+                      icon: const Icon(Icons.close, size: 15),
+                      label: const Text('違う'),
+                    ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> dismissDraft(GitDraft draft) async {
     if (!await confirmAction(
           '下書きを見送る',
@@ -1087,6 +1186,10 @@ class _HubViewState extends State<HubView> {
               color: Theme.of(context).colorScheme.error,
             ),
           ),
+        if (entry.itemKey case final key?)
+          if (project.nowItems.where((i) => i.key == key).firstOrNull
+              case final item?)
+            for (final hint in item.hints) hintBox(project, item, hint),
         Wrap(
           spacing: 8,
           children: [

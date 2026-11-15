@@ -637,6 +637,34 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 「片付いたかも」が違うとき、そのメモからの候補を見送る依頼を保存する。項目の完了・解決は変えない。
+  Future<CaptureResult> requestHintDismiss(
+    String projectId,
+    String itemKey,
+    String inputId,
+  ) {
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        final found = parsed.projects[projectId]?.nowItems
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null ||
+            found.resolved ||
+            !found.hints.any((h) => h.inputId == inputId)) {
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.hintDismissRequestIdFor(itemKey, inputId) != null) {
+          throw StateError('この候補は見送り済みです。受付状況を確認してください。');
+        }
+        item = found;
+        return 'hint/$projectId/$itemKey/$inputId';
+      },
+      (service, parsed, operation) =>
+          service.saveHintDismiss(operation, projectId, item, inputId),
+    );
+  }
+
   /// 新しいプロジェクトの作成を依頼する。操作IDとプロジェクトIDは入力フォームが持ち、
   /// 保存結果が不明なときは同じ操作IDで確認する。
   Future<CaptureResult> requestProjectCreate(NewProjectRequest request) async {
