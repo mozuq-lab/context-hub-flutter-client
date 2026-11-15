@@ -701,6 +701,44 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 似ているアイデアの組を束ねる（link）か、別の話とする（separate）依頼を保存する。
+  /// 束ねるのは索引にある未確認の組、束から外すのは同じ束にある組、別の話とするのはそのどちらか。
+  Future<CaptureResult> requestIdeaLink(String a, String b, String action) {
+    late String hashA, hashB;
+    return _confirmedRequest(
+      (parsed) {
+        final key = ideaPairKey(a, b);
+        final candidate = parsed.ideaCandidates
+            .where((c) => ideaPairKey(c.a, c.b) == key)
+            .firstOrNull;
+        // 束から外せるのは、本人が直接束ねた組だけ（束を間接につないでいる組は外しても束に残る）。
+        final linked = parsed.ideaGroupOf(a)?.linksDirectly(a, b) ?? false;
+        if (!ideaLinkActions.contains(action) ||
+            (action == 'link' && candidate == null) ||
+            (action == 'separate' && candidate == null && !linked)) {
+          throw StateError('似ているアイデアの一覧が更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.ideaLinkRequestIdFor(a, b) != null) {
+          throw StateError('この組は依頼済みです。受付状況を確認してください。');
+        }
+        final ra = parsed.ideaRecord(a), rb = parsed.ideaRecord(b);
+        if (ra == null || rb == null) {
+          throw StateError('アイデアが見つかりません。再読込してください。');
+        }
+        // 束ねた後のアイデアは索引の候補に出ないため、今のファイルのhashを使う（本体は束ねるときだけ確かめる）。
+        hashA = candidate == null
+            ? digest(parsed.snapshot.files[ra.path]!)
+            : (candidate.a == a ? candidate.hashA : candidate.hashB);
+        hashB = candidate == null
+            ? digest(parsed.snapshot.files[rb.path]!)
+            : (candidate.a == b ? candidate.hashA : candidate.hashB);
+        return 'idea-link/$key/$action/$hashA/$hashB';
+      },
+      (service, parsed, operation) =>
+          service.saveIdeaLink(operation, a, hashA, b, hashB, action),
+    );
+  }
+
   /// 作業記録の下書きを見送る依頼を保存する。
   Future<CaptureResult> requestGitDraftDismiss(
     String draftId,

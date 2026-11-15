@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../app/controller.dart';
 import '../core/models.dart';
 import '../core/repository.dart';
+import '../core/secrets.dart';
 import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
 import 'markdown_view.dart';
@@ -14,6 +15,49 @@ import 'guided_view.dart';
 
 void notice(BuildContext context, String text) =>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+/// 秘密情報らしい文字列があれば、保存の前に知らせる。
+/// 保存する本文（伏せ字にしたもの、またはそのまま）を返す。戻って直すならnull。
+Future<String?> checkSecretsBeforeSave(BuildContext context, String text) async {
+  final findings = findSecrets(text);
+  if (findings.isEmpty) return text;
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (dialog) => AlertDialog(
+      key: const Key('secret-warning'),
+      title: const Text('秘密情報らしい文字列があります'),
+      content: SizedBox(
+        width: 480,
+        child: Text(
+          '${describeSecrets(findings)}に見える文字列があります。\n\n'
+          'Inputへ保存したメモは、同期先のすべての端末とバックアップに残り、後から消せません（訂正しても元のメモは残ります）。'
+          '整理用のAIへは伏せ字にして渡しますが、本当に秘密の値なら「伏せ字にして保存」を選んでください。',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialog),
+          child: const Text('戻って直す'),
+        ),
+        TextButton(
+          key: const Key('secret-keep'),
+          onPressed: () => Navigator.pop(dialog, 'keep'),
+          child: const Text('そのまま保存'),
+        ),
+        FilledButton(
+          key: const Key('secret-redact'),
+          onPressed: () => Navigator.pop(dialog, 'redact'),
+          child: const Text('伏せ字にして保存'),
+        ),
+      ],
+    ),
+  );
+  return switch (choice) {
+    'redact' => redactSecrets(text),
+    'keep' => text,
+    _ => null,
+  };
+}
 
 class NoticeBox extends StatelessWidget {
   const NoticeBox(this.text, {super.key, this.error = false});
@@ -223,6 +267,19 @@ class _HubViewState extends State<HubView> {
       ],
     ),
   );
+  /// アイデア一覧の印。束ねたアイデアと、未確認の似ているアイデアの数。
+  String? ideaBadge(HubRecord r) {
+    final group = repo.ideaGroupOf(r.sourceId),
+        similar = repo.similarIdeas(r.sourceId).length;
+    return [
+      if (group != null)
+        group.representative == r.sourceId
+            ? '束ねたアイデアの代表（${group.ideas.length}件）'
+            : '束ねたアイデア（${group.ideas.length}件）',
+      if (similar > 0) '似ているアイデア $similar件',
+    ].join(' · ').nullIfEmpty;
+  }
+
   Widget recordCard(
     HubRecord r, {
     Key? key,
@@ -603,7 +660,7 @@ class _HubViewState extends State<HubView> {
             .map(
               (r) => Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: recordCard(r),
+                child: recordCard(r, badge: ideas ? ideaBadge(r) : null),
               ),
             ),
       );
@@ -1566,6 +1623,121 @@ class RecordView extends StatelessWidget {
     );
   }
 
+  /// 似ているアイデアと束ねたアイデア。束ねる・別の話にする判断を依頼できる。
+  Widget ideaPanel(BuildContext context) {
+    final repo = controller.repository;
+    if (repo == null) return const SizedBox.shrink();
+    final me = record.sourceId,
+        group = repo.ideaGroupOf(me),
+        similar = repo.similarIdeas(me);
+    if (group == null && similar.isEmpty) return const SizedBox.shrink();
+    final busy = controller.saving || controller.loading;
+    Widget pairActions(String other, {required bool candidate}) {
+      final requestId = repo.ideaLinkRequestIdFor(me, other);
+      if (requestId != null) {
+        return Text(
+          '依頼済み（$requestId）。Miniで受け付けられると反映されます。',
+          style: const TextStyle(fontSize: 12),
+        );
+      }
+      return Wrap(
+        spacing: 8,
+        children: [
+          if (candidate)
+            FilledButton.tonal(
+              key: Key('idea-link-$other'),
+              onPressed: busy
+                  ? null
+                  : () => sendIdeaLink(context, controller, me, other, 'link'),
+              child: const Text('同じ話として束ねる'),
+            ),
+          TextButton(
+            key: Key('idea-separate-$other'),
+            onPressed: busy
+                ? null
+                : () =>
+                      sendIdeaLink(context, controller, me, other, 'separate'),
+            child: Text(candidate ? '別の話' : '束から外す'),
+          ),
+        ],
+      );
+    }
+
+    Widget ideaCard(String id, {String? note, Widget? actions}) {
+      final r = repo.ideaRecord(id)!;
+      return Card(
+        key: Key('idea-related-$id'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(r.title),
+                subtitle: note == null ? null : Text(note),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => open(context, r.id),
+              ),
+              ?actions,
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (group != null) ...[
+            Text(
+              '束ねたアイデア（${group.ideas.length}件）',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              '本人が同じ話と判断したアイデアです。検索では1件にまとめて表示します（本体の検索）。',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            for (final id in group.ideas.where((id) => id != me))
+              ideaCard(
+                id,
+                note: [
+                  if (id == group.representative) '代表（元のメモが最も新しい）',
+                  if (!group.linksDirectly(me, id)) '別のアイデアを通して束ねています',
+                ].join(' · ').nullIfEmpty,
+                actions: group.linksDirectly(me, id)
+                    ? pairActions(id, candidate: false)
+                    : null,
+              ),
+            const SizedBox(height: 16),
+          ],
+          if (similar.isNotEmpty) ...[
+            Text(
+              '似ているアイデア（${similar.length}件）',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              '文字の重なりから見つけた候補です（AIは使っていません）。同じ話なら束ねると、どこまで考えたかを1か所で追えます。違う話なら「別の話」を選ぶと、次から候補に出しません。',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            for (final c in similar)
+              ideaCard(
+                c.other(me),
+                note: '似ている度合い ${c.score.toStringAsFixed(2)}',
+                actions: pairActions(c.other(me), candidate: true),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('記録の詳細')),
@@ -1595,6 +1767,11 @@ class RecordView extends StatelessWidget {
               controller: controller,
               onRecord: (id) => open(context, id),
             ),
+            if (record.kind == 'idea')
+              ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => ideaPanel(context),
+              ),
             if (const [
               'memo',
               'work-summary',
@@ -1626,6 +1803,68 @@ class RecordView extends StatelessWidget {
       ),
     ),
   );
+}
+
+extension on String {
+  String? get nullIfEmpty => isEmpty ? null : this;
+}
+
+/// 似ているアイデアの組を束ねる・別の話にする依頼を、確認してから保存する。
+Future<void> sendIdeaLink(
+  BuildContext context,
+  HubController c,
+  String me,
+  String other,
+  String action,
+) async {
+  final repo = c.repository;
+  final title = repo?.ideaRecord(other)?.title ?? other;
+  final linked = repo?.ideaGroupOf(me)?.linksDirectly(me, other) ?? false;
+  final (heading, body, verb) = action == 'link'
+      ? (
+          '同じ話として束ねる',
+          '「$title」と同じ話として束ねるよう依頼します。アイデアと元のメモは変わりません。',
+          '束ねる',
+        )
+      : linked
+      ? (
+          '束から外す',
+          '「$title」との束ねを外すよう依頼します。次からは似ているアイデアの候補にも出しません。',
+          '外す',
+        )
+      : ('別の話にする', '「$title」とは別の話として、次から候補に出さないよう依頼します。', '別の話にする');
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dialog) => AlertDialog(
+      title: Text(heading),
+      content: Text('$body依頼はInputへ保存され、Miniで受け付けられると反映されます。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialog, false),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('idea-link-confirm'),
+          onPressed: () => Navigator.pop(dialog, true),
+          child: Text(verb),
+        ),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  try {
+    final result = await c.requestIdeaLink(me, other, action);
+    if (context.mounted) {
+      notice(
+        context,
+        result.saved
+            ? '依頼を保存しました。Miniで受け付けられると反映されます。'
+            : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+      );
+    }
+  } catch (e) {
+    if (context.mounted) notice(context, HubController.message(e));
+  }
 }
 
 /// ホームに出す「前回見てからの変化」。記録がない・変化がなければnull。
@@ -1735,6 +1974,9 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
       setState(() => error = '訂正文は1〜8000文字で入力してください。');
       return;
     }
+    final checked = await checkSecretsBeforeSave(context, text.text);
+    if (checked == null || !mounted) return;
+    if (checked != text.text) text.text = checked;
     setState(() {
       busy = true;
       error = null;
@@ -2042,6 +2284,15 @@ class _CaptureDialogState extends State<CaptureDialog> {
     if (text.text.trim().isEmpty || text.text.length > 8000) {
       setState(() => error = '本文は1〜8000文字で入力してください。');
       return;
+    }
+    final checked = await checkSecretsBeforeSave(context, text.text);
+    if (checked == null || !mounted) return;
+    if (checked != text.text) {
+      if (checked.length > 8000) {
+        setState(() => error = '伏せ字にすると8000文字を超えます。本文を短くしてください。');
+        return;
+      }
+      text.text = checked;
     }
     setState(() {
       busy = true;
@@ -2509,6 +2760,11 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
 
   Future<void> submit() async {
     if (busy) return;
+    if (memo.text.trim().isNotEmpty) {
+      final checked = await checkSecretsBeforeSave(context, memo.text);
+      if (checked == null || !mounted) return;
+      if (checked != memo.text) memo.text = checked;
+    }
     final r = request, repo = widget.controller.repository;
     final problem =
         r.formatError ??

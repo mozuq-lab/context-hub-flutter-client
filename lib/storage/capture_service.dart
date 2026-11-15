@@ -451,6 +451,37 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// 似ているアイデアの組を束ねる（link）か、別の話とする（separate）依頼。
+  /// 本体が索引を作ったときのIDEAファイルのhashに結び付け、束ねるときは本体が一致を確かめる。
+  Future<CaptureResult> saveIdeaLink(
+    String operationId,
+    String ideaA,
+    String hashA,
+    String ideaB,
+    String hashB,
+    String action,
+  ) => _serial(() async {
+    final hash = RegExp(r'^[a-f0-9]{64}$');
+    if (!_uuid.hasMatch(operationId) ||
+        !ideaIdPattern.hasMatch(ideaA) ||
+        !ideaIdPattern.hasMatch(ideaB) ||
+        ideaA == ideaB ||
+        !hash.hasMatch(hashA) ||
+        !hash.hasMatch(hashB) ||
+        !ideaLinkActions.contains(action)) {
+      throw const FormatException('アイデアと操作を確認してください。');
+    }
+    final first = ideaA.compareTo(ideaB) < 0;
+    final fields = <String, dynamic>{
+      'operation': 'idea-link',
+      'idea_ids': first ? [ideaA, ideaB] : [ideaB, ideaA],
+      'idea_hashes': first ? [hashA, hashB] : [hashB, hashA],
+      'action': action,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// 作業記録の下書きを見送る依頼。
   Future<CaptureResult> saveGitDraftDismiss(
     String operationId,

@@ -1,3 +1,4 @@
+import 'secrets.dart';
 import 'dart:convert';
 import 'parser.dart' show clip;
 
@@ -576,8 +577,9 @@ GuidedPrompt guidedQuestionPrompt(
   }
   return GuidedPrompt(
     system: _questionSystem,
-    context: _contextBlock(s),
-    turn: turn.toString(),
+    // 資料・きっかけ・回答に紛れた秘密情報らしい文字列は、送る前に伏せる。
+    context: redactSecrets(_contextBlock(s)),
+    turn: redactSecrets(turn.toString()),
     schema: _questionSchema,
     effort: 'low',
     maxTokens: 16000,
@@ -600,8 +602,9 @@ GuidedPrompt guidedSummaryPrompt(
   }
   return GuidedPrompt(
     system: _summarySystem,
-    context: _contextBlock(s),
-    turn: turn.toString(),
+    // 資料・きっかけ・回答に紛れた秘密情報らしい文字列は、送る前に伏せる。
+    context: redactSecrets(_contextBlock(s)),
+    turn: redactSecrets(turn.toString()),
     schema: _summarySchema(s.purpose),
     effort: 'medium',
     maxTokens: 16000,
