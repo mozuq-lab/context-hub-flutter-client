@@ -418,6 +418,31 @@ void main() {
         expect(model.prompts, isEmpty);
       });
 
+      testWidgets('Vaultを読み込み直したら、送る資料も作り直し、新しい規則で伏せる', (tester) async {
+        await openApp(tester, patternsFile());
+        await tapKey(tester, 'open-guided');
+        await tapKey(tester, 'guided-include-context');
+        // 読み込み直したVaultでは、メモの本文と追加規則が変わっている。
+        access.current = fixture(
+          filesWith(
+            patterns: patternsFile(
+              patterns: [
+                {'label': '社内コード', 'pattern': r'ZZ-\d{4}'},
+              ],
+            ),
+            body: '読み込み直した本文 ZZ-1234',
+          ),
+        );
+        await c.reload();
+        await tester.pumpAndSettle();
+        model.replies.add(question('次は？', ['a', 'b']));
+        await tapKey(tester, 'guided-start');
+        final sent = model.prompts.single.context;
+        expect(sent, contains('読み込み直した本文'));
+        expect(sent, contains('[伏せ字:社内コード]'));
+        expect(sent, isNot(contains('ZZ-1234')));
+      });
+
       testWidgets('メモの保存の前に、追加規則に当たる文字列も知らせて伏せ字にできる', (tester) async {
         await openApp(tester, patternsFile());
         await tapKey(tester, 'new-memo');

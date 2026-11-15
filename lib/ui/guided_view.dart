@@ -62,6 +62,9 @@ class _GuidedPageState extends State<GuidedPage> {
   GuidedContext? _material;
   String? _materialFor;
 
+  /// 資料を作ったときの読込結果。Vaultを読み込み直したら（追加規則が変わった場合を含む）作り直す。
+  Object? _materialRepo;
+
   Map<String, HubProject> get _projects =>
       widget.hub.repository?.projects ?? const {};
 
@@ -72,6 +75,7 @@ class _GuidedPageState extends State<GuidedPage> {
     final given = _projects[widget.project];
     project = given == null ? null : given.mergeTarget ?? given.id;
     g.addListener(_sync);
+    widget.hub.addListener(_hubChanged);
     _lifecycle = AppLifecycleListener(
       onInactive: g.flush,
       onHide: g.flush,
@@ -95,9 +99,17 @@ class _GuidedPageState extends State<GuidedPage> {
     setState(() {});
   }
 
+  /// Vaultを読み込み直したら、表示する資料を作り直す（送るのは表示したもの）。
+  void _hubChanged() {
+    if (mounted && !identical(widget.hub.repository, _materialRepo)) {
+      setState(() {});
+    }
+  }
+
   @override
   void dispose() {
     _lifecycle.dispose();
+    widget.hub.removeListener(_hubChanged);
     g.removeListener(_sync);
     g.dispose();
     seed.dispose();
@@ -109,12 +121,22 @@ class _GuidedPageState extends State<GuidedPage> {
   /// 送る資料。始める前に見せたものをそのまま送る。
   GuidedContext _materialOf(String? id) {
     final key = id ?? '';
-    if (_material == null || _materialFor != key) {
+    final repo = widget.hub.repository;
+    if (_material == null ||
+        _materialFor != key ||
+        !identical(_materialRepo, repo)) {
       _material = g.buildContext(id);
       _materialFor = key;
+      _materialRepo = repo;
     }
     return _material!;
   }
+
+  /// 表示した資料が今の読込結果のものか。違えば、見せていない資料を送らない。
+  bool _materialShown(String? id) =>
+      _material != null &&
+      _materialFor == (id ?? '') &&
+      identical(_materialRepo, widget.hub.repository);
 
   Future<bool> _confirm(String title, String body, String action) async =>
       await showDialog<bool>(
@@ -144,6 +166,17 @@ class _GuidedPageState extends State<GuidedPage> {
           '前回の深掘りは破棄されます。Vaultには何も書いていません。',
           '新しく始める',
         )) {
+      return;
+    }
+    if (includeContext && !_materialShown(project)) {
+      setState(() {});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Vaultの資料が更新されました。表示した資料を確かめてから、もう一度「始める」を押してください。'),
+          ),
+        );
+      }
       return;
     }
     await g.start(
