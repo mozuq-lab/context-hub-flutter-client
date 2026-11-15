@@ -17,6 +17,16 @@ const snapshotSkippedPaths = [
   '90_system/project-approvals/materialized',
 ];
 
+/// 本体が知らない上位の版（schema_version 2以降）で書いた記録があるときの注意。ファイルごとには出さず1件だけ出す。
+const newerFormatWarning = '本体が新しい形式で書いた記録があります。読めない記録があるため、アプリを更新してください。';
+
+/// 本体の記録が、このアプリの知らない上位の版で書かれているか。
+bool newerSchema(Object? value) {
+  if (value is! Map) return false;
+  final version = value['schema_version'];
+  return version is int && version > 1;
+}
+
 /// ネイティブの読取上限に達したときの注意の書き出し。
 const snapshotLimitWarningPrefix = '読取の上限';
 

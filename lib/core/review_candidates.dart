@@ -229,9 +229,21 @@ class ReviewRepository {
         }
       }
     } catch (_) {
-      warnings.add('確認待ち一覧を読み取れません。同期後、MiniでHOMEを更新してください。');
+      warnings.add(
+        _newer(raw)
+            ? '確認待ち一覧を本体が新しい形式で書いています。アプリを更新してください。'
+            : '確認待ち一覧を読み取れません。同期後、MiniでHOMEを更新してください。',
+      );
     }
   }
+  static bool _newer(String raw) {
+    try {
+      return newerSchema(jsonDecode(raw));
+    } catch (_) {
+      return false;
+    }
+  }
+
   static void _validate(Map<String, dynamic> d) {
     if (d['retired'] != null && d['retired'] is! bool) {
       throw const FormatException();

@@ -1020,8 +1020,34 @@ class HubRepository {
   String? conflictRequestIdFor(String projectId) =>
       _outstandingConflicts[projectId];
 
-  void _problem(String path) =>
-      warnings.add('$path: 形式・参照・整合性を確認できません。同期後に再読込してください。');
+  void _problem(String path) {
+    if (_newerFile(snapshot.files[path])) {
+      _noteNewer(path);
+      return;
+    }
+    warnings.add('$path: 形式・参照・整合性を確認できません。同期後に再読込してください。');
+  }
+
+  /// 本体が新しい形式で書いたため読めなかった記録のパス。
+  final Set<String> newerPaths = {};
+  bool get newerFormat => newerPaths.isNotEmpty;
+
+  /// 新しい形式の記録は、ファイルごとの注意ではなく「アプリを更新」を1件だけ出す。
+  void _noteNewer(String path) {
+    if (newerPaths.isEmpty) warnings.add(newerFormatWarning);
+    newerPaths.add(path);
+  }
+
+  static bool _newerFile(String? raw) {
+    if (raw == null) return false;
+    try {
+      return newerSchema(
+        raw.startsWith('---') ? parseMarkdown(raw).meta : jsonDecode(raw),
+      );
+    } catch (_) {
+      return false;
+    }
+  }
 
   void _readNow(HubProject project) {
     final path = '10_projects/${project.id}/NOW.md', raw = snapshot.files[path];
@@ -1687,10 +1713,16 @@ class HubRepository {
               : readableTitle(doc.body),
           at: timestamp(m['occurred_at']),
         );
-        final ackRaw = snapshot.files['90_system/intake/$id.json'];
+        final ackPath = '90_system/intake/$id.json',
+            ackRaw = snapshot.files[ackPath];
         if (ackRaw != null) {
           final ack = jsonDecode(ackRaw) as Map;
-          if (ack['schema_version'] != 1 ||
+          if (newerSchema(ack)) {
+            // 本体が新しい形式で受付を記録した。競合ではないので、更新を案内する。
+            item.state = 'unknown';
+            item.detail = '本体が新しい形式で受付を記録しました。アプリを更新してください。';
+            _noteNewer(ackPath);
+          } else if (ack['schema_version'] != 1 ||
               ack['status'] != 'accepted' ||
               ack['path'] != e.key ||
               ack['request_id'] != id ||
@@ -1882,10 +1914,12 @@ class HubRepository {
             if (input?.status == 'failed') item.state = 'failed';
           }
         }
-        final errorRaw =
-            snapshot.files['90_system/intake-errors/${digest(e.key)}.json'];
-        if (errorRaw != null) {
-          final error = jsonDecode(errorRaw) as Map;
+        final errorPath = '90_system/intake-errors/${digest(e.key)}.json',
+            errorRaw = snapshot.files[errorPath];
+        final error = errorRaw == null ? null : jsonDecode(errorRaw) as Map;
+        if (error != null && newerSchema(error)) {
+          _noteNewer(errorPath);
+        } else if (error != null) {
           if (error['schema_version'] != 1 ||
               error['path'] != e.key ||
               !['error', 'conflict'].contains(error['status'])) {
