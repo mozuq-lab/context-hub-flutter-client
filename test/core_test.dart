@@ -274,5 +274,51 @@ void main() {
       () => parseMarkdown('---\nx: &a [*a]\n---\n本文'),
       throwsFormatException,
     );
+    for (final header in [
+      'a: &x 1\nb: *x',
+      'a: &x {k: v}\nb:\n  <<: *x',
+      'a: &a [1, 1]\nb: &b [*a, *a]\nc: [*b, *b]',
+      'list:\n  - &x hello\n  - *x',
+      'b: *missing',
+    ]) {
+      expect(
+        () => parseMarkdown('---\n$header\n---\n本文'),
+        throwsFormatException,
+        reason: header,
+      );
+    }
+  });
+  test('名前・別名に*や&を含むプロジェクトも一覧に出る', () {
+    final files = fixtureFiles();
+    files['10_projects/context-hub/project.md'] =
+        files['10_projects/context-hub/project.md']!
+            .replaceFirst('title: AI Context Hub', 'title: Release *beta')
+            .replaceFirst('  - Hub', '  - Tom &Jerry');
+    final repo = HubRepository(fixture(files));
+    expect(repo.projects['context-hub']!.title, 'Release *beta');
+    expect(repo.projects['context-hub']!.aliases, ['Tom &Jerry']);
+  });
+  test('引用符のない値の中の*や&は本物のaliasと区別して読む', () {
+    // 本体のYAML出力（yamlパッケージのstringify）は、これらを引用符なしで書く。
+    final cases = <String, Map<String, dynamic>>{
+      'claim: Use *strict* mode': {'claim': 'Use *strict* mode'},
+      'title: Release *beta': {'title': 'Release *beta'},
+      'name: Tom &Jerry': {'name': 'Tom &Jerry'},
+      'aliases:\n  - A *b\n  - C &d': {
+        'aliases': ['A *b', 'C &d'],
+      },
+      'note: "*quoted"': {'note': '*quoted'},
+      "note: '&quoted'": {'note': '&quoted'},
+      'text: |\n  *bold*\n  &amp;': {'text': '*bold*\n&amp;\n'},
+      // anchorだけで参照のないものは、本体（maxAliasCount: 0）と同じく受け付ける。
+      'a: &x 1': {'a': 1},
+    };
+    cases.forEach((header, expected) {
+      expect(
+        parseMarkdown('---\n$header\n---\n本文').meta,
+        expected,
+        reason: header,
+      );
+    });
   });
 }

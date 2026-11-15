@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'models.dart';
 import 'parser.dart' show clip;
 import 'repository.dart';
-import 'secrets.dart';
 
 /// Androidのホーム画面ウィジェットの表示設定。端末ごとの設定で、Vaultには書かない。
 ///
@@ -96,8 +95,10 @@ Map<String, Object?> homeWidgetContent(
         : a.$4.compareTo(b.$4),
   );
   final entries = [for (final e in soon) (e.$1, e.$2), ...rest];
+  // ロック画面にも出るため、本体の設定で足した規則も当てる。規則を確かめられないときは本文を出さない。
+  final policy = repo.secretPolicy;
   String line(String title, String text) {
-    final flat = redactSecrets(text).replaceAll(RegExp(r'\s+'), ' ').trim();
+    final flat = policy.redact(text).replaceAll(RegExp(r'\s+'), ' ').trim();
     final body = flat.length > homeWidgetLineChars
         ? '${clip(flat, homeWidgetLineChars)}…'
         : flat;
@@ -115,7 +116,7 @@ Map<String, Object?> homeWidgetContent(
     'counts': scoped && chosen == null
         ? '進行中ではありません · 確認待ち $review件'
         : '次の一手 ${entries.length}件 · 確認待ち $review件',
-    'lines': settings.showText
+    'lines': settings.showText && policy.usable
         ? [
             for (final (p, e) in entries.take(homeWidgetMaxLines))
               line(p.title, e.text),

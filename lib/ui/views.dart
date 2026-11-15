@@ -22,11 +22,18 @@ void notice(BuildContext context, String text) =>
 
 /// 秘密情報らしい文字列があれば、保存の前に知らせる。
 /// 保存する本文（伏せ字にしたもの、またはそのまま）を返す。戻って直すならnull。
+///
+/// [secrets]はVaultの伏せ字の規則で、本体の設定で追加した規則も同じく知らせる。
+/// 追加規則を確かめられないときも保存は止めず、組み込み規則で知らせる（知らせるだけの補助のため）。
 Future<String?> checkSecretsBeforeSave(
   BuildContext context,
-  String text,
-) async {
-  final findings = findSecrets(text);
+  String text, {
+  SecretPolicy? secrets,
+}) async {
+  final rules = secrets == null || !secrets.usable
+      ? SecretPolicy.builtin
+      : secrets;
+  final findings = rules.find(text);
   if (findings.isEmpty) return text;
   final choice = await showDialog<String>(
     context: context,
@@ -60,7 +67,7 @@ Future<String?> checkSecretsBeforeSave(
     ),
   );
   return switch (choice) {
-    'redact' => redactSecrets(text),
+    'redact' => rules.redact(text),
     'keep' => text,
     _ => null,
   };
@@ -2966,7 +2973,11 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
       setState(() => error = '訂正文は1〜8000文字で入力してください。');
       return;
     }
-    final checked = await checkSecretsBeforeSave(context, text.text);
+    final checked = await checkSecretsBeforeSave(
+      context,
+      text.text,
+      secrets: widget.controller.repository?.secretPolicy,
+    );
     if (checked == null || !mounted) return;
     if (checked != text.text) {
       if (checked.length > 8000) {
@@ -3281,9 +3292,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
     _persist();
   }
 
+  /// 書きかけを残さない設定では、保存を試みた操作IDだけを残す（本文は[DraftStore]が外す）。
   Future<void> _persist() async {
     final key = _draftKey;
-    if (key == null || !_ready || !_keepDrafts || _finished) return;
+    if (key == null || !_ready || _finished) return;
+    if (!_keepDrafts && !locked) return;
     await _drafts.write(
       key,
       WritingDraft(
@@ -3363,7 +3376,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
       setState(() => error = '本文は1〜8000文字で入力してください。');
       return;
     }
-    final checked = await checkSecretsBeforeSave(context, body);
+    final checked = await checkSecretsBeforeSave(
+      context,
+      body,
+      secrets: widget.controller.repository?.secretPolicy,
+    );
     if (checked == null || !mounted) return;
     if (checked != body && checked.length > 8000) {
       setState(() => error = '伏せ字にすると8000文字を超えます。本文を短くしてください。');
@@ -4402,7 +4419,11 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
   Future<void> submit() async {
     if (busy) return;
     if (memo.text.trim().isNotEmpty) {
-      final checked = await checkSecretsBeforeSave(context, memo.text);
+      final checked = await checkSecretsBeforeSave(
+        context,
+        memo.text,
+        secrets: widget.controller.repository?.secretPolicy,
+      );
       if (checked == null || !mounted) return;
       if (checked != memo.text) memo.text = checked;
     }

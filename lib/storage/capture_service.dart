@@ -98,6 +98,12 @@ class CaptureService {
   final VaultAccess access;
   final VaultLocation location;
   static final _queues = Expando<_CaptureQueue>();
+
+  /// 保存を確かめた（saved）journalの名前。journalはこのアプリだけが書き、書くときはここから
+  /// 外すので、一度検証したものは再読込のたびに読み直さない（journalは消さずに残るため、
+  /// 読み直すと保存の数だけネイティブ呼び出しが増える）。アプリを起動し直すと1回ずつ検証する。
+  static final _savedJournals = Expando<Set<String>>();
+  Set<String> get _saved => _savedJournals[access] ??= <String>{};
   static final _uuid = RegExp(
     r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$',
   );
@@ -111,16 +117,33 @@ class CaptureService {
     return next;
   }
 
-  Future<Map<String, dynamic>> _journal(String name) async {
+  /// 書き終える前に止まったjournal（空・NULと空白だけ）。以前のAndroidは最終名へ直接書いており、
+  /// 作成とfsyncの間で止まるとこの形で残った。Inputへの書込はjournalのfsyncが終わってから行うため、
+  /// この操作は何も送っていない。新規保存を止めず、同じ操作IDで書き直せる。
+  static bool _incomplete(String raw) =>
+      raw.replaceAll(RegExp(r'[\s\u0000]'), '').isEmpty;
+
+  Future<Map<String, dynamic>> _journal(String name) async =>
+      await _readJournal(name) ??
+      (throw StateError(
+        '保存確認情報（${_requestOf(name)}）が書き終わっていません。この操作は保存されていません。',
+      ));
+
+  static String _requestOf(String name) =>
+      'REQ-${name.replaceFirst(RegExp(r'\.json$'), '').replaceAll('-', '')}';
+
+  /// journalを読む。書き終える前に止まったもの（[_incomplete]）はnull。壊れていればStateError。
+  Future<Map<String, dynamic>?> _readJournal(String name) async {
+    final valid =
+        _uuid.hasMatch(name.replaceFirst(RegExp(r'\.json$'), '')) &&
+        name.endsWith('.json');
     try {
-      if (!_uuid.hasMatch(name.replaceFirst(RegExp(r'\.json$'), '')) ||
-          !name.endsWith('.json')) {
-        throw const FormatException();
-      }
+      if (!valid) throw const FormatException();
       final raw = await access.readState(name);
       if (raw == null || raw.length > 8192) {
         throw const FormatException();
       }
+      if (_incomplete(raw)) return null;
       final j = jsonDecode(raw) as Map<String, dynamic>;
       if (j['version'] != 1 ||
           '${j['operationId']}.json' != name ||
@@ -134,10 +157,12 @@ class CaptureService {
           DateTime.tryParse(j['occurredAt'] as String) == null) {
         throw const FormatException();
       }
+      if (j['state'] == 'saved') _saved.add(name);
       return j;
     } catch (_) {
+      // どの操作の記録かを示し、Vaultの受付状況で同じREQ IDを確かめられるようにする。
       throw StateError(
-        '保存確認情報が壊れています。新規保存を停止しました。アプリ専用領域のバックアップを保持して復旧してください。',
+        '保存確認情報${valid ? '（${_requestOf(name)}）' : ''}が壊れています。新規保存を停止しました。アプリ専用領域のバックアップを保持して復旧してください。',
       );
     }
   }
@@ -157,7 +182,8 @@ class CaptureService {
 
   Future<void> _checkJournals() async {
     for (final name in await _journalNames()) {
-      await _journal(name);
+      if (_saved.contains(name)) continue;
+      await _readJournal(name);
     }
   }
 
@@ -175,6 +201,7 @@ class CaptureService {
       /* 不明な結果は再送しない。 */
     }
     j['state'] = state;
+    _saved.remove('${j['operationId']}.json');
     try {
       await access.writeState('${j['operationId']}.json', jsonEncode(j));
     } catch (_) {
@@ -606,12 +633,17 @@ class CaptureService {
   ) async {
     await _checkJournals();
     final name = '$operationId.json';
+    // 書き終える前に止まったjournalは、同じ操作IDで書き直す（何も送っていないため）。
+    var incomplete = false;
     if (await access.readState(name) != null) {
-      final old = await _journal(name);
-      if (old['fingerprint'] != fingerprint) {
-        throw StateError('この操作IDの内容は変更できません。まず保存状況を確認してください。');
+      final old = await _readJournal(name);
+      if (old != null) {
+        if (old['fingerprint'] != fingerprint) {
+          throw StateError('この操作IDの内容は変更できません。まず保存状況を確認してください。');
+        }
+        return _confirm(old);
       }
-      return _confirm(old);
+      incomplete = true;
     }
     final requestId = 'REQ-${operationId.replaceAll('-', '')}';
     final occurredAt = DateTime.now().toUtc().toIso8601String();
@@ -633,7 +665,8 @@ class CaptureService {
       'state': 'prepared',
     };
     // 排他journal公開に失敗した場合、Inputへの書込へ進まない。
-    await access.writeState(name, jsonEncode(j), exclusive: true);
+    _saved.remove(name);
+    await access.writeState(name, jsonEncode(j), exclusive: !incomplete);
     try {
       await access.writeRequest(location, requestId, raw);
     } catch (_) {
@@ -653,14 +686,16 @@ class CaptureService {
   Future<String?> journalState(String operationId) => _serial(() async {
     if (!_uuid.hasMatch(operationId)) return null;
     if (await access.readState('$operationId.json') == null) return null;
-    final j = await _journal('$operationId.json');
-    if (j['rootHash'] != digest(location.identity)) return null;
+    final j = await _readJournal('$operationId.json');
+    if (j == null || j['rootHash'] != digest(location.identity)) return null;
     return j['state'] as String;
   });
   Future<List<CaptureResult>> pending() => _serial(() async {
     final results = <CaptureResult>[];
     for (final name in await _journalNames()) {
-      final j = await _journal(name);
+      if (_saved.contains(name)) continue;
+      final j = await _readJournal(name);
+      if (j == null) continue;
       if (j['rootHash'] == digest(location.identity) && j['state'] != 'saved') {
         results.add(
           CaptureResult(j['operationId'], j['requestId'], 'uncertain'),

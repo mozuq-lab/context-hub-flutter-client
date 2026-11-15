@@ -12,26 +12,43 @@ MarkdownDocument parseMarkdown(String raw) {
   final match = RegExp(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n').firstMatch(raw);
   if (match == null) throw const FormatException('frontmatterがありません。');
   final header = match[1]!;
-  if (RegExp(r'(^|[\s:\[,])[*&][a-zA-Z_]', multiLine: true).hasMatch(header)) {
-    throw const FormatException('YAMLのaliasは扱えません。');
-  }
   try {
+    // 本物のalias（*名前）だけを拒否する。本体の読取（maxAliasCount: 0）と同じく、
+    // 引用符のない値の中の「*」「&」（例: `Use *strict* mode`）は文字として読む。
+    // YAMLの解析器はaliasを参照先と同じノードで表すため、同じノードに2回出会ったら
+    // aliasとみなす（参照のないanchorは受け付ける）。展開する前に止めるので、
+    // aliasの入れ子による爆発も起きない。
+    final seen = Set<YamlNode>.identity();
     var count = 0;
-    dynamic plain(dynamic value, int depth) {
+    dynamic plain(YamlNode node, int depth) {
+      if (!seen.add(node)) {
+        throw const FormatException('YAMLのaliasは扱えません。');
+      }
       if (++count > 10000 || depth > 30) {
         throw const FormatException('frontmatterが複雑すぎます。');
       }
-      if (value is Map) {
-        return value.map((key, v) {
-          if (key is! String) throw const FormatException('メタデータのキーは文字列が必要です。');
-          return MapEntry(key, plain(v, depth + 1));
-        });
+      if (node is YamlMap) {
+        final out = <String, dynamic>{};
+        for (final entry in node.nodes.entries) {
+          final key = entry.key;
+          if (key is! YamlNode) {
+            throw const FormatException('メタデータのキーは文字列が必要です。');
+          }
+          final name = plain(key, depth + 1);
+          if (name is! String) {
+            throw const FormatException('メタデータのキーは文字列が必要です。');
+          }
+          out[name] = plain(entry.value, depth + 1);
+        }
+        return out;
       }
-      if (value is List) return value.map((v) => plain(v, depth + 1)).toList();
-      return value;
+      if (node is YamlList) {
+        return [for (final v in node.nodes) plain(v, depth + 1)];
+      }
+      return node.value;
     }
 
-    final value = plain(loadYaml(header), 0);
+    final value = plain(loadYamlNode(header), 0);
     if (value is! Map) throw const FormatException('frontmatterが不正です。');
     return MarkdownDocument(
       Map<String, dynamic>.from(value),
@@ -47,6 +64,22 @@ String encodePacket(Map<String, dynamic> meta, String body) =>
 final inputIdPattern = RegExp(r'^IN-[0-9A-HJKMNP-TV-Z]{26}$');
 final projectIdPattern = RegExp(r'^[a-z0-9][a-z0-9-]{1,40}$');
 final requestIdPattern = RegExp(r'^REQ-[A-Za-z0-9]{32}$');
+
+/// 同期ソフト（Syncthing）が作る競合コピーか。本体と同じく通常の記録から外す。
+bool isConflictCopy(String path) => path.contains('.sync-conflict-');
+
+/// 端末の読取の注意のうち、どのファイルのことか分かるもの（symlinkの除外・読めないファイル）の
+/// パス。上限・深さ・フォルダーの中断など、ファイルに結び付けられない注意はnull。
+String? snapshotWarningPath(String warning) {
+  for (final prefix in const ['symlinkを除外: ', '読取できないファイル: ']) {
+    if (warning.startsWith(prefix)) {
+      final path = warning.substring(prefix.length);
+      return validPath(path) ? path : null;
+    }
+  }
+  return null;
+}
+
 bool validPath(String path) =>
     path.isNotEmpty &&
     !path.startsWith('/') &&

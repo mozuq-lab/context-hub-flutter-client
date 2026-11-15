@@ -18,6 +18,19 @@ class UIAccess extends TempAccess {
   }
 }
 
+/// 次の読取を止めておく（先に始めた再読込が遅れて終わる状況を作る）。
+class HeldAccess extends UIAccess {
+  HeldAccess(this.base, this.held) {
+    directory = base.directory;
+  }
+  final UIAccess base;
+  final Completer<VaultSnapshot> held;
+  bool hold = false;
+  @override
+  Future<VaultSnapshot> readSnapshot(VaultLocation location) =>
+      hold ? held.future : base.readSnapshot(location);
+}
+
 void main() {
   late UIAccess access;
   late HubController c;
@@ -38,6 +51,28 @@ void main() {
     await slow;
     expect(c.location!.handle, 'new');
     expect(c.repository!.projects, isNotEmpty);
+  });
+  test('先に始めた再読込が後から終わっても、新しい再読込の表示を上書きしない', () async {
+    final held = Completer<VaultSnapshot>();
+    final slow = HeldAccess(access, held);
+    final c2 = HubController(slow, sampleLoader: () async => fixture().files);
+    addTearDown(c2.dispose);
+    await c2.useSample();
+    slow.hold = true;
+    final first = c2.reload();
+    slow.hold = false;
+    access.current = VaultSnapshot({
+      ...fixture().files,
+      'Input/newer.md': '新しい',
+    });
+    await c2.reload();
+    expect(c2.repository!.snapshot.files, contains('Input/newer.md'));
+    expect(c2.loading, isFalse);
+    held.complete(VaultSnapshot({...fixture().files, 'Input/older.md': '古い'}));
+    await first;
+    expect(c2.repository!.snapshot.files, contains('Input/newer.md'));
+    expect(c2.repository!.snapshot.files, isNot(contains('Input/older.md')));
+    expect(c2.loading, isFalse);
   });
   test('context直前にsnapshotが変わると再表示してコピーを止める', () async {
     await c.useSample();

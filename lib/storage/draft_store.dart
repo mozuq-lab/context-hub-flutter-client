@@ -110,9 +110,14 @@ class DraftStore {
     return _enabled || draft?.operationId != null ? draft : null;
   }
 
+  /// 残さない設定でも、保存を試みた操作（[WritingDraft.operationId]あり）は、同じ操作の確認へ
+  /// 戻れるよう本文を外して操作IDだけを残す（保存中にアプリが終わっても二重に保存しないため）。
   Future<void> write(String key, WritingDraft draft) => _serial(() async {
     await _load();
-    if (!_enabled) return;
+    if (!_enabled) {
+      if (draft.operationId != null) _drafts![key] = _withoutText(draft);
+      return;
+    }
     if (draft.text.trim().isEmpty && draft.operationId == null) {
       _drafts!.remove(key);
     } else {

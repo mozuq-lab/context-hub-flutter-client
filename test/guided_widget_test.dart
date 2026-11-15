@@ -87,8 +87,17 @@ void main() {
     await tapKey(tester, 'guided-settings-close');
     expect(find.byKey(const Key('guided-no-key')), findsNothing);
 
-    // 送る資料は始める前に見せ、そのまま送る。
-    await tapKey(tester, 'guided-context-preview');
+    // 資料は本人がオンにしたときだけ送る。送る全文は始める前に開いて見せ、そのまま送る。
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const Key('guided-include-context')),
+          )
+          .value,
+      isFalse,
+    );
+    expect(find.byKey(const Key('guided-context-preview')), findsNothing);
+    await tapKey(tester, 'guided-include-context');
     expect(find.textContaining('# 進行中のプロジェクト'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('guided-seed')), '今日の作業');
     model.replies.addAll([
@@ -157,7 +166,7 @@ void main() {
       find.descendant(of: dropdown, matching: find.text('AI Context Hub')),
       findsWidgets,
     );
-    await tapKey(tester, 'guided-include-context');
+    // 資料を送る設定は既定でオフ。
     expect(find.byKey(const Key('guided-context-preview')), findsNothing);
     expect(find.textContaining('プロジェクトの名前などVaultの内容は送りません'), findsOneWidget);
     await tester.tap(find.text('壁打ち'));

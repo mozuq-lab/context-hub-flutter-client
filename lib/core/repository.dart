@@ -75,12 +75,41 @@ class HubRepository {
 
   /// 本体が生成する直近の期間のふりかえり（REVIEW.md）。未生成ならnull。
   HubDigest? digestDocument;
+
+  /// 伏せ字の規則（組み込み規則と、本体の設定で追加した規則）。
+  late final SecretPolicy secretPolicy = SecretPolicy.fromSnapshot(
+    snapshot.files,
+    snapshot.warnings,
+  );
+
+  /// 追加規則を確かめられないときは、別AIへ渡す資料を作らない（取りこぼしを避ける）。
+  void _requireSecretPolicy() {
+    final problem = secretPolicy.problem;
+    if (problem != null) throw FormatException(problem);
+  }
+
   HubRepository(this.snapshot) {
     if (!snapshot.recognized) {
       throw const FormatException('ContextHubのVaultフォルダーを選んでください。');
     }
     warnings.addAll(snapshot.warnings);
-    for (final entry in snapshot.files.entries) {
+    for (final w in snapshot.warnings) {
+      final path = snapshotWarningPath(w);
+      if (path == null) {
+        _unscopedProblem = true;
+      } else {
+        problemPaths.add(path);
+      }
+    }
+    conflictCopies.addAll(
+      snapshot.files.keys.where(isConflictCopy).toList()..sort(),
+    );
+    if (conflictCopies.isNotEmpty) {
+      warnings.add(
+        '同期の競合コピーを${conflictCopies.length}件、通常の記録から除外しました（${conflictCopies.first}${conflictCopies.length > 1 ? 'ほか' : ''}）。同期ソフトで競合を解消してください。',
+      );
+    }
+    for (final entry in _files.entries) {
       final path = entry.key, raw = entry.value;
       if (!validPath(path)) {
         _problem(path);
@@ -88,7 +117,6 @@ class HubRepository {
       }
       try {
         if (path.startsWith('00_inbox/') && path.endsWith('.md')) {
-          if (path.contains('.sync-conflict-')) throw const FormatException();
           final doc = parseMarkdown(raw), m = doc.meta, id = m['id'];
           if (m['schema_version'] != 1 ||
               id is! String ||
@@ -212,7 +240,7 @@ class HubRepository {
         input.status = receipt['status'];
       }
     }
-    for (final entry in snapshot.files.entries) {
+    for (final entry in _files.entries) {
       final path = entry.key;
       if (!validPath(path)) continue;
       try {
@@ -303,7 +331,7 @@ class HubRepository {
       r'^90_system/backup-checks/(BKC-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
     final checks = <BackupCheck>[];
-    for (final e in snapshot.files.entries) {
+    for (final e in _files.entries) {
       final match = pattern.firstMatch(e.key);
       if (match == null) continue;
       try {
@@ -352,7 +380,7 @@ class HubRepository {
     final resolution = RegExp(
       r'^90_system/item-resolutions/(RES-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
-    for (final e in snapshot.files.entries) {
+    for (final e in _files.entries) {
       final match = resolution.firstMatch(e.key);
       if (match == null) continue;
       try {
@@ -402,7 +430,7 @@ class HubRepository {
     final schedule = RegExp(
       r'^90_system/item-schedules/(SCH-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
-    for (final e in snapshot.files.entries) {
+    for (final e in _files.entries) {
       final match = schedule.firstMatch(e.key);
       if (match == null) continue;
       try {
@@ -618,7 +646,7 @@ class HubRepository {
               '${(i.metadata['meta'] as Map)['git_draft']}/${(i.metadata['meta'] as Map)['git_draft_hash']}/${i.metadata['project']}',
         )
         .toSet();
-    for (final e in snapshot.files.entries) {
+    for (final e in _files.entries) {
       final match = pattern.firstMatch(e.key);
       if (match == null) continue;
       try {
@@ -878,7 +906,7 @@ class HubRepository {
     final pattern = RegExp(
       r'^90_system/project-merges/(PMG-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
-    for (final e in snapshot.files.entries) {
+    for (final e in _files.entries) {
       final match = pattern.firstMatch(e.key);
       if (match == null) continue;
       try {
@@ -908,7 +936,7 @@ class HubRepository {
     final pattern = RegExp(
       r'^90_system/project-definitions/(PDEF-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
-    for (final e in snapshot.files.entries) {
+    for (final e in _files.entries) {
       final match = pattern.firstMatch(e.key);
       if (match == null) continue;
       try {
@@ -931,7 +959,7 @@ class HubRepository {
     final pattern = RegExp(
       r'^90_system/project-status/(PST-[0-9A-HJKMNP-TV-Z]{26})\.json$',
     );
-    for (final e in snapshot.files.entries) {
+    for (final e in _files.entries) {
       final match = pattern.firstMatch(e.key);
       if (match == null) continue;
       try {
@@ -961,7 +989,7 @@ class HubRepository {
     final pattern = RegExp(
       '^90_system/conflicts/NOW\\.${RegExp.escape(project.id)}\\.[0-9A-HJKMNP-TV-Z]{26}\\.md\$',
     );
-    final files = snapshot.files.keys.where((p) => pattern.hasMatch(p)).toList()
+    final files = _files.keys.where((p) => pattern.hasMatch(p)).toList()
       ..sort();
     if (files.isEmpty) return;
     String? base;
@@ -1007,8 +1035,69 @@ class HubRepository {
   String? conflictRequestIdFor(String projectId) =>
       _outstandingConflicts[projectId];
 
-  void _problem(String path) =>
-      warnings.add('$path: 形式・参照・整合性を確認できません。同期後に再読込してください。');
+  void _problem(String path) {
+    problemPaths.add(path);
+    if (_newerFile(snapshot.files[path])) {
+      _noteNewer(path);
+      return;
+    }
+    warnings.add('$path: 形式・参照・整合性を確認できません。同期後に再読込してください。');
+  }
+
+  /// 同期の競合コピー（本体と同じく通常の記録から外し、注意を1件だけ出す）。
+  final List<String> conflictCopies = [];
+  late final Map<String, String> _files = {
+    for (final e in snapshot.files.entries)
+      if (!isConflictCopy(e.key)) e.key: e.value,
+  };
+
+  /// 注意の元になったファイル（形式・整合性を確かめられない・端末で読めない）。
+  final Set<String> problemPaths = {};
+
+  /// ファイルに結び付けられない読取の注意（上限・深さ・フォルダーの中断など）があるか。
+  bool _unscopedProblem = false;
+
+  /// 別AIへ渡す資料を止める注意があるか。[scope]は資料に入るプロジェクト（nullなら全体）。
+  /// 本人のInput（取り込み前の依頼）とアイデアの問題、[scope]に入らないプロジェクトのフォルダーの
+  /// 問題、同期の競合コピーは、資料の内容に関係しないので止めない。メモ・処理記録・知識など、
+  /// どのプロジェクトに関係するか分からないものの問題は、これまでどおり止める。
+  bool copyBlocked([Set<String>? scope]) {
+    if (_unscopedProblem) return true;
+    for (final path in problemPaths) {
+      if (path.startsWith('Input/') || path.startsWith('20_ideas/')) continue;
+      final folder = RegExp(r'^10_projects/([^/]+)/').firstMatch(path)?[1];
+      if (folder != null &&
+          scope != null &&
+          !scope.contains(folder) &&
+          !scope.contains(resolveProject(folder))) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /// 本体が新しい形式で書いたため読めなかった記録のパス。
+  final Set<String> newerPaths = {};
+  bool get newerFormat => newerPaths.isNotEmpty;
+
+  /// 新しい形式の記録は、ファイルごとの注意ではなく「アプリを更新」を1件だけ出す。
+  void _noteNewer(String path) {
+    if (newerPaths.isEmpty) warnings.add(newerFormatWarning);
+    newerPaths.add(path);
+    problemPaths.add(path);
+  }
+
+  static bool _newerFile(String? raw) {
+    if (raw == null) return false;
+    try {
+      return newerSchema(
+        raw.startsWith('---') ? parseMarkdown(raw).meta : jsonDecode(raw),
+      );
+    } catch (_) {
+      return false;
+    }
+  }
 
   void _readNow(HubProject project) {
     final path = '10_projects/${project.id}/NOW.md', raw = snapshot.files[path];
@@ -1189,6 +1278,35 @@ class HubRepository {
       }
       children[target] = r;
     }
+    // 登録簿hashは、元メモごとに変わらないので1回だけ計算する。
+    String? registryCache;
+    String registryHash() {
+      final cached = registryCache;
+      if (cached != null) return cached;
+      final defs = projects.values.toList()
+        ..sort((a, b) => a.id.compareTo(b.id));
+      return registryCache = digest(
+        jsonEncode(
+          defs
+              .map(
+                (p) => {
+                  'id': p.id,
+                  'title': p.title,
+                  'aliases': [...p.aliases]..sort(),
+                  'keywords': [...p.keywords]..sort(),
+                  // 本体と同じく、休止・完了は登録簿hashでは進行中として扱う。
+                  'status': p.lifecycle == 'active' ? p.status : 'active',
+                },
+              )
+              .toList(),
+        ),
+      );
+    }
+
+    // ファイルのhashも、訂正の連なりごとに計算し直さない。
+    final fileHashes = <String, String>{};
+    String fileHash(String path) =>
+        fileHashes[path] ??= digest(snapshot.files[path]!);
     final roots = _inputs.values.where((r) => r.kind != 'correction').toList()
       ..sort((a, b) => (a.at?.compareTo(b.at ?? DateTime(0)) ?? 0));
     for (final root in roots) {
@@ -1218,10 +1336,7 @@ class HubRepository {
             receipt['evidence_hash'] !=
                 digest(
                   evidence
-                      .map(
-                        (r) =>
-                            '${r.sourceId}:${digest(snapshot.files[r.path]!)}',
-                      )
+                      .map((r) => '${r.sourceId}:${fileHash(r.path)}')
                       .join('\n'),
                 )) {
           _problem(chain[processedIndex].path);
@@ -1240,35 +1355,14 @@ class HubRepository {
           summary = organizedResult['summary'] as String;
         }
         var candidates = organizedResult['project_candidates'];
-        final defs = projects.values.toList()
-          ..sort((a, b) => a.id.compareTo(b.id));
-        final registry = digest(
-          jsonEncode(
-            defs
-                .map(
-                  (p) => {
-                    'id': p.id,
-                    'title': p.title,
-                    'aliases': [...p.aliases]..sort(),
-                    'keywords': [...p.keywords]..sort(),
-                    // 本体と同じく、休止・完了は登録簿hashでは進行中として扱う。
-                    'status': p.lifecycle == 'active' ? p.status : 'active',
-                  },
-                )
-                .toList(),
-          ),
-        );
+        final registry = registryHash();
         final evidence = chain
             .take(processedIndex + 1)
-            .map((r) => '${r.sourceId}:${digest(snapshot.files[r.path]!)}')
+            .map((r) => '${r.sourceId}:${fileHash(r.path)}')
             .join('\n');
+        final evidenceHash = digest(evidence);
         // 誤りとして外した項目のメモを本体が読み直していれば、その関連候補を使う。
-        final reread = _appliedReread(
-          root,
-          chain.last,
-          receipt,
-          digest(evidence),
-        );
+        final reread = _appliedReread(root, chain.last, receipt, evidenceHash);
         if (reread != null) {
           candidates = reread.candidates;
           // 本体のoverlayRereadと同じく、アイデアとして保存した入力と、読み直しでアイデアへ変わった入力は要約を変えない。
@@ -1279,13 +1373,13 @@ class HubRepository {
           }
         }
         final associationPath =
-            '90_system/associations/${root.sourceId}/${digest(evidence)}.$registry.json';
+            '90_system/associations/${root.sourceId}/$evidenceHash.$registry.json';
         if (snapshot.files.containsKey(associationPath)) {
           try {
             final association =
                 jsonDecode(snapshot.files[associationPath]!) as Map;
             if (association['input_id'] != root.sourceId ||
-                association['evidence_hash'] != digest(evidence) ||
+                association['evidence_hash'] != evidenceHash ||
                 association['registry_hash'] != registry) {
               throw const FormatException();
             }
@@ -1398,7 +1492,7 @@ class HubRepository {
 
   void _readIntake() {
     final ideaLinkItems = <(IntakeStatus, Map, String?)>[];
-    for (final e in snapshot.files.entries.where(
+    for (final e in _files.entries.where(
       (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
     )) {
       try {
@@ -1674,10 +1768,16 @@ class HubRepository {
               : readableTitle(doc.body),
           at: timestamp(m['occurred_at']),
         );
-        final ackRaw = snapshot.files['90_system/intake/$id.json'];
+        final ackPath = '90_system/intake/$id.json',
+            ackRaw = snapshot.files[ackPath];
         if (ackRaw != null) {
           final ack = jsonDecode(ackRaw) as Map;
-          if (ack['schema_version'] != 1 ||
+          if (newerSchema(ack)) {
+            // 本体が新しい形式で受付を記録した。競合ではないので、更新を案内する。
+            item.state = 'unknown';
+            item.detail = '本体が新しい形式で受付を記録しました。アプリを更新してください。';
+            _noteNewer(ackPath);
+          } else if (ack['schema_version'] != 1 ||
               ack['status'] != 'accepted' ||
               ack['path'] != e.key ||
               ack['request_id'] != id ||
@@ -1869,10 +1969,12 @@ class HubRepository {
             if (input?.status == 'failed') item.state = 'failed';
           }
         }
-        final errorRaw =
-            snapshot.files['90_system/intake-errors/${digest(e.key)}.json'];
-        if (errorRaw != null) {
-          final error = jsonDecode(errorRaw) as Map;
+        final errorPath = '90_system/intake-errors/${digest(e.key)}.json',
+            errorRaw = snapshot.files[errorPath];
+        final error = errorRaw == null ? null : jsonDecode(errorRaw) as Map;
+        if (error != null && newerSchema(error)) {
+          _noteNewer(errorPath);
+        } else if (error != null) {
           if (error['schema_version'] != 1 ||
               error['path'] != e.key ||
               !['error', 'conflict'].contains(error['status'])) {
@@ -2374,11 +2476,13 @@ class HubRepository {
     if (project == null || maxChars < 200) {
       throw const FormatException('対象と文字数上限を確認してください。');
     }
-    if (warnings.isNotEmpty || _blocksContext(project)) {
+    if (copyBlocked({id}) || _blocksContext(project)) {
       throw const FormatException('欠損・整合性・訂正の反映を確認して再読込してください。');
     }
+    _requireSecretPolicy();
     // 別AIへ渡す資料なので、秘密情報らしい文字列は伏せる（本体のcontextと同じ）。抜粋で値が途切れないよう、切る前に伏せる。
-    final policy = '${redactSecrets(PolicyReader(snapshot).read(id).text)}\n\n';
+    final policy =
+        '${secretPolicy.redact(PolicyReader(snapshot).read(id).text)}\n\n';
     if (policy.length + 100 > maxChars) {
       throw const FormatException('必須方針がコピー上限に収まりません。');
     }
@@ -2408,7 +2512,7 @@ class HubRepository {
       for (final u in units) {
         final r = u.root;
         out.writeln(
-          '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecretsHead(r.body, 300), 300).replaceAll('\n', ' ')}',
+          '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(secretPolicy.redactHead(r.body, 300), 300).replaceAll('\n', ' ')}',
         );
         if (u.summary != null) out.writeln('  有効解釈: ${u.summary}');
         if (u.chain.length > 1) {
@@ -2422,7 +2526,7 @@ class HubRepository {
         }
       }
     }
-    final text = redactSecretLines(out.toString()),
+    final text = secretPolicy.redactLines(out.toString()),
         suffix = '\n…（省略。全文は記録の詳細から確認）';
     return policy +
         (text.length <= optionalMax
@@ -2522,12 +2626,14 @@ class HubRepository {
   }) {
     if (maxChars < 200) throw const FormatException('文字数上限を確認してください。');
     if (recordIds.isEmpty) throw const FormatException('かごに記録がありません。');
-    if (warnings.isNotEmpty) {
+    // 資料に入るプロジェクトが決まる前でも、どれにも関係しうる問題があれば止める。
+    if (copyBlocked(const {})) {
       throw const FormatException('欠損・整合性・訂正の反映を確認して再読込してください。');
     }
+    _requireSecretPolicy();
     String projectLabel(String id) => '${projects[id]?.title ?? id}（$id）';
     final blocks = <({String id, String text})>[], seen = <String>{};
-    final policyProjects = <String>{};
+    final policyProjects = <String>{}, scope = <String>{};
     for (final id in recordIds) {
       final record = records[id];
       if (record == null || !bundleKinds.contains(record.kind)) {
@@ -2540,6 +2646,7 @@ class HubRepository {
         final root = unit.root, latest = unit.chain.last;
         final owned = unit.owner;
         if (owned != null) policyProjects.add(owned);
+        scope.addAll(unit.related);
         out.writeln(
           '## [${root.sourceId}](${root.path}) | ${displayTime(root.at)} | ${_oneLine(root.source)} / ${root.origin}${root.origin == 'ai-self-report' ? '（AI自己報告・独立検証なし）' : ''}',
         );
@@ -2565,7 +2672,7 @@ class HubRepository {
         }
         if (unit.summary != null) {
           out.writeln(
-            '有効解釈（AI整理・未検証）: ${_oneLine(redactSecrets(unit.summary!))}',
+            '有効解釈（AI整理・未検証）: ${_oneLine(secretPolicy.redact(unit.summary!))}',
           );
         }
         out.writeln(
@@ -2573,7 +2680,7 @@ class HubRepository {
               ? '本文（最新の訂正 [${latest.sourceId}](${latest.path})）:'
               : '本文:',
         );
-        out.write(fenced(redactSecrets(latest.body)));
+        out.write(fenced(secretPolicy.redact(latest.body)));
         blocks.add((id: root.sourceId, text: out.toString()));
         continue;
       }
@@ -2594,7 +2701,7 @@ class HubRepository {
         final now = StringBuffer();
         _writeNowSections(now, project, '###', notices: true);
         out.writeln('本文（自動領域）:');
-        out.write(fenced(redactSecrets(now.toString())));
+        out.write(fenced(secretPolicy.redact(now.toString())));
         blocks.add((id: project.id, text: out.toString()));
         continue;
       }
@@ -2649,11 +2756,15 @@ class HubRepository {
         out.writeln('注意: $w');
       }
       out.writeln('本文:');
-      out.write(fenced(redactSecrets(record.body)));
+      out.write(fenced(secretPolicy.redact(record.body)));
       blocks.add((id: record.sourceId, text: out.toString()));
     }
+    // 資料に入るプロジェクト（方針・帰属・関連候補）のフォルダーの問題も止める。
+    if (copyBlocked({...policyProjects, ...scope})) {
+      throw const FormatException('欠損・整合性・訂正の反映を確認して再読込してください。');
+    }
     // 別AIへ渡す資料なので、contextと同じく秘密情報らしい文字列は伏せる。本文は記録ごとに伏せる。
-    final policy = redactSecrets(
+    final policy = secretPolicy.redact(
       PolicyReader(
         snapshot,
       ).read().textFor(policyProjects.where(projects.containsKey)),
@@ -2696,10 +2807,12 @@ class HubRepository {
   /// [context]と同じく、欠損・整合性の警告があれば使わない。
   String vaultContext({int maxChars = 6000}) {
     if (maxChars < 200) throw const FormatException('文字数上限を確認してください。');
-    if (warnings.isNotEmpty) {
+    if (copyBlocked()) {
       throw const FormatException('欠損・整合性・訂正の反映を確認して再読込してください。');
     }
-    final policy = '${redactSecrets(PolicyReader(snapshot).read().text)}\n\n';
+    _requireSecretPolicy();
+    final policy =
+        '${secretPolicy.redact(PolicyReader(snapshot).read().text)}\n\n';
     if (policy.length + 100 > maxChars) {
       throw const FormatException('必須方針がコピー上限に収まりません。');
     }
@@ -2718,10 +2831,10 @@ class HubRepository {
     if (items.isEmpty) out.writeln('見つかりません');
     for (final r in items) {
       out.writeln(
-        '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(redactSecretsHead(r.body, 200), 200).replaceAll('\n', ' ')}',
+        '- [${r.sourceId}](${r.path}) | ${displayTime(r.at)} | ${r.source} / ${r.origin}\n  ${clip(secretPolicy.redactHead(r.body, 200), 200).replaceAll('\n', ' ')}',
       );
     }
-    final text = redactSecretLines(out.toString()), suffix = '\n…（省略）';
+    final text = secretPolicy.redactLines(out.toString()), suffix = '\n…（省略）';
     return policy +
         (text.length <= optionalMax
             ? text

@@ -87,6 +87,9 @@ class HubController extends ChangeNotifier {
   String? error, captureWarning;
   List<CaptureResult> pending = [];
   int _epoch = 0;
+
+  /// 再読込の世代（[reload]ごとに進める）。
+  int _reloads = 0;
   bool _disposed = false;
   void _changed() {
     if (!_disposed) {
@@ -422,15 +425,20 @@ class HubController extends ChangeNotifier {
     }
   }
 
-  Future<void> _pending(VaultLocation target, int epoch) async {
+  Future<void> _pending(
+    VaultLocation target,
+    int epoch, [
+    bool Function()? current,
+  ]) async {
+    bool still() => epoch == _epoch && (current?.call() ?? true);
     try {
       final list = await CaptureService(access, target).pending();
-      if (epoch == _epoch) {
+      if (still()) {
         pending = list;
         captureWarning = null;
       }
     } catch (e) {
-      if (epoch == _epoch) {
+      if (still()) {
         captureWarning = message(e);
         pending = [];
       }
@@ -481,7 +489,10 @@ class HubController extends ChangeNotifier {
     if (target == null) {
       return;
     }
-    final epoch = _epoch;
+    // Vaultの切替（_epoch）とは別に、再読込の世代を数える。後から始めた再読込があれば、
+    // 先に始めた再読込の結果は使わない（遅れて終わった古い読取で新しい表示を上書きしない）。
+    final epoch = _epoch, generation = ++_reloads;
+    bool current() => epoch == _epoch && generation == _reloads;
     final previous = repository?.snapshot;
     loading = true;
     error = null;
@@ -491,15 +502,13 @@ class HubController extends ChangeNotifier {
       final data = previous == null
           ? await access.readSnapshot(target)
           : await access.refreshSnapshot(target, previous);
-      if (epoch != _epoch) {
-        return;
-      }
+      if (!current()) return;
       repository = HubRepository(data);
       // Vaultを開くのに失敗した後の再読込でも、残したかごを読んでから使う（空のかごで上書きしない）。
       await _ensureBasket(target);
       // Vaultを開くのに失敗した後の再読込でも、残した設定（既読・ピン留め・ウィジェット・判断待ち）を読んでから書く（空の設定で上書きしない）。
       await _loadSeen();
-      if (epoch != _epoch) return;
+      if (!current()) return;
       final seen = _initializeSeen(), attended = _syncAttention();
       if (seen || attended) {
         try {
@@ -508,13 +517,13 @@ class HubController extends ChangeNotifier {
           // 既読の記録に失敗しても閲覧は続ける。
         }
       }
-      await _pending(target, epoch);
+      await _pending(target, epoch, current);
     } catch (e) {
-      if (epoch == _epoch) {
+      if (current()) {
         error = message(e);
       }
     } finally {
-      if (epoch == _epoch) {
+      if (current()) {
         loading = false;
         _changed();
       }
@@ -545,8 +554,10 @@ class HubController extends ChangeNotifier {
     // 列挙後に届いた採用・停止を、別の走査でもう一度照合する。
     final confirmed = await access.readSnapshot(target);
     if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+    // 読取の注意の有無は、読み直した内容（parsed）でコピーする資料ごとに判断する。
+    // 確認の走査で注意が変わったときは、判断の前提が変わったので止める。
     if (!confirmed.recognized ||
-        confirmed.warnings.isNotEmpty ||
+        confirmed.warnings.join('\n') != fresh.warnings.join('\n') ||
         fresh.fingerprint != confirmed.fingerprint) {
       repository = HubRepository(confirmed);
       _changed();

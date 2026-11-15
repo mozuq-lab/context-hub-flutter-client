@@ -54,11 +54,16 @@ class _GuidedPageState extends State<GuidedPage> {
       summary = TextEditingController();
   GuidedPurpose purpose = GuidedPurpose.record;
   String? project;
-  bool includeContext = true, otherOpen = false;
+
+  /// Vaultの資料を送るか。本人がオンにしたときだけ送り（既定はオフ）、送る全文を始める前に開いて見せる。
+  bool includeContext = false, otherOpen = false;
   final picked = <String>{};
   GuidedQuestion? _shown;
   GuidedContext? _material;
   String? _materialFor;
+
+  /// 資料を作ったときの読込結果。Vaultを読み込み直したら（追加規則が変わった場合を含む）作り直す。
+  Object? _materialRepo;
 
   Map<String, HubProject> get _projects =>
       widget.hub.repository?.projects ?? const {};
@@ -70,6 +75,7 @@ class _GuidedPageState extends State<GuidedPage> {
     final given = _projects[widget.project];
     project = given == null ? null : given.mergeTarget ?? given.id;
     g.addListener(_sync);
+    widget.hub.addListener(_hubChanged);
     _lifecycle = AppLifecycleListener(
       onInactive: g.flush,
       onHide: g.flush,
@@ -93,9 +99,17 @@ class _GuidedPageState extends State<GuidedPage> {
     setState(() {});
   }
 
+  /// Vaultを読み込み直したら、表示する資料を作り直す（送るのは表示したもの）。
+  void _hubChanged() {
+    if (mounted && !identical(widget.hub.repository, _materialRepo)) {
+      setState(() {});
+    }
+  }
+
   @override
   void dispose() {
     _lifecycle.dispose();
+    widget.hub.removeListener(_hubChanged);
     g.removeListener(_sync);
     g.dispose();
     seed.dispose();
@@ -107,12 +121,22 @@ class _GuidedPageState extends State<GuidedPage> {
   /// 送る資料。始める前に見せたものをそのまま送る。
   GuidedContext _materialOf(String? id) {
     final key = id ?? '';
-    if (_material == null || _materialFor != key) {
+    final repo = widget.hub.repository;
+    if (_material == null ||
+        _materialFor != key ||
+        !identical(_materialRepo, repo)) {
       _material = g.buildContext(id);
       _materialFor = key;
+      _materialRepo = repo;
     }
     return _material!;
   }
+
+  /// 表示した資料が今の読込結果のものか。違えば、見せていない資料を送らない。
+  bool _materialShown(String? id) =>
+      _material != null &&
+      _materialFor == (id ?? '') &&
+      identical(_materialRepo, widget.hub.repository);
 
   Future<bool> _confirm(String title, String body, String action) async =>
       await showDialog<bool>(
@@ -142,6 +166,17 @@ class _GuidedPageState extends State<GuidedPage> {
           '前回の深掘りは破棄されます。Vaultには何も書いていません。',
           '新しく始める',
         )) {
+      return;
+    }
+    if (includeContext && !_materialShown(project)) {
+      setState(() {});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Vaultの資料が更新されました。表示した資料を確かめてから、もう一度「始める」を押してください。'),
+          ),
+        );
+      }
       return;
     }
     await g.start(
@@ -247,7 +282,16 @@ class _GuidedPageState extends State<GuidedPage> {
     final material = includeContext ? _materialOf(project) : null;
     final sendsMaterial = material != null && material.text.isNotEmpty;
     final locked = previous?.operationId != null || g.otherVaultLocked;
+    final secretProblem = g.secretPolicy.problem;
     return [
+      if (secretProblem != null) ...[
+        NoticeBox(
+          secretProblem,
+          error: true,
+          key: const Key('guided-secret-problem'),
+        ),
+        const SizedBox(height: 12),
+      ],
       if (!g.hasKey) ...[
         if (g.keyProblem != null)
           NoticeBox(
@@ -419,6 +463,8 @@ class _GuidedPageState extends State<GuidedPage> {
       if (material != null && material.text.isNotEmpty)
         ExpansionTile(
           key: const Key('guided-context-preview'),
+          // 送る全文は、オンにした時点で開いて見せる（閉じることはできる）。
+          initiallyExpanded: true,
           tilePadding: EdgeInsets.zero,
           title: Text(
             '送る資料を見る（${material.text.length}字）',
@@ -458,7 +504,9 @@ class _GuidedPageState extends State<GuidedPage> {
         alignment: Alignment.centerLeft,
         child: FilledButton.icon(
           key: const Key('guided-start'),
-          onPressed: !g.hasKey || g.busy || locked ? null : _start,
+          onPressed: !g.hasKey || g.busy || locked || secretProblem != null
+              ? null
+              : _start,
           icon: const Icon(Icons.play_arrow, size: 18),
           label: const Text('始める'),
         ),
@@ -709,7 +757,11 @@ class _GuidedPageState extends State<GuidedPage> {
     final s = g.active, summary = s?.summary;
     if (s == null || summary == null) return;
     final body = guidedBody(summary, s);
-    final checked = await checkSecretsBeforeSave(context, body);
+    final checked = await checkSecretsBeforeSave(
+      context,
+      body,
+      secrets: g.secretPolicy,
+    );
     if (checked == null || !mounted) return;
     await g.save(redact: checked != body);
   }
@@ -1016,11 +1068,13 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
                   child: const Text('上限を保存'),
                 ),
               ),
-              if (usage != null)
+              if (usage != null) ...[
                 Text(
                   '今月（${usage.month}）: ${usage.calls}回・入力${usage.input}トークン・出力${usage.output}トークン',
                   style: _small,
                 ),
+                for (final line in usageLines(usage)) Text(line, style: _small),
+              ],
               const SizedBox(height: 8),
               const Text(
                 'モデル: $guidedModel（アプリで固定）。安全上の理由でこのモデルが応答を控えたときは、Anthropic側で別のモデルが代わりに答えることがあります。実際に応答したモデルはメモに記録します。',
@@ -1043,4 +1097,30 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
       ],
     );
   }
+}
+
+/// 今月の利用の内訳（モデル別・種類別）と、料金表による概算額の行。
+List<String> usageLines(GuidedUsage usage) {
+  final lines = <String>[
+    for (final e in usage.models.entries)
+      '${e.key}: 入力${e.value.input}・キャッシュ書込${e.value.cacheWrite}・キャッシュ読取${e.value.cacheRead}・出力${e.value.output}トークン',
+  ];
+  final cost = estimateCost(usage.models);
+  if (usage.models.isNotEmpty) {
+    lines.add(
+      '概算: 約\$${cost.usd.toStringAsFixed(2)}（$claudePricesAsOf時点の料金表による目安。請求額とは異なることがあります）',
+    );
+  }
+  if (cost.unknown.isNotEmpty) {
+    lines.add('料金表にないモデル（${cost.unknown.join('、')}）の分は概算に含みません。');
+  }
+  if (usage.partial) {
+    lines.add('内訳のない以前の記録の分は、概算に含みません。');
+  }
+  if (usage.uncertain > 0) {
+    lines.add(
+      '応答が途中で途切れ、使ったトークンを数え切れなかった呼び出しが${usage.uncertain}回あります（その分の費用が発生している可能性があります）。',
+    );
+  }
+  return lines;
 }

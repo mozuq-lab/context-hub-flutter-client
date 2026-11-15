@@ -174,6 +174,22 @@ void main() {
       expect(access.states[DraftStore.fileName], isNot(contains('送った内容')));
     });
 
+    test('残さない設定の後に保存を試みた操作も、本文を外して操作IDだけを残す', () async {
+      final access = MemoryUIAccess();
+      final store = DraftStore(access);
+      final key = DraftStore.keyFor('v');
+      await store.setEnabled(false);
+      await store.write(key, draft('送る内容', op: 'op-2'));
+      final again = DraftStore(access);
+      final kept = await again.read(key);
+      expect(kept!.operationId, 'op-2');
+      expect(kept.text, isEmpty);
+      expect(access.states[DraftStore.fileName], isNot(contains('送る内容')));
+      // 確かめたら消せる。
+      await again.remove(key);
+      expect(await DraftStore(access).read(key), isNull);
+    });
+
     test('残さない設定にすると書きかけを消し、以後も残さない', () async {
       final access = MemoryUIAccess();
       final store = DraftStore(access);
@@ -300,6 +316,34 @@ void main() {
     access.gate!.complete();
     await tester.pumpAndSettle();
     expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+  });
+
+  testWidgets('書きかけを残さない設定でも、保存を始める前に操作IDだけを残す', (tester) async {
+    final access = BlockingAccess()..gate = Completer<void>();
+    await openSample(tester, access);
+    await openForm(tester);
+    await tester.tap(find.byKey(const Key('keep-drafts')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('memo-text')), '残さないメモ');
+    await tester.tap(find.byKey(const Key('save-memo')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    final raw = access.states[DraftStore.fileName]!;
+    expect(raw, isNot(contains('残さないメモ')));
+    final stored =
+        ((jsonDecode(raw) as Map)['drafts'] as Map).values.single as Map;
+    expect(stored['o'], isA<String>());
+    expect(stored['t'], isEmpty);
+    access.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    // 保存を確かめたら操作IDも消す。
+    expect(
+      ((jsonDecode(access.states[DraftStore.fileName]!) as Map)['drafts']
+              as Map)
+          .isEmpty,
+      isTrue,
+    );
   });
 
   testWidgets('保存結果が不明な書きかけは、同じ操作を確認するまで閉じられない', (tester) async {

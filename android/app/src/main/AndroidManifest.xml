@@ -6,6 +6,7 @@
     <application
         android:label="ContextHub Flutter"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

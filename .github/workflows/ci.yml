@@ -1,0 +1,43 @@
+name: 検証
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # scripts/verify.sh と同じ手順（固定した本体commitの確認、本体coreのビルド、flutter analyze・flutter test）を行う。
+  # flutter test は、Dartが保存した依頼を本体（Node）が受理する検査と、fixtureと本体出力の比較を含む。
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FLUTTER_VERSION: '3.41.5'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Flutterの取得
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Flutterの準備
+        run: |
+          flutter --disable-analytics
+          flutter --version
+      # submoduleの固定commitの確認、npm ci --ignore-scripts と npm run build:protocol、
+      # flutter pub get・flutter analyze --no-pub・flutter test --no-pub を順に行う。
+      - name: 検証（scripts/verify.sh）
+        run: scripts/verify.sh

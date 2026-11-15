@@ -61,14 +61,21 @@ class PolicyReader {
               p.startsWith('90_system/knowledge-retirements/'));
   PolicyBundle read([String? projectId]) {
     try {
+      // 方針の正本（知識・承認・停止記録・方針の一覧）に関係しうる読取の注意があれば読まない。
       if (!snapshot.recognized ||
-          snapshot.warnings.isNotEmpty ||
+          snapshot.warnings.any((w) {
+            final path = snapshotWarningPath(w);
+            return path == null ||
+                _inventoryPath(path) ||
+                path.startsWith('90_system/policies/');
+          }) ||
           projectId != null && !projectIdPattern.hasMatch(projectId)) {
         throw const FormatException();
       }
       final raw = snapshot.files['90_system/policies/index.json'];
       if (raw == null) throw const FormatException();
       final m = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      if (newerSchema(m)) throw const _NewerPolicies();
       if (m['schema_version'] != 1 ||
           m['revision'] is! String ||
           !_sha.hasMatch(m['revision']) ||
@@ -276,8 +283,14 @@ class PolicyReader {
         throw const FormatException();
       }
       return PolicyBundle(m, projectId);
+    } on _NewerPolicies {
+      throw const FormatException('有効方針を本体が新しい形式で書いています。アプリを更新してください。');
     } catch (_) {
       throw const FormatException('有効方針が未同期・未初期化・不整合です。Miniで集約し同期して再読込してください。');
     }
   }
+}
+
+class _NewerPolicies implements Exception {
+  const _NewerPolicies();
 }
