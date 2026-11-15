@@ -495,3 +495,34 @@ class NewProjectRequest {
     return null;
   }
 }
+
+/// 本体が書く、似ているアイデアの未確認の組（90_system/idea-index.json）。
+class IdeaCandidate {
+  const IdeaCandidate(this.a, this.b, this.score, this.hashA, this.hashB);
+
+  /// アイデアID（IDEA-…）。昇順。
+  final String a, b;
+  final double score;
+
+  /// 本体が索引を作ったときのIDEAファイルのhash。束ねる依頼はこれに結び付ける。
+  final String hashA, hashB;
+  String other(String id) => id == a ? b : a;
+  bool has(String id) => id == a || id == b;
+}
+
+/// 本人が束ねたアイデア。[ideas]の先頭が代表（元のメモが最も新しいもの）。
+class IdeaGroup {
+  const IdeaGroup(this.representative, this.ideas, this.links);
+  final String representative;
+  final List<String> ideas;
+
+  /// 束をつないでいる、本人が束ねた組（ideaPairKey）。束から外すにはこの組を別の話にする。
+  final Set<String> links;
+  bool linksDirectly(String a, String b) => links.contains(ideaPairKey(a, b));
+}
+
+/// 似ているアイデアの判断（束ねる・別の話）の依頼の対象。
+String ideaPairKey(String a, String b) =>
+    a.compareTo(b) < 0 ? '$a/$b' : '$b/$a';
+const ideaLinkActions = ['link', 'separate'];
+final ideaIdPattern = RegExp(r'^IDEA-[0-9A-HJKMNP-TV-Z]{26}$');

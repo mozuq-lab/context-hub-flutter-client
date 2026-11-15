@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../core/models.dart';
 
@@ -40,7 +41,22 @@ abstract class VaultAccess {
   Future<void> writeState(String name, String raw, {bool exclusive = false});
   Future<List<String>> listJournals();
   Future<void> openExternal(String url);
+
+  /// ホーム画面ウィジェットとアイコン長押しのショートカットを使える端末か（Androidだけ）。
+  bool get homeScreenSupported => false;
+
+  /// ホーム画面ウィジェットに出す内容を渡す。nullなら「アプリを開いて読み込む」表示に戻す。
+  Future<void> updateHomeWidget(String? content) async {}
+
+  /// ショートカットやウィジェットから指定された起動時の操作を1回だけ受け取る。なければnull。
+  Future<String?> takeLaunchAction() async => null;
+
+  /// アプリを開いたまま新しい起動時の操作が届いたときの通知先を登録する。
+  void listenLaunchActions(void Function() onAction) {}
 }
+
+/// 起動時の操作として受け付ける名前。ほかの値は無視する。
+const launchActions = {'capture', 'guided', 'next'};
 
 class NativeVaultAccess implements VaultAccess {
   static const channel = MethodChannel('com.mozuqlab.contexthub/vault');
@@ -138,6 +154,31 @@ class NativeVaultAccess implements VaultAccess {
       throw const FormatException('http(s)リンクだけを開けます。');
     }
     await channel.invokeMethod('openExternal', {'url': url});
+  }
+
+  @override
+  bool get homeScreenSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  @override
+  Future<void> updateHomeWidget(String? content) async {
+    if (!homeScreenSupported) return;
+    await channel.invokeMethod('updateHomeWidget', {'content': content});
+  }
+
+  @override
+  Future<String?> takeLaunchAction() async {
+    if (!homeScreenSupported) return null;
+    final action = await channel.invokeMethod<String>('takeLaunchAction');
+    return launchActions.contains(action) ? action : null;
+  }
+
+  @override
+  void listenLaunchActions(void Function() onAction) {
+    if (!homeScreenSupported) return;
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'launchAction') onAction();
+    });
   }
 }
 

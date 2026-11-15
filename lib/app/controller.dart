@@ -7,6 +7,7 @@ import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
 import '../storage/basket_store.dart';
 import '../core/repository.dart';
+import '../core/home_widget.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
 import '../core/models.dart';
@@ -79,8 +80,54 @@ class HubController extends ChangeNotifier {
   bool _disposed = false;
   void _changed() {
     if (!_disposed) {
+      _syncHomeWidget();
       notifyListeners();
     }
+  }
+
+  // ---- Androidのホーム画面ウィジェット（端末の表示だけ。Vaultには書かない） ----
+  /// 表示設定はVaultごとに持つ。サンプルや別のVaultで選んだ設定を、ほかのVaultへ持ち込まない。
+  Map<String, dynamic> _homeWidgets = {};
+  HomeWidgetSettings get homeWidget =>
+      HomeWidgetSettings.fromJson(_homeWidgets[location?.identity]);
+  bool get homeScreenSupported => access.homeScreenSupported;
+  String? _homeWidgetSent;
+  bool _homeWidgetEverSent = false;
+
+  /// 読込済みの記録が変わったら、ウィジェットに出す内容を渡し直す。
+  /// 読込中と再読込の失敗では前の内容を残し、表示できる記録がなくなったら内容を消す。
+  void _syncHomeWidget() {
+    if (!access.homeScreenSupported) return;
+    final repo = repository;
+    if (repo == null && loading) return;
+    String? content;
+    if (repo != null) {
+      try {
+        content = encodeHomeWidget(
+          homeWidgetContent(repo, settings: homeWidget),
+        );
+      } catch (_) {
+        content = null;
+      }
+    }
+    if (_homeWidgetEverSent && content == _homeWidgetSent) return;
+    _homeWidgetEverSent = true;
+    _homeWidgetSent = content;
+    // 表示の更新に失敗しても、アプリの操作は続ける。
+    access.updateHomeWidget(content).catchError((Object _) {});
+  }
+
+  /// ウィジェットの表示設定を変える。設定は端末に保存する。
+  Future<void> setHomeWidget(HomeWidgetSettings settings) async {
+    final target = location;
+    if (target == null) throw StateError('先にVaultを選んでください。');
+    if (settings == const HomeWidgetSettings()) {
+      _homeWidgets.remove(target.identity);
+    } else {
+      _homeWidgets[target.identity] = settings.toJson();
+    }
+    await _writeSettings();
+    _changed();
   }
 
   @override
@@ -912,6 +959,67 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 表示中のアイデアのhash。確認の画面を出すときに取り、依頼に渡す。読めなければnull。
+  String? ideaSeenHash(String id) {
+    final repo = repository, record = repo?.ideaRecord(id);
+    final raw = record == null ? null : repo!.snapshot.files[record.path];
+    return raw == null ? null : digest(raw);
+  }
+
+  /// 似ているアイデアの組を束ねる（link）か、別の話とする（separate）依頼を保存する。
+  /// 束ねるのは索引にある未確認の組、束から外すのは同じ束にある組、別の話とするのはそのどちらか。
+  ///
+  /// [seenA]・[seenB]は、本人が確認の画面で見ていた時点の両方のアイデアのhash（[ideaSeenHash]）。
+  /// 読み直した内容と食い違えば、依頼を保存せずに止める。
+  Future<CaptureResult> requestIdeaLink(
+    String a,
+    String b,
+    String action, {
+    required String seenA,
+    required String seenB,
+  }) {
+    late String hashA, hashB;
+    return _confirmedRequest(
+      (parsed) {
+        final key = ideaPairKey(a, b);
+        final candidate = parsed.ideaCandidates
+            .where((c) => ideaPairKey(c.a, c.b) == key)
+            .firstOrNull;
+        // 束から外せるのは、本人が直接束ねた組だけ（束を間接につないでいる組は外しても束に残る）。
+        final linked = parsed.ideaGroupOf(a)?.linksDirectly(a, b) ?? false;
+        if (!ideaLinkActions.contains(action) ||
+            (action == 'link' && candidate == null) ||
+            (action == 'separate' && candidate == null && !linked)) {
+          throw StateError('似ているアイデアの一覧が更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.ideaLinkRequestIdFor(a, b) != null) {
+          throw StateError('この組は依頼済みです。受付状況を確認してください。');
+        }
+        final ra = parsed.ideaRecord(a), rb = parsed.ideaRecord(b);
+        if (ra == null || rb == null) {
+          throw StateError('アイデアが見つかりません。再読込してください。');
+        }
+        // 依頼には、本人が見ていた内容のhashを付ける。読み直した内容が変わっていれば止める。
+        hashA = digest(parsed.snapshot.files[ra.path]!);
+        hashB = digest(parsed.snapshot.files[rb.path]!);
+        if (hashA != seenA || hashB != seenB) {
+          throw StateError('アイデアの内容が更新されました。表示を確認してから、もう一度操作してください。');
+        }
+        // 索引がアイデアより先に（または後に）同期されている間は、束ねる依頼を出さない。
+        if (candidate != null &&
+            action == 'link' &&
+            ((candidate.a == a ? candidate.hashA : candidate.hashB) != hashA ||
+                (candidate.a == b ? candidate.hashA : candidate.hashB) !=
+                    hashB)) {
+          throw StateError('似ているアイデアの一覧とアイデアの同期が揃っていません。再読込してから操作してください。');
+        }
+        return 'idea-link/$key/$action/$hashA/$hashB';
+      },
+      (service, parsed, operation) =>
+          service.saveIdeaLink(operation, a, hashA, b, hashB, action),
+    );
+  }
+
   /// 作業記録の下書きを見送る依頼を保存する。
   Future<CaptureResult> requestGitDraftDismiss(
     String draftId,
@@ -951,6 +1059,9 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['seen'] is Map) {
         _seen = Map<String, dynamic>.from(value['seen'] as Map);
       }
+      if (value is Map && value['homeWidget'] is Map) {
+        _homeWidgets = Map<String, dynamic>.from(value['homeWidget'] as Map);
+      }
     } catch (_) {
       // 読めない記録は空として扱う。保存先の設定はrestoreで別に扱う。
     }
@@ -966,14 +1077,19 @@ class HubController extends ChangeNotifier {
       encoded = _encodeSettings(target);
     } catch (_) {
       _seen = {};
-      encoded = jsonEncode(target.toJson());
+      encoded = jsonEncode({..._settingsBase(target)});
     }
     await access.writeState('settings.json', encoded);
   }
 
+  Map<String, Object?> _settingsBase(VaultLocation target) => {
+    ...target.toJson(),
+    if (_homeWidgets.isNotEmpty) 'homeWidget': _homeWidgets,
+  };
+
   /// 既読の記録を容量内に収めて設定を作る。古いVault→本文→古いプロジェクトの順に削る。
   String _encodeSettings(VaultLocation target) {
-    String encode() => jsonEncode({...target.toJson(), 'seen': _seen});
+    String encode() => jsonEncode({..._settingsBase(target), 'seen': _seen});
     bool fits(String v) => utf8.encode(v).length <= _settingsBudget;
     final current = _seen[target.identity];
     final projects = repository?.projects;

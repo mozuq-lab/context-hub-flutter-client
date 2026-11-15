@@ -89,6 +89,25 @@ void main() {
     expect(text, contains('AI自己報告・独立検証なし'));
   });
 
+  test('秘密情報らしい文字列は、記録の本文でも伏せてから束ねる', () {
+    final files = fixtureFiles(), original = parseMarkdown(files[inputPath]!);
+    const secretId = 'IN-01M2DSFVRRA5MFS95MKFPP2CCS';
+    const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123';
+    files['00_inbox/2026-09-16_$secretId.md'] = encodePacket({
+      ...original.meta,
+      'id': secretId,
+      'source_event_id': 'secret',
+      'occurred_at': '2026-09-16T10:00:00+09:00',
+      'received_at': '2026-09-16T10:00:00+09:00',
+    }, '検証用のキーは $key です。\n次は権限を確認する。');
+    final repo = HubRepository(fixture(files));
+    final text = repo.bundleContext([id(repo, secretId)], maxChars: 20000).text;
+    expect(text, isNot(contains('sk-ant-api03')));
+    expect(text, contains('[伏せ字:'));
+    expect(text, contains('次は権限を確認する。'));
+    expect(text, contains('秘密情報らしい文字列は[伏せ字:種類]に置き換えています。'));
+  });
+
   test('アイデアの帰属は本人指定とAI推定を分け、NOWの項目ごとの注意も出す', () {
     final repo = HubRepository(fixture());
     final idea = repo.bundleContext([recordId(ideaPath)], maxChars: 20000).text;

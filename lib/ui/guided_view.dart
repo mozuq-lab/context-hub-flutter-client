@@ -6,7 +6,7 @@ import '../core/guided.dart';
 import '../core/models.dart';
 import '../core/parser.dart' show clip;
 import '../storage/guided_store.dart';
-import 'views.dart' show NoticeBox, timeLabel;
+import 'views.dart' show NoticeBox, checkSecretsBeforeSave, timeLabel;
 
 /// 選んで深掘りを開く。入力フォームと同じく、開いている間はVaultを切り替えない。
 Future<void> showGuided(
@@ -701,6 +701,16 @@ class _GuidedPageState extends State<GuidedPage> {
     ];
   }
 
+  /// 保存の前に、まとめと問答の記録に秘密情報らしい文字列がないかを知らせる。
+  Future<void> _save() async {
+    final s = g.active, summary = s?.summary;
+    if (s == null || summary == null) return;
+    final body = guidedBody(summary, s);
+    final checked = await checkSecretsBeforeSave(context, body);
+    if (checked == null || !mounted) return;
+    await g.save(redact: checked != body);
+  }
+
   List<Widget> _summary(BuildContext context) {
     final s = g.active!, r = g.result;
     if (r?.saved == true) {
@@ -823,7 +833,7 @@ class _GuidedPageState extends State<GuidedPage> {
           if (!g.locked)
             FilledButton.icon(
               key: const Key('guided-save'),
-              onPressed: g.saving || problem != null ? null : g.save,
+              onPressed: g.saving || problem != null ? null : _save,
               icon: const Icon(Icons.save_alt, size: 18),
               label: const Text('Inputへ保存'),
             ),

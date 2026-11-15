@@ -25,7 +25,12 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
+class VaultBridge(
+    private val activity: Activity,
+    messenger: BinaryMessenger,
+    /** ショートカットやウィジェットで選ばれた起動時の操作を1回だけ取り出す。 */
+    private val takeLaunchAction: () -> String? = { null },
+) {
     private companion object {
         // 読む.md/.jsonの件数、走査する項目（フォルダー・対象外のファイルを含む）の件数、合計バイト数の上限。
         const val MAX_FILES = 20_000
@@ -69,6 +74,14 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
                     activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
+            } else if (call.method == "takeLaunchAction") {
+                result.success(takeLaunchAction())
+            } else if (call.method == "updateHomeWidget") {
+                // 表示用の短い文字列を端末内に置くだけで、Vaultには触れない。
+                try {
+                    HomeWidgetProvider.store(activity.applicationContext, args["content"] as String?)
+                    result.success(null)
+                } catch (_: Exception) { fail(result) }
             } else executor.execute {
                 try {
                     val value = invoke(call.method, args)
@@ -82,6 +95,8 @@ class VaultBridge(private val activity: Activity, messenger: BinaryMessenger) {
             }
         }
     }
+    /** アプリを開いたまま新しい起動時の操作が届いたことをFlutter側へ知らせる。 */
+    fun notifyLaunchAction() = channel.invokeMethod("launchAction", null)
     private fun fail(result: MethodChannel.Result) = result.error("vault_access",
         "Vaultへアクセスできません。ローカルの選択フォルダーと権限を確認し、必要なら再選択してください。", null)
     fun activityResult(request: Int, code: Int, intent: Intent?): Boolean {

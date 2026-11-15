@@ -501,7 +501,8 @@ class GuidedController extends ChangeNotifier {
   }
 
   /// 確認したまとめと問答の記録を、メモとしてInputへ保存する。
-  Future<void> save() async {
+  /// [redact]なら、秘密情報らしい文字列を伏せ字にして保存する。
+  Future<void> save({bool redact = false}) async {
     final s = active, summary = s?.summary;
     if (s == null ||
         summary == null ||
@@ -511,7 +512,12 @@ class GuidedController extends ChangeNotifier {
         result?.saved == true) {
       return;
     }
-    final problem = bodyProblem;
+    final body = guidedBody(summary, s, redact: redact);
+    final problem =
+        bodyProblem ??
+        (body.length > guidedBodyChars
+            ? '伏せ字にすると$guidedBodyChars字を超えます。まとめを短くしてください。'
+            : null);
     if (problem != null) {
       error = problem;
       _changed();
@@ -541,7 +547,7 @@ class GuidedController extends ChangeNotifier {
       final r = await hub.save(
         CaptureDraft(
           operationId: op,
-          text: guidedBody(summary, s),
+          text: body,
           kind: 'memo',
           project: s.project,
           meta: guidedMeta(s),
