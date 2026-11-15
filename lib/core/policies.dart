@@ -179,6 +179,26 @@ class PolicyReader {
         }
         if (d['action'] == 'reject') continue;
         if (d['action'] != 'approve') throw const FormatException();
+        // 停止記録は知識のファイルを使わずに検査できるため、手で変更された知識についても本体と同じく確かめる。
+        final stopPath = '90_system/knowledge-retirements/KRET-$suffix.json',
+            stopRaw = snapshot.files[stopPath];
+        if (stopRaw != null) {
+          final r = jsonDecode(stopRaw) as Map,
+              meta = parseMarkdown(r['snapshot'] as String).meta;
+          if (r['schema_version'] != 1 ||
+              r['id'] != 'KRET-$suffix' ||
+              r['knowledge_id'] != id ||
+              r['actor'] != 'user' ||
+              timestamp(r['retired_at']) == null ||
+              digest(r['snapshot'] as String) != r['knowledge_hash'] ||
+              meta['id'] != id ||
+              meta['verified'] != true ||
+              meta['approval_id'] != d['id'] ||
+              meta['approved_hash'] != d['candidate_hash'] ||
+              !generatedIntact(r['snapshot'] as String, meta)) {
+            throw const FormatException();
+          }
+        }
         if (modified.contains(id)) {
           approved.add(id);
           inactive.add(id);
@@ -205,24 +225,6 @@ class PolicyReader {
           throw const FormatException();
         }
         approved.add(id);
-        final stopPath = '90_system/knowledge-retirements/KRET-$suffix.json',
-            stopRaw = snapshot.files[stopPath];
-        if (stopRaw != null) {
-          final r = jsonDecode(stopRaw) as Map,
-              meta = parseMarkdown(r['snapshot'] as String).meta;
-          if (r['schema_version'] != 1 ||
-              r['id'] != 'KRET-$suffix' ||
-              r['knowledge_id'] != id ||
-              r['actor'] != 'user' ||
-              timestamp(r['retired_at']) == null ||
-              digest(r['snapshot'] as String) != r['knowledge_hash'] ||
-              meta['id'] != id ||
-              meta['approval_id'] != d['id'] ||
-              meta['approved_hash'] != d['candidate_hash'] ||
-              !generatedIntact(r['snapshot'] as String, meta)) {
-            throw const FormatException();
-          }
-        }
         for (final pair in [
           ('superseded_by', 'supersedes'),
           ('supersedes', 'superseded_by'),
