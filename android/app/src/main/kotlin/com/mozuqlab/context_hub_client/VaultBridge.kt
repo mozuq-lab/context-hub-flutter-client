@@ -11,6 +11,7 @@ import android.provider.DocumentsContract as Docs
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import io.flutter.plugin.common.BinaryMessenger
@@ -264,12 +265,27 @@ class VaultBridge(
     private fun writeFile(file: File, raw: String, exclusive: Boolean) {
         safe(file); safe(file.parentFile!!)
         if (exclusive) {
-            // Androidのapp-dataではhardlinkが拒否される。O_EXCLで確保し、
-            // fsync完了後だけ呼出元を進める。途中停止の不完全journalは保存を止める。
-            val fd = Os.open(file.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
+            // 最終名へ直接書くと、作成とfsyncの間で止まったときに空や途中のjournalが残る。
+            // 一時ファイル（名前が.で始まり、journalの一覧に出ない）へO_EXCLで書いてfsyncし、
+            // まだない最終名へrenameで公開する。fsync完了後だけ呼出元を進める。
+            // Androidのapp-dataではhardlinkが拒否されるため、存在の確認とrenameの間の排他は、
+            // この窓口の処理が1本のスレッド（executor）で順に進むことに頼る。
+            // 書く操作を受け付けるのは画面のある窓口だけで、ほかのプロセスはこの領域へ書かない。
+            val temp = File(file.parentFile, ".ctx-${UUID.randomUUID()}.tmp")
+            val fd = Os.open(temp.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
                 OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 384)
-            FileOutputStream(fd).use { it.write(raw.toByteArray(Charsets.UTF_8)); it.fd.sync() }
-            syncDir(file.parentFile!!)
+            try {
+                FileOutputStream(fd).use { it.write(raw.toByteArray(Charsets.UTF_8)); it.fd.sync() }
+                val exists = try {
+                    Os.lstat(file.path); true
+                } catch (e: ErrnoException) {
+                    if (e.errno != OsConstants.ENOENT) throw e
+                    false
+                }
+                require(!exists)
+                Os.rename(temp.path, file.path)
+                syncDir(file.parentFile!!)
+            } finally { temp.delete() }
             return
         }
         val temp = File(file.parentFile, ".ctx-${UUID.randomUUID()}.tmp")

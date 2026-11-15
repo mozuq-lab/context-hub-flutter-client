@@ -28,7 +28,7 @@ NOWの自動領域が手で書き換えられ、本体が新版を`90_system/con
 
 固定UUIDからREQ IDを決め、本文を含まないjournalへfingerprint・保存先・日時を先に記録します。同じ操作は再送せず確認だけを行います。未確定保存の本文は開いたフォームで保持し、再起動後の未保存本文復元は保証しません。
 
-MacはNOFOLLOW・排他公開・file/dir fsyncを使います。保存先識別はbookmarkのバイトと分け、volume UUID（取得不可時はdevice番号）とinodeを使います。フォルダーのコピーは別Vaultです。AndroidのjournalはO_EXCLとfile/dir fsync、SAFのInputは一時ファイル・fsync・rename・本文readbackを使います。
+MacはNOFOLLOW・排他公開・file/dir fsyncを使います。保存先識別はbookmarkのバイトと分け、volume UUID（取得不可時はdevice番号）とinodeを使います。フォルダーのコピーは別Vaultです。AndroidのjournalはO_EXCLの一時ファイル・file fsync・まだない最終名へのrename・dir fsync、SAFのInputは一時ファイル・fsync・rename・本文readbackを使います。
 
 ## 選んで深掘り
 

@@ -182,6 +182,26 @@ void main() {
     await expectLater(service.save(draft), throwsA(anything));
     expect(access.writes, 0);
   });
+  test('書き終える前に止まった空のjournalは、新規保存を止めず同じ操作で保存し直せる', () async {
+    // 以前のAndroidは最終名へ直接書いており、作成とfsyncの間で止まると空やNULだけのjournalが残った。
+    // Inputへの書込はjournalのfsyncの後なので、この操作は何も送っていない。
+    const other = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    await access.writeState('$other.json', '');
+    await access.writeState('$op.json', '\u0000' * 300);
+    expect(await service.journalState(op), isNull);
+    expect(await service.pending(), isEmpty);
+    final result = await service.save(draft);
+    expect(result.saved, isTrue);
+    expect(access.writes, 1);
+    expect(await service.journalState(op), 'saved');
+    expect(
+      (await service.save(
+        const CaptureDraft(operationId: other, text: '別のメモ'),
+      )).saved,
+      isTrue,
+    );
+    expect(access.writes, 2);
+  });
   test('journalを先に書き、Input欠損でも新規書込をしない', () async {
     await service.save(draft);
     final journal = jsonDecode((await access.readState('$op.json'))!);
