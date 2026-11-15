@@ -6,6 +6,12 @@ import android.content.Intent
 import android.os.Bundle
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        /** アプリの画面が出ているか。出ている間は、アプリを閉じている間の確認を行わない。 */
+        @Volatile
+        var visible = false
+            private set
+    }
     private lateinit var bridge: VaultBridge
     /** ショートカットやウィジェットで選ばれ、まだFlutter側が受け取っていない操作。 */
     private var launchAction: String? = null
@@ -18,11 +24,23 @@ class MainActivity : FlutterActivity() {
     }
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        bridge = VaultBridge(this, flutterEngine.dartExecutor.binaryMessenger) {
+        bridge = VaultBridge(this, flutterEngine.dartExecutor.binaryMessenger, this) {
             val action = launchAction
             launchAction = null
             action
         }
+    }
+    override fun onStart() {
+        super.onStart()
+        visible = true
+    }
+    override fun onStop() {
+        visible = false
+        super.onStop()
+    }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (::bridge.isInitialized) bridge.permissionResult(requestCode)
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
