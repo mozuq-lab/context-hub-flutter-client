@@ -395,6 +395,31 @@ class _HubViewState extends State<HubView> {
           '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
         ),
       );
+      final backupNow = DateTime.now();
+      for (final (index, warning) in repo.backup.warnings(backupNow).indexed) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: NoticeBox(
+              warning,
+              key: Key('home-backup-warning-$index'),
+              error: true,
+            ),
+          ),
+        );
+      }
+      if (repo.backup.line(backupNow) case final line?) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(
+              line,
+              key: const Key('home-backup'),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        );
+      }
       final actionable = repo.actionableProjects,
           nextCount = actionable.fold<int>(
             0,
@@ -496,14 +521,40 @@ class _HubViewState extends State<HubView> {
       final mergedProjects = repo.projects.values
           .where((p) => p.merged)
           .toList();
+      // 統合済みのプロジェクトは後ろの「統合済み」にまとめるので、ピン留めの先頭には数えない。
+      final pinnedCount = repo.pinnedProjects.where((p) => !p.merged).length;
+      if (pinnedCount > 0) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'ピン留め $pinnedCount件を先頭に表示（この端末だけの並び）',
+                    key: const Key('home-pins'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                TextButton(
+                  key: const Key('reorder-pins'),
+                  onPressed: reorderPins,
+                  child: const Text('並び替え'),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
       for (final project in repo.orderedProjects.where((p) => !p.merged)) {
+        final pinned = repo.isPinned(project.id);
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Card(
               child: ListTile(
                 key: Key('project-${project.id}'),
-                contentPadding: const EdgeInsets.all(24),
+                contentPadding: const EdgeInsets.fromLTRB(24, 24, 12, 24),
                 title: Text(
                   project.title,
                   style: const TextStyle(
@@ -553,7 +604,20 @@ class _HubViewState extends State<HubView> {
                     ],
                   ),
                 ),
-                trailing: const Icon(Icons.arrow_forward),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      key: Key('pin-${project.id}'),
+                      tooltip: pinned ? 'ピン留めを外す' : 'ピン留めして先頭に表示',
+                      isSelected: pinned,
+                      onPressed: () => togglePin(project),
+                      icon: const Icon(Icons.push_pin_outlined, size: 20),
+                      selectedIcon: const Icon(Icons.push_pin, size: 20),
+                    ),
+                    const Icon(Icons.arrow_forward),
+                  ],
+                ),
                 onTap: () => widget.onNavigate('project:${project.id}'),
               ),
             ),
@@ -1361,9 +1425,16 @@ class _HubViewState extends State<HubView> {
   ) async {
     final resolve = action == 'resolve',
         verb = item.section == 'next' ? '完了' : '解決';
+    // 外したときに起きたこと（読み直し・関連の変更）だけを、元に戻ると伝える。
+    final undo = switch (item.exclusionReason) {
+      'misread' => '誤りとして外したときのメモの読み直しも元に戻ります。',
+      'wrong-project' when !repo.itemOwnedByProject(project.id, item) =>
+        '誤りとして外したときのメモの読み直しと、このプロジェクトとの関連の変更も元に戻ります。',
+      _ => '',
+    };
     if (!await confirmAction(
           resolve ? '$verbにする' : '未解決に戻す',
-          '${item.display}\n\n${resolve ? 'この項目をNOWの「解決済み・完了」へ移すよう依頼します。原文と整理結果は変わりません。' : 'この項目をNOWの元の欄へ戻すよう依頼します。'}',
+          '${item.display}\n\n${resolve ? 'この項目をNOWの「解決済み・完了」へ移すよう依頼します。原文と整理結果は変わりません。' : 'この項目をNOWの元の欄へ戻すよう依頼します。$undo'}',
           resolve ? '$verbにする' : '戻す',
         ) ||
         !mounted) {
@@ -1374,6 +1445,37 @@ class _HubViewState extends State<HubView> {
         project.id,
         item.key,
         action,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '報告を保存しました。Miniで受け付けられるとNOWに反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// AIの読み違いなどを、理由を選んで「誤り」として外すよう依頼する。完了・解決には数えない。
+  Future<void> excludeItem(HubProject project, NowItemRef item) async {
+    final choice = await showDialog<({String reason, String? note})>(
+      context: context,
+      builder: (_) => ExcludeDialog(
+        item: item,
+        owned: repo.itemOwnedByProject(project.id, item),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      final result = await c.requestItemResolution(
+        project.id,
+        item.key,
+        'exclude',
+        reason: choice.reason,
+        note: choice.note,
       );
       if (mounted) {
         notice(
@@ -1598,6 +1700,20 @@ class _HubViewState extends State<HubView> {
 
   bool get busy => c.loading || c.saving || c.captureWarning != null;
 
+  /// プロジェクトをピン留めする、または外す（この端末の並びだけ。Vaultには書かない）。
+  Future<void> togglePin(HubProject project) async {
+    try {
+      await c.setPinned(project.id, !repo.isPinned(project.id));
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  Future<void> reorderPins() => showDialog<void>(
+    context: context,
+    builder: (_) => PinOrderDialog(controller: c),
+  );
+
   Future<void> markAllSeen() async {
     try {
       await c.markAllSeen();
@@ -1696,6 +1812,20 @@ class _HubViewState extends State<HubView> {
                             : '日付を付ける',
                       ),
                     ),
+            // 報告が反映待ちの間は、重ねて依頼させない。
+            if (entry.itemKey case final key?
+                when repo.itemRequestIdFor(key) == null)
+              TextButton.icon(
+                key: Key('exclude-${key.substring(0, 12)}'),
+                onPressed: busy
+                    ? null
+                    : () => excludeItem(
+                        project,
+                        project.nowItems.firstWhere((i) => i.key == key),
+                      ),
+                icon: const Icon(Icons.report_gmailerrorred_outlined, size: 15),
+                label: const Text('誤りとして外す'),
+              ),
             for (final id in entry.references)
               TextButton.icon(
                 key: const Key('source-record'),
@@ -1713,7 +1843,7 @@ class _HubViewState extends State<HubView> {
     ),
   );
 
-  /// 進行中のプロジェクトの「次の一手」（または未解決）を、最新の根拠が新しい順にまとめる。
+  /// 進行中のプロジェクトの「次の一手」（または未解決）を、ピン留めしたものから順に、残りは最新の根拠が新しい順にまとめる。
   /// 本人が付けた期日が過ぎた・今日・7日以内の項目はプロジェクトをまたいで先頭に出し、見直す日が先の項目はたたむ。
   List<Widget> nextView() {
     final now = DateTime.now(),
@@ -1800,7 +1930,7 @@ class _HubViewState extends State<HubView> {
       title(
         'NEXT ACTIONS',
         '次の一手',
-        '進行中のプロジェクトの「次の一手」と「未解決」を、最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '進行中のプロジェクトの「次の一手」と「未解決」を、ピン留めしたプロジェクトから順に、残りは最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
       Align(
         alignment: Alignment.centerLeft,
@@ -2080,6 +2210,17 @@ class _HubViewState extends State<HubView> {
             label: const Text('呼び名とキーワード'),
           ),
           OutlinedButton.icon(
+            key: const Key('project-pin'),
+            onPressed: () => togglePin(project),
+            icon: Icon(
+              repo.isPinned(project.id)
+                  ? Icons.push_pin
+                  : Icons.push_pin_outlined,
+              size: 18,
+            ),
+            label: Text(repo.isPinned(project.id) ? 'ピン留めを外す' : 'ピン留め'),
+          ),
+          OutlinedButton.icon(
             key: const Key('project-history'),
             onPressed: project.history == null
                 ? null
@@ -2184,6 +2325,52 @@ class _HubViewState extends State<HubView> {
                       Expanded(
                         child: Text(
                           '${item.section == 'next' ? '完了' : '解決'}: ${item.display}（${timeLabel(item.resolvedAt)}）',
+                        ),
+                      ),
+                      repo.itemRequestIdFor(item.key) != null
+                          ? const Text(
+                              '報告済み（反映待ち）',
+                              style: TextStyle(fontSize: 12),
+                            )
+                          : TextButton(
+                              key: Key('reopen-${item.key.substring(0, 12)}'),
+                              onPressed: busy
+                                  ? null
+                                  : () => reportItem(project, item, 'reopen'),
+                              child: const Text('未解決に戻す'),
+                            ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 28),
+      ],
+      if (project.excludedItems.isNotEmpty) ...[
+        const Text(
+          '誤りとして外した項目（本人報告）',
+          style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '完了・解決には数えません。理由と一言は、次からの整理でAIへ渡します。',
+          style: TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          key: const Key('excluded-items'),
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final item in project.excludedItems)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${item.section == 'next' ? '次の一手' : '未解決'}: ${item.display}\n理由: ${exclusionReasonLabels[item.exclusionReason]}${item.exclusionNote == null ? '' : '（${item.exclusionNote}）'}（${timeLabel(item.resolvedAt)}）',
                         ),
                       ),
                       repo.itemRequestIdFor(item.key) != null
@@ -3522,6 +3709,228 @@ class _CaptureDialogState extends State<CaptureDialog> {
       ),
     ),
   );
+}
+
+/// ピン留めしたプロジェクトの並びを変える。並びはこの端末にだけ保存し、Vaultには書かない。
+class PinOrderDialog extends StatelessWidget {
+  const PinOrderDialog({super.key, required this.controller});
+  final HubController controller;
+
+  Future<void> _run(
+    BuildContext context,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (e) {
+      if (context.mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final projects =
+          controller.repository?.pinnedProjects ?? const <HubProject>[];
+      return AlertDialog(
+        key: const Key('pin-order-dialog'),
+        title: const Text('ピン留めの並び'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'ピン留めしたプロジェクトは、メニュー・ホーム・「次の一手」の先頭にこの順で並びます。並びはこの端末にだけ保存し、Vaultやほかの端末には伝わりません。',
+                  style: TextStyle(fontSize: 12, height: 1.7),
+                ),
+                const SizedBox(height: 8),
+                if (projects.isEmpty) const Text('ピン留めしたプロジェクトはありません。'),
+                // 幅の狭い端末でも題名を読めるよう、題名を1行使い、操作のボタンはその下に置く。
+                for (final (index, project) in projects.indexed)
+                  Padding(
+                    key: Key('pin-row-${project.id}'),
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          project.title,
+                          key: Key('pin-title-${project.id}'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (project.lifecycle != 'active')
+                          Text(
+                            '${project.lifecycleLabel}（「次の一手」には出ません）',
+                            style: const TextStyle(fontSize: 12, height: 1.6),
+                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            IconButton(
+                              key: Key('pin-up-${project.id}'),
+                              tooltip: '前へ',
+                              onPressed: index == 0
+                                  ? null
+                                  : () => _run(
+                                      context,
+                                      () => controller.movePin(project.id, -1),
+                                    ),
+                              icon: const Icon(Icons.arrow_upward, size: 18),
+                            ),
+                            IconButton(
+                              key: Key('pin-down-${project.id}'),
+                              tooltip: '後ろへ',
+                              onPressed: index == projects.length - 1
+                                  ? null
+                                  : () => _run(
+                                      context,
+                                      () => controller.movePin(project.id, 1),
+                                    ),
+                              icon: const Icon(Icons.arrow_downward, size: 18),
+                            ),
+                            IconButton(
+                              key: Key('pin-remove-${project.id}'),
+                              tooltip: 'ピン留めを外す',
+                              onPressed: () => _run(
+                                context,
+                                () => controller.setPinned(project.id, false),
+                              ),
+                              icon: const Icon(Icons.close, size: 18),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('pin-order-close'),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('閉じる'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+/// NOWの項目を「誤り」として外す理由と一言を選ぶ。完了・解決とは別の報告にする。
+class ExcludeDialog extends StatefulWidget {
+  const ExcludeDialog({super.key, required this.item, required this.owned});
+  final NowItemRef item;
+
+  /// 元のメモが、本人がこのプロジェクトを指定して保存したものか。
+  final bool owned;
+  @override
+  State<ExcludeDialog> createState() => _ExcludeDialogState();
+}
+
+class _ExcludeDialogState extends State<ExcludeDialog> {
+  String? reason;
+  final note = TextEditingController();
+
+  @override
+  void dispose() {
+    note.dispose();
+    super.dispose();
+  }
+
+  String effect(String reason) => switch (reason) {
+    'misread' => 'メモはそう言っていない。Miniが次の整理で、このメモを読み直します。',
+    'wrong-project' =>
+      widget.owned
+          ? 'このプロジェクトの話ではない。プロジェクトを指定して保存したメモなので、関連付けは変えず、この項目だけを外します。'
+          : 'このプロジェクトの話ではない。AIが推定した関連付けなので、このメモをこのプロジェクトから外し、読み直して関連先を見直します。このメモから出たほかの項目も、このプロジェクトから外れます。',
+    _ => '読みは合っているが、今は当てはまらない。項目を外すだけで、読み直しません。',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final text = note.text.trim(),
+        valid = text.isEmpty || validExclusionNote(text);
+    return AlertDialog(
+      key: const Key('exclude-dialog'),
+      title: const Text('誤りとして外す'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.item.display,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              for (final r in exclusionReasons)
+                ListTile(
+                  key: Key('exclude-reason-$r'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    reason == r
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  title: Text(exclusionReasonLabels[r]!),
+                  subtitle: Text(
+                    effect(r),
+                    style: const TextStyle(fontSize: 12, height: 1.6),
+                  ),
+                  onTap: () => setState(() => reason = r),
+                ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('exclude-note'),
+                controller: note,
+                maxLines: 1,
+                decoration: InputDecoration(
+                  labelText: '一言（任意）',
+                  helperText: '例: 検討しただけで、まだ決めていない',
+                  // 本体の検査と同じ数え方（UTF-16の単位。絵文字などは2文字と数える）で示す。
+                  counterText: '${text.length} / $exclusionNoteChars',
+                  errorText: valid
+                      ? null
+                      : '1行・$exclusionNoteChars文字以内で入力してください。',
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '完了・解決には数えません。原文は変わりません。外した項目の本文・理由・一言は、同じ読み違いを減らすために、次からの整理でAIへ渡します。Miniが受け付けるとNOWに反映され、プロジェクトの画面から未解決に戻せます。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('exclude-submit'),
+          onPressed: reason == null || !valid
+              ? null
+              : () => Navigator.pop(context, (
+                  reason: reason!,
+                  note: text.isEmpty ? null : text,
+                )),
+          child: const Text('誤りとして外す'),
+        ),
+      ],
+    );
+  }
 }
 
 /// NOWの項目に期日と次に見直す日を付ける画面。日付は本人が選び、AIは推測しない。

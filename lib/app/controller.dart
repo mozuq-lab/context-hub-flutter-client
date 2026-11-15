@@ -72,7 +72,15 @@ class HubController extends ChangeNotifier {
   /// 選んで深掘りが使うClaude APIとAPIキーの保管場所。使うときだけ呼ぶ。
   final GuidedServices guidedServices;
   VaultLocation? location;
-  HubRepository? repository;
+  HubRepository? _repository;
+  HubRepository? get repository => _repository;
+
+  /// 読み直した記録にも、この端末のピン留めの並びを渡す。
+  set repository(HubRepository? value) {
+    _repository = value;
+    _applyPins();
+  }
+
   ReviewRepository? get review => repository?.review;
   final Map<String, String> _reviewOperations = {};
   bool loading = false, saving = false, composing = false;
@@ -93,6 +101,97 @@ class HubController extends ChangeNotifier {
       _syncDockBadge();
       notifyListeners();
     }
+  }
+
+  // ---- プロジェクトのピン留めと並び順（端末ごと・Vaultごと。Vaultには書かない） ----
+  // settings.jsonの`pins`に、Vaultのidentityごとのピン留めしたプロジェクトIDを、本人が決めた順に保存する。
+  static const maxPins = 30;
+  static const _maxPinVaults = 12;
+  Map<String, dynamic> _pins = {};
+
+  /// ピン留めしたプロジェクトのID。読込済みのVaultにないものは返さない。
+  List<String> get pinnedProjectIds =>
+      repository?.pinnedProjects.map((p) => p.id).toList() ?? const [];
+
+  List<String> _storedPins() {
+    final value = _pins[location?.identity ?? ''];
+    final seen = <String>{};
+    return [
+      if (value is List)
+        for (final id in value)
+          if (id is String && id.isNotEmpty && seen.add(id)) id,
+    ];
+  }
+
+  void _applyPins() => _repository?.pinned = _storedPins();
+
+  Future<void> _savePins(List<String> ids) async {
+    final target = location, repo = repository;
+    if (target == null || repo == null) throw StateError('先にVaultを選んでください。');
+    // 呼び出し側が端末の設定を読んでから並びを作る。ここでは待たずに並びを置き、続けて押された操作と入れ違わないようにする。
+    final before = _pins[target.identity];
+    // いま使っているVaultを最後に置き、古いVaultの分から手放す。
+    _pins.remove(target.identity);
+    if (ids.isNotEmpty) _pins[target.identity] = ids;
+    while (_pins.length > _maxPinVaults) {
+      _pins.remove(_pins.keys.first);
+    }
+    _applyPins();
+    try {
+      await _writeSettings();
+    } catch (_) {
+      // 保存できなかった並びを、保存できたように見せない。
+      if (before == null) {
+        _pins.remove(target.identity);
+      } else {
+        _pins[target.identity] = before;
+      }
+      _applyPins();
+      _changed();
+      throw StateError('ピン留めを保存できませんでした。もう一度お試しください。');
+    }
+    _changed();
+  }
+
+  /// プロジェクトをピン留めする、または外す。新しいピン留めは末尾に加える。
+  Future<void> setPinned(String projectId, bool pinned) async {
+    final repo = repository;
+    if (repo == null) throw StateError('先にVaultを選んでください。');
+    if (pinned && !repo.projects.containsKey(projectId)) {
+      throw StateError('このVaultにプロジェクトがありません。');
+    }
+    await _loadSeen();
+    // 読めていない記録があるときは、見えないプロジェクトのピン留めを捨てない。
+    final ids = _storedPins()
+        .where(
+          (id) =>
+              id != projectId &&
+              (repo.snapshot.limitReached || repo.projects.containsKey(id)),
+        )
+        .toList();
+    if (pinned) {
+      if (ids.where(repo.projects.containsKey).length >= maxPins) {
+        throw StateError('ピン留めは$maxPins件までです。使っていないものを外してください。');
+      }
+      ids.add(projectId);
+    }
+    await _savePins(ids);
+  }
+
+  /// ピン留めしたプロジェクトを、並びの中で前（-1）または後ろ（+1）へ動かす。
+  Future<void> movePin(String projectId, int delta) async {
+    final repo = repository;
+    if (repo == null) throw StateError('先にVaultを選んでください。');
+    await _loadSeen();
+    final ids = _storedPins();
+    // 画面に見えている並び（Vaultにあるもの）の中で入れ替える。
+    final shown = ids.where(repo.projects.containsKey).toList();
+    final from = shown.indexOf(projectId), to = from + delta;
+    if (from < 0 || to < 0 || to >= shown.length) return;
+    final a = ids.indexOf(shown[from]), b = ids.indexOf(shown[to]);
+    ids[a] = shown[to];
+    ids[b] = shown[from];
+    await _savePins(ids);
   }
 
   // ---- Androidのホーム画面ウィジェット（端末の表示だけ。Vaultには書かない） ----
@@ -131,6 +230,7 @@ class HubController extends ChangeNotifier {
   Future<void> setHomeWidget(HomeWidgetSettings settings) async {
     final target = location;
     if (target == null) throw StateError('先にVaultを選んでください。');
+    await _loadSeen();
     if (settings == const HomeWidgetSettings()) {
       _homeWidgets.remove(target.identity);
     } else {
@@ -397,8 +497,9 @@ class HubController extends ChangeNotifier {
       repository = HubRepository(data);
       // Vaultを開くのに失敗した後の再読込でも、残したかごを読んでから使う（空のかごで上書きしない）。
       await _ensureBasket(target);
-      // Vaultを開くのに失敗した後の再読込でも、残した設定を読んでから書く（空の設定で上書きしない）。
+      // Vaultを開くのに失敗した後の再読込でも、残した設定（既読・ピン留め・ウィジェット・判断待ち）を読んでから書く（空の設定で上書きしない）。
       await _loadSeen();
+      if (epoch != _epoch) return;
       final seen = _initializeSeen(), attended = _syncAttention();
       if (seen || attended) {
         try {
@@ -1020,12 +1121,25 @@ class HubController extends ChangeNotifier {
     }
   }
 
-  /// NOWの項目を完了・解決（resolve）または未解決へ戻す（reopen）報告を保存する。
+  /// NOWの項目を完了・解決（resolve）、誤りとして外す（exclude）、または未解決へ戻す（reopen）報告を保存する。
+  /// 誤りとして外すときは理由（[exclusionReasons]）を付け、一言（[note]）は任意。
   Future<CaptureResult> requestItemResolution(
     String projectId,
     String itemKey,
-    String action,
-  ) {
+    String action, {
+    String? reason,
+    String? note,
+  }) {
+    final exclude = action == 'exclude';
+    if (!['resolve', 'reopen', 'exclude'].contains(action) ||
+        (exclude
+            ? !exclusionReasons.contains(reason)
+            : reason != null || note != null)) {
+      throw StateError('項目と操作を確認してください。');
+    }
+    if (note != null && !validExclusionNote(note)) {
+      throw StateError('一言は1行・$exclusionNoteChars文字以内で入力してください。');
+    }
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
@@ -1036,7 +1150,8 @@ class HubController extends ChangeNotifier {
         final found = parsed.projects[projectId]?.nowItems
             .where((i) => i.key == itemKey)
             .firstOrNull;
-        if (found == null || (action == 'resolve') == found.resolved) {
+        // 戻せるのは欄から外れている項目だけ、完了・解決にする・外すのは欄にある項目だけ。
+        if (found == null || (action != 'reopen') == found.resolved) {
           throw StateError('NOWが更新されています。表示を確認してから操作してください。');
         }
         if (parsed.itemRequestIdFor(itemKey) != null) {
@@ -1044,10 +1159,17 @@ class HubController extends ChangeNotifier {
         }
         item = found;
         // 最新の解決・再開記録を含め、解決→再開→解決のように同じ操作を繰り返しても過去の操作と混ざらないようにする。
-        return 'item/$projectId/$itemKey/$action/${parsed.latestResolutionIdFor(itemKey) ?? '-'}';
+        // 外す操作は理由と一言も含め、内容を変えた依頼を同じ操作として扱わない。
+        return 'item/$projectId/$itemKey/$action/${parsed.latestResolutionIdFor(itemKey) ?? '-'}${exclude ? '/${digest('$reason\n${note ?? ''}')}' : ''}';
       },
-      (service, parsed, operation) =>
-          service.saveItemResolution(operation, projectId, item, action),
+      (service, parsed, operation) => service.saveItemResolution(
+        operation,
+        projectId,
+        item,
+        action,
+        reason: reason,
+        note: note,
+      ),
     );
   }
 
@@ -1299,6 +1421,9 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['homeWidget'] is Map) {
         _homeWidgets = Map<String, dynamic>.from(value['homeWidget'] as Map);
       }
+      if (value is Map && value['pins'] is Map) {
+        _pins = Map<String, dynamic>.from(value['pins'] as Map);
+      }
       if (value is Map) {
         final settings = AttentionSettings.fromJson(value['attention']);
         _attention = settings.state;
@@ -1308,13 +1433,16 @@ class HubController extends ChangeNotifier {
       // 読めない記録は空として扱う。保存先の設定はrestoreで別に扱う。
     }
     _seenLoaded = true;
+    _applyPins();
     _ensureAttentionSchedule();
   }
 
   /// 保存先の設定を書く。既読の記録は容量内に収め、書けなくても保存先の設定は残す。
+  /// 端末に残した設定を読む前には書かない（読む前に書くと、既読・ピン留め・ウィジェットの設定を消してしまう）。
   Future<void> _writeSettings() async {
     final target = location;
     if (target == null) return;
+    await _loadSeen();
     String encoded;
     try {
       encoded = _encodeSettings(target);
@@ -1328,6 +1456,7 @@ class HubController extends ChangeNotifier {
   Map<String, Object?> _settingsBase(VaultLocation target) => {
     ...target.toJson(),
     if (_homeWidgets.isNotEmpty) 'homeWidget': _homeWidgets,
+    if (_pins.isNotEmpty) 'pins': _pins,
     if (_attention.identity != null || attentionNotify)
       'attention': AttentionSettings(_attention, attentionNotify).toJson(),
   };
@@ -1449,6 +1578,7 @@ class HubController extends ChangeNotifier {
   Future<void> beginVisit(String projectId) async {
     final project = repository?.projects[projectId];
     if (project == null || project.nowRecordId == null) return;
+    await _loadSeen();
     _visits[projectId] = _stored(projectId);
     _store(project);
     try {
@@ -1463,6 +1593,7 @@ class HubController extends ChangeNotifier {
   Future<void> markAllSeen() async {
     final repo = repository;
     if (repo == null) return;
+    await _loadSeen();
     for (final project in repo.projects.values) {
       if (project.nowRecordId != null) _store(project);
     }
