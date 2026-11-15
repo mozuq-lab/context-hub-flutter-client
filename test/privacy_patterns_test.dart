@@ -132,6 +132,65 @@ void main() {
       });
     });
 
+    test('Nodeでは使えてもアプリで解釈できない規則は、直し方を示し、規則の本文は出さない', () {
+      for (final pattern in [
+        r'(?i:secretword)\d+',
+        r'(?<v>secretword1)|(?<v>secretword2)',
+      ]) {
+        final policy = SecretPolicy.parse(
+          patternsFile(
+            patterns: [
+              {'label': '社内鍵', 'pattern': pattern},
+            ],
+          ),
+        );
+        expect(policy.usable, isFalse, reason: pattern);
+        expect(policy.problem, contains('「社内鍵」'));
+        expect(policy.problem, contains('(?i:…)'));
+        expect(policy.problem, contains('同じ名前の捕捉グループ'));
+        expect(policy.problem, contains('本体の設定'));
+        expect(policy.problem, isNot(contains('secretword')));
+      }
+    });
+
+    test('端末が固まるおそれのある入れ子の繰り返しは使わず、書き換えを案内する', () {
+      for (final pattern in [
+        r'(a+)+$',
+        r'(?:\w+\s?)*end',
+        r'((ab)*c)+',
+        r'(x{2,})*y',
+      ]) {
+        final policy = SecretPolicy.parse(
+          patternsFile(
+            patterns: [
+              {'label': '重い', 'pattern': pattern},
+            ],
+          ),
+        );
+        expect(policy.usable, isFalse, reason: pattern);
+        expect(policy.problem, contains('「重い」'), reason: pattern);
+        expect(policy.problem, contains('入れ子'), reason: pattern);
+      }
+      // 回数の決まった繰り返し、文字クラスやエスケープの中の記号は入れ子に数えない。
+      for (final pattern in [
+        r'(?:\d{3}-)+\d{4}',
+        r'(?:[+*]x)+',
+        r'(?:\+\d)+',
+        r'(ab)+',
+        r'(?:a|b)*c+',
+        r'PRJ-\d{4}',
+      ]) {
+        final policy = SecretPolicy.parse(
+          patternsFile(
+            patterns: [
+              {'label': '軽い', 'pattern': pattern},
+            ],
+          ),
+        );
+        expect(policy.usable, isTrue, reason: '$pattern ${policy.problem}');
+      }
+    });
+
     test('読取が途中で止まってファイルを確かめられなければ使わない', () {
       for (final warning in [
         '読取の上限（ファイル20000件・合計64MB）に達したため、90_systemの一部を読めませんでした。',

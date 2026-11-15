@@ -205,9 +205,25 @@ class SecretPolicy {
         // 本体は`gu`で評価する。Dartの正規表現はJavaScriptと同じ構文で、unicodeで`u`に合わせる。
         compiled = RegExp(pattern, unicode: true);
       } on FormatException {
+        // 規則の本文は秘密の形のヒントになるので画面に出さず、ラベルと直し方だけを示す。
         return SecretPolicy._(
           const [],
-          _failed('${i + 1}件目の規則「$label」をこのアプリで解釈できません'),
+          _failed(
+            '${i + 1}件目の規則「$label」をこのアプリで解釈できません。'
+            'Nodeでは使える書き方でも、(?i:…) のような一部だけの修飾子や、同じ名前の捕捉グループは'
+            'アプリでは使えません。本体の設定（privacy.patterns）でこの規則を書き換えてください',
+          ),
+        );
+      }
+      // 利用者の正規表現は、本文ごとに端末の画面のスレッドで当てる。入れ子の繰り返しは
+      // 一致しない入力で後戻りが爆発し、アプリが固まるおそれがあるので使わない。
+      if (nestedRepeat(pattern)) {
+        return SecretPolicy._(
+          const [],
+          _failed(
+            '${i + 1}件目の規則「$label」は、(a+)+ のような入れ子の繰り返しを含み、'
+            '端末が固まるおそれがあるため使えません。本体の設定（privacy.patterns）でこの規則を書き換えてください',
+          ),
         );
       }
       rules.add(SecretRule('custom-${i + 1}', label, compiled));
@@ -243,6 +259,41 @@ class SecretPolicy {
   String redactLines(String text) => redactSecretLines(text, extra: extra);
   String redactHead(String text, int size) =>
       redactSecretsHead(text, size, extra: extra);
+}
+
+/// 回数に上限のない繰り返し（+・*・{n,}）を含むグループが、さらに上限のない繰り返しで
+/// 囲まれているか（(a+)+、(?:\w+\s?)*、(x{2,})* など）。文字クラスとエスケープの中は数えない。
+/// 後戻りが爆発する形の代表で、すべての危険な形を見つけるものではない。
+bool nestedRepeat(String pattern) {
+  final frames = <bool>[false];
+  bool unboundedAt(int i) {
+    if (i >= pattern.length) return false;
+    final c = pattern[i];
+    if (c == '+' || c == '*') return true;
+    return c == '{' && RegExp(r'^\{\d+,\}').hasMatch(pattern.substring(i));
+  }
+
+  for (var i = 0; i < pattern.length; i++) {
+    final c = pattern[i];
+    if (c == r'\') {
+      i++;
+    } else if (c == '[') {
+      for (i++; i < pattern.length && pattern[i] != ']'; i++) {
+        if (pattern[i] == r'\') i++;
+      }
+    } else if (c == '(') {
+      frames.add(false);
+    } else if (c == ')') {
+      if (frames.length < 2) continue;
+      final inner = frames.removeLast();
+      final repeated = unboundedAt(i + 1);
+      if (inner && repeated) return true;
+      frames[frames.length - 1] = frames.last || inner || repeated;
+    } else if (unboundedAt(i)) {
+      frames[frames.length - 1] = true;
+    }
+  }
+  return false;
 }
 
 final _highEntropy = RegExp(
