@@ -54,7 +54,8 @@ class _GuidedPageState extends State<GuidedPage> {
       summary = TextEditingController();
   GuidedPurpose purpose = GuidedPurpose.record;
   String? project;
-  bool includeContext = true, otherOpen = false;
+  /// Vaultの資料を送るか。本人がオンにしたときだけ送り（既定はオフ）、送る全文を始める前に開いて見せる。
+  bool includeContext = false, otherOpen = false;
   final picked = <String>{};
   GuidedQuestion? _shown;
   GuidedContext? _material;
@@ -428,6 +429,8 @@ class _GuidedPageState extends State<GuidedPage> {
       if (material != null && material.text.isNotEmpty)
         ExpansionTile(
           key: const Key('guided-context-preview'),
+          // 送る全文は、オンにした時点で開いて見せる（閉じることはできる）。
+          initiallyExpanded: true,
           tilePadding: EdgeInsets.zero,
           title: Text(
             '送る資料を見る（${material.text.length}字）',
