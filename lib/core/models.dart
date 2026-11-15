@@ -87,7 +87,26 @@ class NowEntry {
   NowEntry(this.text, {this.raw = ''});
 }
 
-/// 本体がNOWと同時に書く項目一覧の1件。解決済みならresolutionIdを持つ。
+/// 本体のitem-resolutionsと同じ、項目を「誤り」として外す理由。
+const exclusionReasons = ['misread', 'wrong-project', 'outdated'];
+const exclusionReasonLabels = {
+  'misread': '読み違い',
+  'wrong-project': '別のプロジェクトの話',
+  'outdated': 'もう古い',
+};
+
+/// 誤りとして外すときの一言の上限（本体のEXCLUSION_NOTE_CHARSと同じ）。
+const exclusionNoteChars = 200;
+
+/// 一言が本体の検査（1〜200文字・1行・制御文字なし・前後の空白なし）を通るか。
+bool validExclusionNote(Object? value) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= exclusionNoteChars &&
+    value.trim() == value &&
+    !RegExp(r'\p{Cc}', unicode: true).hasMatch(value);
+
+/// 本体がNOWと同時に書く項目一覧の1件。完了・解決、または誤りとして外した項目はresolutionIdを持つ。
 class NowItemRef {
   NowItemRef({
     required this.key,
@@ -97,6 +116,8 @@ class NowItemRef {
     required this.inputId,
     this.resolutionId,
     this.resolvedAt,
+    this.exclusionReason,
+    this.exclusionNote,
     this.scheduleId,
     this.due,
     this.reviewAfter,
@@ -106,12 +127,20 @@ class NowItemRef {
   final String? resolutionId;
   final DateTime? resolvedAt;
 
+  /// 本人が「誤り」として外した理由（[exclusionReasons]）と一言。完了・解決した項目ではnull。
+  final String? exclusionReason, exclusionNote;
+
   /// 本人が付けた期日・次に見直す日（YYYY-MM-DD）。古い本体や日付のない項目ではnull。
   final String? scheduleId, due, reviewAfter;
 
   /// 本人がプロジェクトを指定したメモから、本体の整理でAIが「片付いたかも」と示したもの。未確認で、完了・解決ではない。
   final List<NowItemHint> hints;
+
+  /// 欄から外れている（完了・解決した、または誤りとして外した）。
   bool get resolved => resolutionId != null;
+
+  /// 完了・解決ではなく、誤りとして外した。
+  bool get excluded => resolutionId != null && exclusionReason != null;
   bool get scheduled => due != null || reviewAfter != null;
 
   /// 本体のNOWの行と同じ表示文（views.tsのplainと同じ置換）。
@@ -124,6 +153,79 @@ class NowItemHint {
   const NowItemHint({required this.inputId, required this.quote, this.at});
   final String inputId, quote;
   final DateTime? at;
+}
+
+/// 本体の`ctx backup verify`が残した、バックアップから復元できるかの確認結果の1件。
+class BackupCheck {
+  const BackupCheck({
+    required this.id,
+    required this.archive,
+    required this.archiveCreatedAt,
+    required this.checkedAt,
+    required this.ok,
+    required this.issueCount,
+    required this.maxAgeDays,
+  });
+  final String id, archive;
+  final DateTime archiveCreatedAt, checkedAt;
+  final bool ok;
+  final int issueCount;
+
+  /// 確認したときの本体の目安（backup.verifyMaxAgeDays）。
+  final int maxAgeDays;
+}
+
+/// 「最後に確かめた復元点」。本体のbackupStatus・backupHomeLineと同じ決め方で表示する。
+class BackupStatus {
+  const BackupStatus({this.latest, this.restorePoint});
+
+  /// 最後の確認と、確かめた復元点（復元できた確認のうち、いちばん新しいバックアップ）。確認がなければnull。
+  final BackupCheck? latest, restorePoint;
+
+  /// 本体のrestorePointOfと同じく、復元できたいちばん新しいバックアップ（同じなら後の確認）を復元点にする。
+  /// 古いアーカイブを後から確かめても、復元点は古くならない。[checks]は確認した順。
+  factory BackupStatus.of(List<BackupCheck> checks) {
+    BackupCheck? point;
+    for (final c in checks) {
+      if (c.ok &&
+          (point == null ||
+              !c.archiveCreatedAt.isBefore(point.archiveCreatedAt))) {
+        point = c;
+      }
+    }
+    return BackupStatus(latest: checks.lastOrNull, restorePoint: point);
+  }
+  bool get isEmpty => latest == null;
+  static int _days(DateTime from, DateTime now) {
+    final d = now.toUtc().difference(from.toUtc()).inDays;
+    return d < 0 ? 0 : d;
+  }
+
+  /// 復元点が何日前のバックアップか。
+  int? ageDays(DateTime now) =>
+      restorePoint == null ? null : _days(restorePoint!.archiveCreatedAt, now);
+
+  /// ホームに出す1行。復元できた確認がなければnull。
+  String? line(DateTime now) {
+    final point = restorePoint;
+    if (point == null) return null;
+    final checked = _days(point.checkedAt, now);
+    final t = point.archiveCreatedAt.toUtc().add(const Duration(hours: 9));
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '最後に確かめた復元点: ${hubToday(point.archiveCreatedAt)} ${two(t.hour)}:${two(t.minute)}のバックアップ（${ageDays(now)}日前 / ${checked == 0 ? '今日' : '$checked日前に'}復元できることを確認）';
+  }
+
+  /// 本人に知らせる注意。最後の確認が失敗した、または復元点が目安より古い。
+  List<String> warnings(DateTime now) {
+    final last = latest, point = restorePoint;
+    if (last == null) return const [];
+    return [
+      if (!last.ok)
+        '最後の確認でバックアップ（${last.archive}）から復元できませんでした（${last.issueCount}件の問題）。Miniで`ctx backup status`の内容を確かめ、バックアップを取り直してください。',
+      if (point != null && ageDays(now)! > last.maxAgeDays)
+        '確かめた復元点が${ageDays(now)}日前のバックアップです（目安は${last.maxAgeDays}日以内）。バックアップが続いているかを確認し、Miniで`ctx backup verify`を実行してください。',
+    ];
+  }
 }
 
 /// 本人が設定したリポジトリのコミット履歴から本体が作った、作業記録の下書き。
@@ -172,7 +274,11 @@ class HubProject {
   /// 本体のNOW項目一覧。古い本体では空。
   final List<NowItemRef> nowItems = [];
   DateTime? nowItemsGeneratedAt;
-  Iterable<NowItemRef> get resolvedItems => nowItems.where((i) => i.resolved);
+  Iterable<NowItemRef> get resolvedItems =>
+      nowItems.where((i) => i.resolved && !i.excluded);
+
+  /// 本人が「誤り」として外した項目。完了・解決には数えない。
+  Iterable<NowItemRef> get excludedItems => nowItems.where((i) => i.excluded);
 
   /// 出典の付いた行だけ。本体が空の欄に書く定型文（「不明（…）」「残っている次の一手はありません（…）」）を除く。
   List<NowEntry> entriesWithSource(String section) =>
