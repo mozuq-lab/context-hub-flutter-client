@@ -100,6 +100,7 @@ class NowItemRef {
     this.scheduleId,
     this.due,
     this.reviewAfter,
+    this.hints = const [],
   });
   final String key, section, label, text, inputId;
   final String? resolutionId;
@@ -107,12 +108,22 @@ class NowItemRef {
 
   /// 本人が付けた期日・次に見直す日（YYYY-MM-DD）。古い本体や日付のない項目ではnull。
   final String? scheduleId, due, reviewAfter;
+
+  /// 本人がプロジェクトを指定したメモから、本体の整理でAIが「片付いたかも」と示したもの。未確認で、完了・解決ではない。
+  final List<NowItemHint> hints;
   bool get resolved => resolutionId != null;
   bool get scheduled => due != null || reviewAfter != null;
 
   /// 本体のNOWの行と同じ表示文（views.tsのplainと同じ置換）。
   String get display =>
       '$label${text.replaceAll(RegExp(r'[\r\n]+'), ' ').replaceAll('<!--', '&lt;!--')}';
+}
+
+/// 「片付いたかも」の根拠。メモのIDと、メモの原文からの引用。
+class NowItemHint {
+  const NowItemHint({required this.inputId, required this.quote, this.at});
+  final String inputId, quote;
+  final DateTime? at;
 }
 
 /// 本人が設定したリポジトリのコミット履歴から本体が作った、作業記録の下書き。

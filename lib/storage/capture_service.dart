@@ -147,6 +147,7 @@ class CaptureService {
     'settings.json',
     'drafts.json',
     'guided.json',
+    'basket.json',
   };
   Future<List<String>> _journalNames() async => [
     for (final name in await access.listJournals())
@@ -474,6 +475,31 @@ class CaptureService {
       'item_key': item.key,
       'due': due,
       'review_after': reviewAfter,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 「片付いたかも」が違うとき、そのメモからの候補を見送る依頼。項目は未解決のまま。
+  Future<CaptureResult> saveHintDismiss(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    String inputId,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(projectId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        !inputIdPattern.hasMatch(inputId) ||
+        item.resolved ||
+        !item.hints.any((h) => h.inputId == inputId)) {
+      throw const FormatException('項目と候補を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-hint-dismiss',
+      'project_id': projectId,
+      'item_key': item.key,
+      'input_id': inputId,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
