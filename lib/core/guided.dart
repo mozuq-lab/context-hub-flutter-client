@@ -862,7 +862,13 @@ String guidedBody(
 }) {
   final head = redact ? secrets.redact(summary.trim()) : summary.trim();
   final log = guidedLog(s, redact: redact, secrets: secrets);
-  return head.isEmpty ? log : '$head\n\n$log';
+  final body = head.isEmpty ? log : '$head\n\n$log';
+  if (!redact) return body;
+  // 部分ごとに伏せたあと、組み立てた本文にもう一度当てる。まず1行ずつ（問答の記録の1行は
+  // 問いと答えを並べるので、部分をまたぐ値がありうる）。保存前の確認は本文全体で探すので、
+  // それでも残る（改行をまたぐ）一致があれば、全体を伏せる（伏せ字が後ろまで広がることがある）。
+  final lines = secrets.redactLines(body);
+  return secrets.find(lines).isEmpty ? lines : secrets.redact(lines);
 }
 
 /// メモに付けるmeta。本体の入力形式（キー100字・値2000字の文字列）に合わせる。

@@ -142,5 +142,4 @@ void main() {
     expect(next.month, '2026-11');
     expect(next.current(DateTime(2026, 12, 1)).calls, 0);
   });
-
 }

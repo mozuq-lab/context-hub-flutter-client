@@ -302,6 +302,42 @@ void main() {
       expect(body, isNot(contains('山田太郎')));
     });
 
+    test('伏せ字にして保存する本文は、部分をまたぐ一致も残さない', () {
+      final policy = SecretPolicy.parse(
+        patternsFile(
+          patterns: [
+            // 問答の記録の1行で、問いと答えをまたぐ。
+            {'label': '行またぎ', 'pattern': r'問いX → 答えY'},
+            // まとめの終わりと、問答の記録の見出しをまたぐ。
+            {'label': '段またぎ', 'pattern': r'まとめZ\n\n## 問答'},
+          ],
+        ),
+      );
+      final s = GuidedSession(
+        id: '11111111-2222-4333-8444-555555555555',
+        vault: 'v',
+        purpose: GuidedPurpose.record,
+        startedAt: DateTime.utc(2026, 11, 7),
+        steps: [
+          GuidedStep(
+            const GuidedQuestion(
+              text: 'どれ？問いX',
+              options: [GuidedOption('答えY'), GuidedOption('別')],
+            ),
+            const GuidedAnswer.selected(['答えY']),
+          ),
+        ],
+      );
+      final plain = guidedBody('直した。まとめZ', s);
+      expect(
+        policy.find(plain).map((f) => f.label),
+        containsAll(['行またぎ', '段またぎ']),
+      );
+      final saved = guidedBody('直した。まとめZ', s, redact: true, secrets: policy);
+      expect(policy.find(saved), isEmpty, reason: saved);
+      expect(saved, contains('[伏せ字:行またぎ]'));
+    });
+
     test('確かめられない規則では依頼を組み立てない', () {
       final broken = SecretPolicy.parse('{');
       expect(
