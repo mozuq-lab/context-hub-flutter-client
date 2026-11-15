@@ -196,16 +196,20 @@ class _ReviewDetailState extends State<ReviewDetail> {
   }
 
   Widget _targetPicker(ReviewCandidate item) {
-    final projects = [...c.review!.projects]
-      ..sort(
-        (a, b) =>
-            ((item.projectSuggestions.any((s) => s['projectId'] == a['id'])
-                ? 0
-                : 1) -
-            (item.projectSuggestions.any((s) => s['projectId'] == b['id'])
-                ? 0
-                : 1)),
-      );
+    // 統合済みのプロジェクトは採用先にできない（本体が受け付けない）ので、選択肢から外す。
+    final projects =
+        [
+          for (final p in c.review!.projects)
+            if (c.repository?.projects[p['id']]?.merged != true) p,
+        ]..sort(
+          (a, b) =>
+              ((item.projectSuggestions.any((s) => s['projectId'] == a['id'])
+                  ? 0
+                  : 1) -
+              (item.projectSuggestions.any((s) => s['projectId'] == b['id'])
+                  ? 0
+                  : 1)),
+        );
     final targets = <String, AdoptionTarget>{
       for (final p in projects)
         'project:${p['id']}:${p['hash']}': AdoptionTarget.project(

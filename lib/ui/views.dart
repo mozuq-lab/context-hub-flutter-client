@@ -7,10 +7,12 @@ import '../app/controller.dart';
 import '../core/models.dart';
 import '../core/repository.dart';
 import '../core/secrets.dart';
+import '../core/templates.dart';
 import '../storage/capture_service.dart';
 import '../storage/basket_store.dart';
 import '../storage/draft_store.dart';
 import 'markdown_view.dart';
+import 'template_view.dart';
 import 'review_view.dart';
 import 'guided_view.dart';
 import 'shortcuts.dart';
@@ -490,7 +492,10 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
-      for (final project in repo.orderedProjects) {
+      final mergedProjects = repo.projects.values
+          .where((p) => p.merged)
+          .toList();
+      for (final project in repo.orderedProjects.where((p) => !p.merged)) {
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -549,6 +554,47 @@ class _HubViewState extends State<HubView> {
                 ),
                 trailing: const Icon(Icons.arrow_forward),
                 onTap: () => widget.onNavigate('project:${project.id}'),
+              ),
+            ),
+          ),
+        );
+      }
+      if (mergedProjects.isNotEmpty) {
+        // 統合済みのプロジェクトは入力を統合先のものとして読むため、小さくまとめて統合先を示す。
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 12),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
+                      child: Text(
+                        '統合済み（${mergedProjects.length}件）',
+                        key: const Key('merged-projects'),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    for (final project in mergedProjects)
+                      ListTile(
+                        key: Key('project-${project.id}'),
+                        dense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                        ),
+                        title: Text(project.title),
+                        subtitle: Text(
+                          projectStatusLine(project, now),
+                          key: Key('project-status-${project.id}'),
+                        ),
+                        trailing: const Icon(Icons.arrow_forward, size: 18),
+                        onTap: () => widget.onNavigate('project:${project.id}'),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1017,6 +1063,10 @@ class _HubViewState extends State<HubView> {
 
   /// 状態と最終根拠からの日数を1行で示す。
   String projectStatusLine(HubProject project, DateTime now) {
+    final target = project.mergeTarget;
+    if (target != null) {
+      return '統合済み（統合先: ${repo.projects[target]?.title ?? target}）';
+    }
     final days = project.daysSinceEvidence(now);
     return [
       project.lifecycleLabel +
@@ -1210,6 +1260,78 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// ほかのプロジェクトへの統合を依頼する。統合先は本人が選び、両方の定義hashに結び付ける。
+  Future<void> mergeProject(HubProject project) async {
+    final hash = project.definitionHash;
+    if (hash == null) return;
+    final into = await showDialog<HubProject>(
+      context: context,
+      builder: (_) => ProjectMergeDialog(
+        project: project,
+        candidates: [
+          for (final p in repo.orderedProjects)
+            if (p.id != project.id && !p.merged && p.definitionHash != null) p,
+        ],
+      ),
+    );
+    final intoHash = into?.definitionHash;
+    if (into == null || intoHash == null || !mounted) return;
+    try {
+      final result = await c.requestProjectMerge(
+        project.id,
+        hash,
+        into.id,
+        intoHash,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '統合を依頼しました。Miniで受け付けられると反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 統合の取り消しを依頼する。統合元は統合前の状態に戻る。
+  Future<void> unmergeProject(HubProject project) async {
+    final into = repo.projects[project.mergedInto];
+    final hash = project.definitionHash, intoHash = into?.definitionHash;
+    if (into == null || hash == null || intoHash == null) return;
+    if (!await confirmAction(
+          '統合を取り消す',
+          '「${project.title}」を「${into.title}」から切り離し、統合前の状態に戻すよう依頼します。\n\n'
+              '「${project.title}」を指定したメモ・完了報告・日付は、このプロジェクトのものとして読む形に戻ります。'
+              '統合で「${into.title}」に足した呼び名とキーワードのうち、残っているものは外します。原文と記録は変わりません。',
+          '取り消しを依頼',
+        ) ||
+        !mounted) {
+      return;
+    }
+    try {
+      final result = await c.requestProjectMerge(
+        project.id,
+        hash,
+        into.id,
+        intoHash,
+        unmerge: true,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '統合の取り消しを依頼しました。Miniで受け付けられると反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   Future<bool> confirmAction(String title, String body, String action) async =>
       await showDialog<bool>(
         context: context,
@@ -1292,8 +1414,22 @@ class _HubViewState extends State<HubView> {
   }
 
   /// 本体が生成するプロジェクトの経緯（HISTORY.md）を開く。
-  void showHistory(HubProject project) {
-    final history = project.history;
+  void showHistory(HubProject project) =>
+      showGenerated(project, project.history, '経緯', 'HISTORY.md', 'history');
+
+  /// 本体が生成するプロジェクトの資料（REFERENCES.md）を開く。
+  /// URLは本文のリンクとして示し、押したときだけ外部のブラウザで開く（http・httpsだけ）。
+  void showShelf(HubProject project) =>
+      showGenerated(project, project.shelf, '資料', 'REFERENCES.md', 'shelf');
+
+  /// プロジェクトごとの生成ビュー（経緯・資料）を開く。
+  void showGenerated(
+    HubProject project,
+    HubDigest? history,
+    String label,
+    String fileName,
+    String keyName,
+  ) {
     if (history == null) return;
     // 本文と同じ読込の時刻を示す（開いたまま再読込しても、本文は開いたときのもの）。
     final loadedAt = repo.snapshot.loadedAt;
@@ -1301,9 +1437,9 @@ class _HubViewState extends State<HubView> {
       context,
       MaterialPageRoute(
         builder: (_) => Scaffold(
-          appBar: AppBar(title: Text('${project.title}の経緯')),
+          appBar: AppBar(title: Text('${project.title}の$label')),
           body: ListView(
-            key: const Key('history-view'),
+            key: Key('$keyName-view'),
             padding: const EdgeInsets.all(24),
             children: [
               Text(
@@ -1320,9 +1456,9 @@ class _HubViewState extends State<HubView> {
                 child: Padding(
                   padding: const EdgeInsets.all(22),
                   child: SafeMarkdown(
-                    key: const Key('history-body'),
+                    key: Key('$keyName-body'),
                     text: history.body,
-                    sourcePath: '10_projects/${project.id}/HISTORY.md',
+                    sourcePath: '10_projects/${project.id}/$fileName',
                     controller: c,
                     onRecord: open,
                   ),
@@ -1794,11 +1930,25 @@ class _HubViewState extends State<HubView> {
     final now = DateTime.now(),
         requested = repo.projectStatusRequestIdFor(project.id) != null,
         defining = repo.projectDefinitionRequestIdFor(project.id) != null,
+        merging = repo.projectMergeRequestIdFor(project.id) != null,
+        mergeTarget = repo.projects[project.mergeTarget],
+        sources = repo.mergedSources(project.id),
+            // 統合と取り消しは、統合済みのプロジェクトでも依頼できる（取り消しのため）。
+            mergeable =
+            !c.loading &&
+            !c.saving &&
+            !requested &&
+            !defining &&
+            !merging &&
+            c.captureWarning == null &&
+            project.definitionHash != null,
         editable =
             !c.loading &&
             !c.saving &&
             !requested &&
             !defining &&
+            !merging &&
+            !project.merged &&
             c.captureWarning == null &&
             project.definitionHash != null,
         changes = c.changesSince(project, visit: true),
@@ -1823,6 +1973,59 @@ class _HubViewState extends State<HubView> {
         ),
       if (project.nowConflict case final conflict?)
         conflictPanel(project, conflict),
+      if (mergeTarget != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              NoticeBox(
+                'このプロジェクトは「${mergeTarget.title}」に統合済みです。このプロジェクトを指定したメモ・完了報告・日付は、統合先のものとして読みます。現在地と次の一手は統合先で確認してください。',
+                key: const Key('project-merged'),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  FilledButton.icon(
+                    key: const Key('project-merge-target'),
+                    onPressed: () =>
+                        widget.onNavigate('project:${mergeTarget.id}'),
+                    icon: const Icon(Icons.arrow_forward, size: 18),
+                    label: Text('統合先「${mergeTarget.title}」を開く'),
+                  ),
+                  // 取り消せるのは直接の統合先からだけ（本体と同じ）。
+                  if (project.mergedInto == mergeTarget.id)
+                    OutlinedButton.icon(
+                      key: const Key('project-unmerge'),
+                      onPressed: mergeable
+                          ? () => unmergeProject(project)
+                          : null,
+                      icon: const Icon(Icons.call_split, size: 18),
+                      label: const Text('統合を取り消す'),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      if (sources.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: NoticeBox(
+            '統合されたプロジェクト: ${sources.map((p) => p.title).join('、')}\nこれらを指定したメモ・完了報告・日付も、このプロジェクトのものとして読んでいます。',
+            key: const Key('project-merge-sources'),
+          ),
+        ),
+      if (merging)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 10),
+          child: NoticeBox(
+            '統合（または取り消し）を依頼済みです。Miniで受け付けられ、同期されると反映されます。',
+            key: Key('project-merge-requested'),
+          ),
+        ),
       if (defining)
         const Padding(
           padding: EdgeInsets.only(bottom: 10),
@@ -1883,6 +2086,24 @@ class _HubViewState extends State<HubView> {
             icon: const Icon(Icons.timeline, size: 18),
             label: Text(project.history == null ? '経緯（未生成）' : 'これまでの経緯'),
           ),
+          // 資料は、参考資料に分類されたメモがあるプロジェクトにだけ本体が作る。
+          if (project.shelf != null)
+            OutlinedButton.icon(
+              key: const Key('project-shelf'),
+              onPressed: () => showShelf(project),
+              icon: const Icon(Icons.bookmarks_outlined, size: 18),
+              label: const Text('資料'),
+            ),
+          if (!project.merged)
+            OutlinedButton.icon(
+              key: const Key('project-merge'),
+              // ほかのプロジェクトの統合先になっているプロジェクトは、統合元にできない（本体と同じ）。
+              onPressed: mergeable && sources.isEmpty
+                  ? () => mergeProject(project)
+                  : null,
+              icon: const Icon(Icons.merge, size: 18),
+              label: const Text('ほかのプロジェクトへ統合'),
+            ),
           OutlinedButton.icon(
             key: const Key('project-guided'),
             onPressed: c.loading || c.captureWarning != null
@@ -2747,6 +2968,49 @@ class _CaptureDialogState extends State<CaptureDialog> {
 
   DraftStore get _drafts => widget.controller.drafts;
 
+  // ---- ひな形（端末内のみ） ----
+  static const _editTemplates = '\u0000edit';
+  List<MemoTemplate> _templates = defaultTemplates;
+  final _textFocus = FocusNode();
+
+  /// ひな形を本文へ差し込む。本文が空なら全体、空でなければ末尾へ足す。
+  void _applyTemplate(MemoTemplate template) {
+    final next = insertTemplate(text.text, template.body);
+    if (next.text.length > 8000) {
+      setState(() => error = 'ひな形を差し込むと8000文字を超えます。本文を短くしてください。');
+      return;
+    }
+    final preset = template.projects[widget.controller.location?.identity];
+    final projects = widget.controller.repository?.projects ?? const {};
+    setState(() {
+      error = null;
+      text.value = TextEditingValue(
+        text: next.text,
+        selection: TextSelection.collapsed(offset: next.cursor),
+      );
+      // ひな形の既定のプロジェクトは、未指定のときだけ使う（本人が選んだものを変えない）。
+      if (widget.draft == null &&
+          project == null &&
+          preset != null &&
+          projects.containsKey(preset)) {
+        // 統合済みのプロジェクトが既定なら、統合先にする。
+        project = projects[preset]!.mergeTarget ?? preset;
+        _formGeneration++;
+      }
+    });
+    _textFocus.requestFocus();
+    _schedulePersist();
+  }
+
+  Future<void> _manageTemplates() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => TemplateManagerDialog(controller: widget.controller),
+    );
+    final next = await widget.controller.templates.list();
+    if (mounted) setState(() => _templates = next);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -2772,6 +3036,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
   Future<void> _restore() async {
     final key = _draftKey;
     try {
+      _templates = await widget.controller.templates.list();
       if (key == null) return;
       _keepDrafts = await _drafts.enabled();
       final stored = await _drafts.read(key);
@@ -2882,6 +3147,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
     _lifecycle?.dispose();
     text.removeListener(_schedulePersist);
     text.dispose();
+    _textFocus.dispose();
     super.dispose();
   }
 
@@ -2894,19 +3160,27 @@ class _CaptureDialogState extends State<CaptureDialog> {
   }
 
   Future<void> submit() async {
-    if (text.text.trim().isEmpty || text.text.length > 8000) {
+    // 中身を書かなかったひな形の見出しは保存しない。文字数は取り除いた後の本文で数える。
+    final body = stripEmptyTemplateHeadings(
+      text.text,
+      templateHeadings(_templates),
+    );
+    if (body.trim().isEmpty && text.text.trim().isNotEmpty) {
+      setState(() => error = 'ひな形の見出しだけで、中身がありません。見出しの下に書いてから保存してください。');
+      return;
+    }
+    if (body.trim().isEmpty || body.length > 8000) {
       setState(() => error = '本文は1〜8000文字で入力してください。');
       return;
     }
-    final checked = await checkSecretsBeforeSave(context, text.text);
+    final checked = await checkSecretsBeforeSave(context, body);
     if (checked == null || !mounted) return;
-    if (checked != text.text) {
-      if (checked.length > 8000) {
-        setState(() => error = '伏せ字にすると8000文字を超えます。本文を短くしてください。');
-        return;
-      }
-      text.text = checked;
+    if (checked != body && checked.length > 8000) {
+      setState(() => error = '伏せ字にすると8000文字を超えます。本文を短くしてください。');
+      return;
     }
+    // 保存する本文（空の見出しを除き、選んだ場合は伏せ字にしたもの）を画面にも示す。
+    if (checked != text.text) text.text = checked;
     setState(() {
       busy = true;
       locked = true;
@@ -3025,10 +3299,75 @@ class _CaptureDialogState extends State<CaptureDialog> {
                               ),
                             ),
                         ],
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 8),
+                        if (!locked)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: PopupMenuButton<String>(
+                              key: const Key('template-menu'),
+                              tooltip: 'ひな形の見出しを本文へ差し込む',
+                              onSelected: (id) {
+                                if (id == _editTemplates) {
+                                  _manageTemplates();
+                                  return;
+                                }
+                                for (final t in _templates) {
+                                  if (t.id == id) _applyTemplate(t);
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                for (final t in _templates)
+                                  PopupMenuItem(
+                                    key: Key('template-item-${t.id}'),
+                                    value: t.id,
+                                    child: Text(
+                                      t.name,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                if (_templates.isNotEmpty)
+                                  const PopupMenuDivider(),
+                                const PopupMenuItem(
+                                  key: Key('template-manage'),
+                                  value: _editTemplates,
+                                  child: Text('ひな形を編集…'),
+                                ),
+                              ],
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 6,
+                                  horizontal: 4,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.playlist_add,
+                                      size: 18,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'ひな形',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.primary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 4),
                         TextField(
                           key: const Key('memo-text'),
                           controller: text,
+                          focusNode: _textFocus,
                           // Macではキーボードで開いたまま書けるよう、本文へ移る。
                           autofocus: usesCommandKey,
                           readOnly: locked,
@@ -3072,13 +3411,15 @@ class _CaptureDialogState extends State<CaptureDialog> {
                               value: '',
                               child: Text('指定しない'),
                             ),
+                            // 統合済みのプロジェクトは選ばせない（統合先を選ぶ）。
                             for (final p
-                                in widget
-                                        .controller
-                                        .repository
-                                        ?.projects
-                                        .values ??
-                                    const <HubProject>[])
+                                in (widget
+                                            .controller
+                                            .repository
+                                            ?.projects
+                                            .values ??
+                                        const <HubProject>[])
+                                    .where((p) => !p.merged || p.id == project))
                               DropdownMenuItem(
                                 value: p.id,
                                 child: Text(
@@ -3367,6 +3708,115 @@ class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
             ? null
             : () => Navigator.pop(context, selected),
         child: const Text('変更を依頼'),
+      ),
+    ],
+  );
+}
+
+/// 同じものを指すプロジェクトを、ほかのプロジェクトへ統合する確認画面。統合先を選ぶ。
+class ProjectMergeDialog extends StatefulWidget {
+  const ProjectMergeDialog({
+    super.key,
+    required this.project,
+    required this.candidates,
+  });
+
+  /// 統合元（いま開いているプロジェクト）。
+  final HubProject project;
+
+  /// 統合先にできるプロジェクト（統合済みを除く）。
+  final List<HubProject> candidates;
+  @override
+  State<ProjectMergeDialog> createState() => _ProjectMergeDialogState();
+}
+
+class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
+  HubProject? selected;
+  bool confirmed = false;
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text('「${widget.project.title}」を統合'),
+    content: SizedBox(
+      width: 520,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '同じものを指すプロジェクトが2つできたときに、このプロジェクトをもう一方へまとめます。',
+              style: TextStyle(height: 1.6),
+            ),
+            const SizedBox(height: 12),
+            if (widget.candidates.isEmpty)
+              const NoticeBox('統合先にできるプロジェクトがありません。')
+            else
+              DropdownButtonFormField<String>(
+                key: const Key('project-merge-into'),
+                initialValue: selected?.id,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '統合先'),
+                items: [
+                  for (final p in widget.candidates)
+                    DropdownMenuItem(
+                      value: p.id,
+                      child: Text(
+                        '${p.title}（${p.lifecycleLabel}）',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (id) => setState(() {
+                  selected = widget.candidates
+                      .where((p) => p.id == id)
+                      .firstOrNull;
+                  confirmed = false;
+                }),
+              ),
+            if (selected case final into?) ...[
+              const SizedBox(height: 12),
+              Text(
+                [
+                  '・「${widget.project.title}」は「統合済み」になり、ホームの後ろにまとめて表示します。定義とファイルは残ります。',
+                  '・「${widget.project.title}」を指定したメモ・完了報告・日付は、「${into.title}」のものとして読みます。原文と記録は書き換えません。',
+                  '・「${widget.project.title}」の名前・別名・キーワードを、「${into.title}」の別名・キーワードに足します。',
+                  '・「${widget.project.title}」だけの方針は移しません。必要なものは統合先へ採用し直してください。',
+                  '・あとで取り消せます。',
+                ].join('\n'),
+                key: const Key('project-merge-effects'),
+                style: const TextStyle(fontSize: 12, height: 1.7),
+              ),
+              CheckboxListTile(
+                key: const Key('project-merge-confirm'),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: confirmed,
+                onChanged: (v) => setState(() => confirmed = v ?? false),
+                title: Text(
+                  '「${widget.project.title}」と「${into.title}」は同じものを指している',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+            ],
+            const Text(
+              '依頼はInputへ保存され、Miniで受け付けられると反映されます。',
+              style: TextStyle(fontSize: 12, height: 1.6),
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('キャンセル'),
+      ),
+      FilledButton(
+        key: const Key('project-merge-submit'),
+        onPressed: selected == null || !confirmed
+            ? null
+            : () => Navigator.pop(context, selected),
+        child: const Text('統合を依頼'),
       ),
     ],
   );

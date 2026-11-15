@@ -12,6 +12,9 @@ typedef _Unit = ({
   List<HubRecord> chain,
   Map<String, dynamic>? receipt,
   Set<String> related,
+
+  /// 本人が指定したプロジェクト。統合済みのプロジェクトは統合先に読み替える。指定がなければnull。
+  String? owner,
 });
 
 class HubRepository {
@@ -27,6 +30,8 @@ class HubRepository {
   final Map<String, String> _outstandingStatus = {};
   final Map<String, Map<String, dynamic>> _definitionChanges = {};
   final Map<String, String> _outstandingDefinition = {};
+  final Map<String, Map<String, dynamic>> _mergeChanges = {};
+  final Map<String, String> _outstandingMerge = {}, _outstandingMergeInto = {};
   final Map<String, DateTime> _resolutionTimes = {};
   final Map<String, String> _latestResolutions = {};
   final Map<String, String> _outstandingItems = {};
@@ -208,7 +213,10 @@ class HubRepository {
               (m['title'] as String).isEmpty ||
               m['aliases'] is! List ||
               m['keywords'] is! List ||
-              m['status'] is! String) {
+              m['status'] is! String ||
+              (m['merged_into'] != null &&
+                  (m['merged_into'] is! String ||
+                      !projectIdPattern.hasMatch(m['merged_into'])))) {
             throw const FormatException();
           }
           final project = HubProject(
@@ -218,6 +226,7 @@ class HubRepository {
             aliases: List<String>.from(m['aliases']),
             keywords: List<String>.from(m['keywords']),
             definitionHash: digest(entry.value),
+            mergedInto: m['merged_into'] as String?,
           );
           projects[id] = project;
           _readNow(project);
@@ -261,9 +270,11 @@ class HubRepository {
         _problem(path);
       }
     }
+    _resolveMerges();
     _corrections();
     _readStatusChanges();
     _readDefinitionChanges();
+    _readMergeChanges();
     _readNowItems();
     _readHistories();
     _readGitDrafts();
@@ -429,27 +440,70 @@ class HubRepository {
     }
   }
 
-  /// 本体が生成するプロジェクトの経緯（`10_projects/<id>/HISTORY.md`）。
+  /// 統合先をたどり、統合済みのプロジェクトに最後の統合先を結び付ける（本体のmergeTargetsと同じ）。
+  /// 統合先が見つからない・循環している定義は統合として扱わず、そのプロジェクトのまま読む。
+  void _resolveMerges() {
+    for (final project in projects.values) {
+      var current = project;
+      final seen = <String>{project.id};
+      String? target;
+      while (current.mergedInto != null) {
+        final next = projects[current.mergedInto];
+        if (next == null || !seen.add(next.id)) {
+          target = null;
+          break;
+        }
+        target = next.id;
+        current = next;
+      }
+      project.mergeTarget = target;
+      if (project.mergedInto != null && target == null) {
+        project.warnings.add(
+          '統合先（${project.mergedInto}）が見つからないか、循環しています。統合として扱っていません。',
+        );
+      }
+    }
+  }
+
+  /// 統合済みのプロジェクトIDを統合先に読み替える。統合されていなければそのまま返す。
+  String resolveProject(String id) => projects[id]?.mergeTarget ?? id;
+
+  /// このプロジェクトに統合されているプロジェクト。
+  List<HubProject> mergedSources(String id) => [
+    for (final p in projects.values)
+      if (p.mergeTarget == id) p,
+  ];
+
+  /// 本体が生成するプロジェクトの経緯（`10_projects/<id>/HISTORY.md`）と資料（`REFERENCES.md`）。
   void _readHistories() {
     for (final project in projects.values) {
-      final path = '10_projects/${project.id}/HISTORY.md',
-          raw = snapshot.files[path];
-      if (raw == null) continue;
-      try {
-        final doc = parseMarkdown(raw), m = doc.meta;
-        if (m['schema_version'] != 1 || m['project'] != project.id) {
-          throw const FormatException();
+      for (final (name, label) in const [
+        ('HISTORY.md', '経緯'),
+        ('REFERENCES.md', '資料'),
+      ]) {
+        final path = '10_projects/${project.id}/$name',
+            raw = snapshot.files[path];
+        if (raw == null) continue;
+        try {
+          final doc = parseMarkdown(raw), m = doc.meta;
+          if (m['schema_version'] != 1 || m['project'] != project.id) {
+            throw const FormatException();
+          }
+          final result = HubDigest(
+            body: doc.body,
+            generatedAt: timestamp(m['generated_at']),
+          );
+          if (!generatedIntact(raw, m)) {
+            result.warnings.add('$labelの整合性を確認できません。手動変更や同期の途中の可能性があります。');
+          }
+          if (name == 'HISTORY.md') {
+            project.history = result;
+          } else {
+            project.shelf = result;
+          }
+        } catch (_) {
+          _problem(path);
         }
-        final result = HubDigest(
-          body: doc.body,
-          generatedAt: timestamp(m['generated_at']),
-        );
-        if (!generatedIntact(raw, m)) {
-          result.warnings.add('経緯の整合性を確認できません。手動変更や同期の途中の可能性があります。');
-        }
-        project.history = result;
-      } catch (_) {
-        _problem(path);
       }
     }
   }
@@ -689,6 +743,52 @@ class HubRepository {
             .toList()
           ..sort();
     return ids.lastOrNull;
+  }
+
+  /// まだ反映されていない、このプロジェクトが統合元か統合先になっている統合・取り消しの依頼。
+  String? projectMergeRequestIdFor(String projectId) =>
+      _outstandingMerge[projectId] ?? _outstandingMergeInto[projectId];
+
+  /// 本体が記録した、このプロジェクトを統合元とする最新の統合・取り消しのID。
+  String? latestMergeChangeId(String projectId) {
+    final ids =
+        _mergeChanges.values
+            .where((c) => c['project_id'] == projectId)
+            .map((c) => c['id'] as String)
+            .toList()
+          ..sort();
+    return ids.lastOrNull;
+  }
+
+  /// 統合と取り消しの記録。反映の確認には統合元の定義の前後のhashを使う。
+  void _readMergeChanges() {
+    final pattern = RegExp(
+      r'^90_system/project-merges/(PMG-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in snapshot.files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            !projectMergeActions.contains(j['action']) ||
+            j['from_id'] is! String ||
+            j['into_id'] is! String ||
+            j['from_before_hash'] is! String ||
+            j['from_after_hash'] is! String) {
+          throw const FormatException();
+        }
+        _mergeChanges[j['id'] as String] = {
+          ...j,
+          'project_id': j['from_id'],
+          'before_hash': j['from_before_hash'],
+          'after_hash': j['from_after_hash'],
+        };
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
   }
 
   void _readDefinitionChanges() {
@@ -951,10 +1051,11 @@ class HubRepository {
           receipt = null;
         }
       }
-      final related = <String>{
-        if (root.metadata['project'] is String)
-          root.metadata['project'] as String,
-      };
+      // 統合済みのプロジェクトを指す帰属（本人の指定・AIの関連候補）は、統合先のものとして読む。
+      final owner = root.metadata['project'] is String
+          ? resolveProject(root.metadata['project'] as String)
+          : null;
+      final related = <String>{?owner};
       if (receipt != null) {
         var candidates = (receipt['result'] as Map)['project_candidates'];
         final defs = projects.values.toList()
@@ -1004,7 +1105,7 @@ class HubRepository {
                 c['confidence'] is num &&
                 c['confidence'] >= 0.7 &&
                 projects.containsKey(c['id'])) {
-              related.add(c['id']);
+              related.add(resolveProject(c['id'] as String));
             }
           }
         }
@@ -1014,6 +1115,7 @@ class HubRepository {
         chain: chain,
         receipt: receipt,
         related: related,
+        owner: owner,
       ));
       if (chain.length == 1) continue;
       final pending = receipt?['input_id'] != chain.last.sourceId;
@@ -1109,6 +1211,8 @@ class HubRepository {
               'project-create',
               'conflict-resolve',
               'idea-link',
+              'project-merge',
+              'project-unmerge',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
           throw const FormatException();
@@ -1123,6 +1227,24 @@ class HubRepository {
                 m['project_hash'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
                 !projectLifecycles.contains(m['status']))) {
+          throw const FormatException();
+        }
+        final mergeChange = const [
+          'project-merge',
+          'project-unmerge',
+        ].contains(m['operation']);
+        if (mergeChange &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['project_hash'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
+                m['into_id'] is! String ||
+                !projectIdPattern.hasMatch(m['into_id']) ||
+                m['into_id'] == m['project_id'] ||
+                m['into_hash'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['into_hash']))) {
           throw const FormatException();
         }
         final definitionChange = m['operation'] == 'project-definition';
@@ -1307,6 +1429,8 @@ class HubRepository {
               ? '新しいプロジェクトの作成依頼: ${m['title']}'
               : conflictResolve
               ? 'NOWを生成版に戻す依頼: ${projects[conflictProject]?.title ?? m['target']}'
+              : mergeChange
+              ? '${m['operation'] == 'project-merge' ? '統合の依頼' : '統合の取り消しの依頼'}: ${projects[m['project_id']]?.title ?? m['project_id']} ${m['operation'] == 'project-merge' ? '→' : '←'} ${projects[m['into_id']]?.title ?? m['into_id']}'
               : statusChange
               ? '状態変更依頼: ${projects[m['project_id']]?.title ?? m['project_id']} → ${projectLifecycleLabels[m['status']]}'
               : definitionChange
@@ -1362,6 +1486,23 @@ class HubRepository {
                 throw const FormatException();
               }
               changeId = r['changeId'] as String;
+            }
+            if (mergeChange) {
+              final r = ack['result'] as Map;
+              if (r['fromId'] != m['project_id'] ||
+                  r['intoId'] != m['into_id'] ||
+                  r['action'] !=
+                      (m['operation'] == 'project-merge'
+                          ? 'merge'
+                          : 'unmerge') ||
+                  r['mergeId'] is! String ||
+                  !RegExp(
+                    r'^PMG-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['mergeId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              changeId = r['mergeId'] as String;
             }
             if (definitionChange) {
               final r = ack['result'] as Map;
@@ -1555,6 +1696,21 @@ class HubRepository {
             what: '呼び名とキーワードの変更',
           );
         }
+        if (mergeChange) {
+          _projectRequest(
+            item,
+            m,
+            changeId,
+            records: _mergeChanges,
+            latest: latestMergeChangeId,
+            outstanding: _outstandingMerge,
+            what: m['operation'] == 'project-merge' ? '統合' : '統合の取り消し',
+          );
+          // 統合先の別名・キーワードも変わるため、反映されるまで統合先への依頼も止める。
+          if (_outstandingMerge[m['project_id']] == item.id) {
+            _outstandingMergeInto[m['into_id'] as String] = item.id;
+          }
+        }
         if (creation &&
             ['waiting', 'accepted'].contains(item.state) &&
             !projects.containsKey(m['project_id'])) {
@@ -1682,6 +1838,24 @@ class HubRepository {
     }
     if (reason is Map && reason['code'] == 'idea-changed') {
       return '確認した後にアイデアが作り直されていました。再読込して内容を確認し、もう一度選んでください。';
+    }
+    if (reason is Map && reason['code'] == 'project-merged') {
+      final target = reason['project_id'];
+      return 'このプロジェクトは${target is String && projectIdPattern.hasMatch(target) ? '（$target）に' : ''}統合済みのため、受け付けられませんでした。再読込して、統合先で操作してください。';
+    }
+    if (reason is Map && reason['code'] == 'project-merge-changed') {
+      return '確認した後にプロジェクト定義が変わっていました。再読込して内容を確認し、もう一度依頼してください。';
+    }
+    if (reason is Map && reason['code'] == 'project-merge-refused') {
+      return switch (reason['cause']) {
+        'missing' => '統合元か統合先のプロジェクトが見つかりませんでした。同期を確認してください。',
+        'already-merged' => '統合元は既に統合済みでした。再読込して確認してください。',
+        'target-merged' => '統合先が統合済みのプロジェクトでした。統合先を選び直してください。',
+        'has-sources' => '統合元にほかのプロジェクトが統合されています。先にそちらの統合を取り消してください。',
+        'not-merged' => '統合されていないため、取り消せませんでした。既に取り消されている可能性があります。',
+        'target-mismatch' => '統合先が確認した内容と違っていました。再読込して確認してください。',
+        _ => '統合を受け付けられませんでした。再読込して、統合元と統合先を確認してください。',
+      };
     }
     if (reason is Map && reason['code'] == 'conflict-missing') {
       return '戻す必要のある競合がありませんでした。既に生成版に戻っている可能性があります。';
@@ -1849,7 +2023,7 @@ class HubRepository {
     for (final id in ids) {
       final unit = _unitBySource[id];
       if (unit == null) continue;
-      if (unit.root.metadata['project'] == projectId) return 'owned';
+      if (unit.owner == projectId) return 'owned';
       if (unit.related.contains(projectId)) relation = 'estimated';
     }
     return relation;
@@ -1873,7 +2047,10 @@ class HubRepository {
   ]) {
     final tokens = searchTokens(query);
     if (query.length > 500 || (tokens.isEmpty && !filter.active)) return [];
-    final project = filter.project;
+    // 統合済みのプロジェクトで絞り込んだときは、統合先で絞り込む（本体と同じ）。
+    final project = filter.project == null
+        ? null
+        : resolveProject(filter.project!);
     final hits = <({HubRecord record, int score, int order})>[];
     final ordered = records.values.toList()
       ..sort(
@@ -1884,7 +2061,8 @@ class HubRepository {
     for (final r in ordered) {
       if (filter.kinds.isNotEmpty &&
           (!filter.kinds.contains(searchKindOf(r)) ||
-              r.metadata['retracted'] == true)) {
+              r.metadata['retracted'] == true) &&
+          !(filter.kinds.contains('reference') && isReference(r))) {
         // 分類を取り消したアイデアは、種類での絞り込みではアイデアとして数えない（本体と同じ）。
         continue;
       }
@@ -1914,6 +2092,15 @@ class HubRepository {
       );
     }
     return hits.map((h) => h.record).toList();
+  }
+
+  /// 整理でAIが参考資料に分類したメモ・作業要約（訂正を含む）か。検索の種類「資料」に当たる。
+  bool isReference(HubRecord r) {
+    if (!const ['memo', 'work-summary', 'correction'].contains(r.kind)) {
+      return false;
+    }
+    final result = _unitBySource[r.sourceId]?.receipt?['result'];
+    return result is Map && result['category'] == 'reference';
   }
 
   /// 検索の種類の区分。NOWはプロジェクトの記録（kind: project）。
@@ -1969,7 +2156,7 @@ class HubRepository {
             out.writeln('  訂正原文: [${c.sourceId}](${c.path})');
           }
         }
-        if (r.metadata['project'] != id) out.writeln('  関連候補（AI推定、帰属未確定）');
+        if (u.owner != id) out.writeln('  関連候補（AI推定、帰属未確定）');
         if (!organized) {
           out.writeln('  ${u.chain.last.status == 'failed' ? '整理失敗' : '未整理'}');
         }
@@ -2091,7 +2278,7 @@ class HubRepository {
       final unit = _unitBySource[record.sourceId];
       if (unit != null) {
         final root = unit.root, latest = unit.chain.last;
-        final owned = root.metadata['project'] as String?;
+        final owned = unit.owner;
         if (owned != null) policyProjects.add(owned);
         out.writeln(
           '## [${root.sourceId}](${root.path}) | ${displayTime(root.at)} | ${_oneLine(root.source)} / ${root.origin}${root.origin == 'ai-self-report' ? '（AI自己報告・独立検証なし）' : ''}',
@@ -2159,9 +2346,8 @@ class HubRepository {
       ).firstMatch(record.path)?[1];
       if (owner != null) policyProjects.add(owner);
       for (final ref in record.references) {
-        final owned =
-            _unitBySource[records[ref]?.sourceId]?.root.metadata['project'];
-        if (owned is String) policyProjects.add(owned);
+        final owned = _unitBySource[records[ref]?.sourceId]?.owner;
+        if (owned != null) policyProjects.add(owned);
       }
       out.writeln(
         '## [${record.sourceId}](${record.path}) | ${displayTime(record.at ?? record.generatedAt)} | ${record.metadata['verified'] == true ? '人の承認記録付き' : 'AI生成・未検証'}',
@@ -2180,8 +2366,8 @@ class HubRepository {
         for (final ref in record.references) {
           final unit = _unitBySource[records[ref]?.sourceId];
           if (unit == null) continue;
-          final owned = unit.root.metadata['project'];
-          if (owned is String) owners.add(owned);
+          final owned = unit.owner;
+          if (owned != null) owners.add(owned);
           guesses.addAll(unit.related.where((p) => p != owned));
         }
         guesses.removeAll(owners);
