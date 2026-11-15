@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/home_widget.dart';
 import 'package:context_hub_client/core/repository.dart';
+import 'package:context_hub_client/core/secrets.dart';
 import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'fixtures.dart';
@@ -74,6 +75,38 @@ void main() {
     expect(jsonEncode(content), isNot(contains(key)));
     expect(jsonEncode(content), isNot(contains('休止中')));
     expect(content['counts'], startsWith('次の一手 5件'));
+  });
+
+  test('本体の設定で追加した伏せ字の規則も当て、確かめられないときは本文を出さない', () {
+    String patterns(int version) => jsonEncode({
+      'schema_version': version,
+      'redact_secrets': true,
+      'patterns': [
+        {'label': '案件番号', 'pattern': r'PRJ-\d{4}'},
+      ],
+    });
+    Map<String, String> files(int version) => {
+      ...withProject(
+        multiProjectFiles(),
+        'p-one',
+        '追加',
+        lastEvidence: '2026-10-29T09:00:00+09:00',
+        next: '案件 PRJ-1234 を進める。',
+      ),
+      privacyPatternsPath: patterns(version),
+    };
+    final content = homeWidgetContent(
+      HubRepository(fixture(files(1))),
+      settings: const HomeWidgetSettings(showText: true),
+    );
+    expect(content['lines'], contains('案件 [伏せ字:案件番号] を進める。（追加）'));
+    final unknown = homeWidgetContent(
+      HubRepository(fixture(files(2))),
+      settings: const HomeWidgetSettings(showText: true),
+    );
+    expect(unknown['lines'], isEmpty);
+    expect(jsonEncode(unknown), isNot(contains('PRJ-1234')));
+    expect(unknown['counts'], startsWith('次の一手'));
   });
 
   test('プロジェクトを選ぶとその件数に絞り、進行中でなくなってもほかのプロジェクトは出さない', () {
