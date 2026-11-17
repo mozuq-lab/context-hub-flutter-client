@@ -67,7 +67,7 @@ void main() {
     await tester.pumpAndSettle();
     // 入力中でも移動でき、入力欄が消えた後の画面でも次のキーが届く。
     await press(tester, LogicalKeyboardKey.digit1);
-    expect(appBarTitle(tester), 'ContextHub');
+    expect(appBarTitle(tester), 'ホーム');
     await press(tester, LogicalKeyboardKey.digit4);
     expect(appBarTitle(tester), '最近のメモ');
     expect(tester.takeException(), isNull);
@@ -79,7 +79,7 @@ void main() {
     expect(find.text('思いつきを、そのまま。'), findsOneWidget);
     // フォームを開いている間は、画面の移動キーで裏の画面を変えない。
     await press(tester, LogicalKeyboardKey.digit2);
-    expect(appBarTitle(tester), 'ContextHub');
+    expect(appBarTitle(tester), 'ホーム');
     // 開いた直後（入力欄を選ぶ前）から保存キーが届く。空の本文は送らない。
     await press(tester, LogicalKeyboardKey.enter);
     expect(find.text('本文は1〜8000文字で入力してください。'), findsOneWidget);
@@ -176,7 +176,7 @@ void main() {
       final move = bar.menus[3] as PlatformMenu;
       move.menus.first.onSelected!();
       await tester.pumpAndSettle();
-      expect(appBarTitle(tester), 'ContextHub');
+      expect(appBarTitle(tester), 'ホーム');
       memo.onSelected!();
       await tester.pumpAndSettle();
       expect(find.text('思いつきを、そのまま。'), findsOneWidget);

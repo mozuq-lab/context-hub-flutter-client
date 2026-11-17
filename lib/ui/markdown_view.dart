@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../app/controller.dart';
+import 'notice.dart';
 
 class SafeMarkdown extends StatelessWidget {
   const SafeMarkdown({
@@ -53,6 +54,5 @@ class SafeMarkdown extends StatelessWidget {
       h2: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
     ),
   );
-  void _message(BuildContext context, String text) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  void _message(BuildContext context, String text) => notice(context, text);
 }
