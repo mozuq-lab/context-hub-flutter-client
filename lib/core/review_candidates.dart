@@ -554,7 +554,7 @@ class ReviewRepository {
         : null;
   }
 
-  /// 名前と別名を、本体が名前の重なりを比べるときと同じ規則で正規化したもの。
+  /// 名前と別名を、本体が名前の重なりを比べるときと同じ規則（NFKC・前後の空白の除去・小文字化）で正規化したもの。
   Set<String> _namesOf(ReviewCandidate c) => identical(_byId[c.id], c)
       ? _names[c.id] ??= _normalized(c)
       : _normalized(c);
@@ -567,11 +567,16 @@ class ReviewRepository {
   bool _sameName(ReviewCandidate a, ReviewCandidate b) =>
       _namesOf(a).any(_namesOf(b).contains);
 
-  /// 採用の依頼が反映を待っている、確認待ちのプロジェクト案（その案の名前と別名でプロジェクトができる）。
+  /// 採用の依頼が反映を待っている、一覧では確認待ちのプロジェクト案（その案の名前と別名でプロジェクトができる）。
   /// ほかの案の採用にまとめられているだけの案は、名前がプロジェクトに加わらないので含めない。
+  ///
+  /// 一覧（index.json）に書かれた状態で見る。採用の判断記録だけが先に届いた案や、根拠が未同期の案は、
+  /// この端末では操作できない案（unavailable）になる。それでも一覧が作り直されるまでは、名前か別名が同じ
+  /// 残りの案が確認待ちとして並び続けるので、待つ理由から外さない。
   late final List<ReviewCandidate> _approving = [
-    for (final c in pending)
+    for (final c in items)
       if (c.kind == 'project' &&
+          c.data['status'] == 'pending' &&
           (_own[c.id]?.any(
                 (r) =>
                     !r.failed &&
@@ -582,10 +587,11 @@ class ReviewRepository {
         c,
   ];
 
-  /// 確認待ちで、依頼が確認したときの内容のままの案。そうでなければnull。
+  /// 一覧では確認待ちで、依頼が確認したときの内容のままの案。そうでなければnull。
+  /// この端末では操作できない案（判断記録だけが先に届いた、根拠が未同期）も、一覧が作り直されるまでは含める。
   ReviewCandidate? _unchanged(Object? id, Object? hash) {
     final c = _byId[id];
-    return c != null && c.status == 'pending' && c.candidateHash == hash
+    return c != null && c.data['status'] == 'pending' && c.candidateHash == hash
         ? c
         : null;
   }
@@ -615,6 +621,15 @@ class ReviewRepository {
     }
     return null;
   }
+
+  /// [among]のうち、[other]と名前か別名が同じ案。
+  List<ReviewCandidate> sameNamed(
+    ReviewCandidate other,
+    Iterable<ReviewCandidate> among,
+  ) => [
+    for (final c in among)
+      if (_sameName(other, c)) c,
+  ];
 
   /// この案の採用を待つ理由になっている、まとめた判断の代表の案。なければnull。
   ///

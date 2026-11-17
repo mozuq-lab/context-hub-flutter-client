@@ -138,7 +138,8 @@ class AttentionState {
     for (final item in items) {
       final shown = first || item.page == visible;
       for (final key in item.memberKeys) {
-        current[key] = shown || (current[key] ?? keys[key] ?? false);
+        // 上限を超えて覚えきれなかった間に届いた案は、行として並ぶ案と同じく、既読として扱う。
+        current[key] = shown || (current[key] ?? keys[key] ?? full);
       }
     }
     if (current.length > attentionMaxKeys) {

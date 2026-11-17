@@ -39,6 +39,18 @@ String requestNote(ReviewRepository r, ReviewCandidate i) => !i.actionable
     ? '\nまとめた案の前の依頼は受け付けられませんでした'
     : '';
 
+/// まとめた判断を止めている理由と、どの案を外せば判断できるかの説明。
+/// [clashes]は、採用を依頼済みの[blocker]と名前か別名が同じ、判断する案（代表の案[lead]とまとめる案）。
+String groupBlockedNote(
+  ReviewCandidate blocker,
+  ReviewCandidate lead,
+  List<ReviewCandidate> clashes,
+) {
+  String names(Iterable<ReviewCandidate> items) =>
+      items.map((c) => '「${c.title}」').join();
+  return '「${blocker.title}」の採用を依頼済みです。採用が反映されると、名前か別名が同じ${names(clashes)}は古い案になり、その案を含むまとめた依頼は全体が受け付けられなくなります。反映されるまで、まとめた判断は依頼できません。${clashes.any((c) => c.id == lead.id) ? '同期して、採用の反映を確かめてから判断してください（すべてのチェックを外すと、この案だけの判断はできます）。' : '${names(clashes)}のチェックを外すと、残りの案を判断できます。'}';
+}
+
 class ReviewView extends StatelessWidget {
   const ReviewView({super.key, required this.controller});
   final HubController controller;
@@ -399,7 +411,11 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: NoticeBox(
-                            '「${blocker.title}」の採用を依頼済みです。採用が反映されると、名前か別名が同じ案は古い案になり、その案を含むまとめた依頼は全体が受け付けられなくなります。反映されるまで、まとめた判断は依頼できません。名前か別名が同じ案のチェックを外すか、すべて外してこの案だけを判断することはできます。',
+                            groupBlockedNote(
+                              blocker,
+                              item,
+                              c.review!.sameNamed(blocker, [item, ...included]),
+                            ),
                             key: const Key('review-group-blocked'),
                           ),
                         ),
@@ -448,7 +464,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           notice == null &&
                           failed.isNotEmpty)
                         const NoticeBox(
-                          '前の依頼は、Miniが受け付けられませんでした。確認した後に、候補やまとめた案の状況が変わった可能性があります。内容を確かめて、もう一度判断できます。',
+                          '前の依頼は、Miniが受け付けられませんでした。確認した後に、候補・採用先・まとめた案の状況が変わった可能性があります（受付状況に理由が出ることがあります）。内容を確かめて、もう一度判断できます。',
                           key: Key('review-failed'),
                           error: true,
                         ),

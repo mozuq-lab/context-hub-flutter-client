@@ -9,7 +9,9 @@ import 'package:context_hub_client/core/parser.dart';
 import 'package:context_hub_client/core/repository.dart';
 import 'package:context_hub_client/core/review_candidates.dart';
 import 'package:context_hub_client/storage/review_service.dart';
+import 'package:context_hub_client/ui/review_view.dart';
 import 'capture_test.dart' show TempAccess, location;
+import 'policy_test.dart' show scopedFiles;
 import 'review_test.dart' show nativeReviewFiles, reviewFiles;
 import 'unassigned_proposals_test.dart'
     show expected, inboxFiles, leadOf, manyUnassigned, reseal, sample;
@@ -108,6 +110,16 @@ Map<String, String> rewritten(Map<String, String> source, String id) {
       ..[confirmation] = digest(files[confirmation]!);
   });
 }
+
+/// 候補の根拠のメモが、この端末にまだ届いていない状態にする。
+/// 一覧では確認待ちのまま、この端末では操作できない案（unavailable）になる。
+Map<String, String> unsynced(
+  Map<String, String> files,
+  ReviewCandidate candidate,
+) => {...files}
+  ..remove(
+    candidate.dependencies.keys.singleWhere((p) => p.startsWith('00_inbox/')),
+  );
 
 /// 確認待ちの知識の候補を1件、[title]の名前で加える（候補と根拠は、候補確認のサンプルのもの）。
 Map<String, String> withKnowledge(Map<String, String> source, String title) {
@@ -393,7 +405,8 @@ void main() {
               'reject',
               covers: members,
             );
-        final output = '${access.directory.path}/after.json';
+        final output = '${access.directory.path}/after.json',
+            partial = '${access.directory.path}/partial.json';
         final node = await Process.run('node', [
           'scripts/check_review_sequence_protocol.mjs',
           'refused',
@@ -401,8 +414,31 @@ void main() {
           access.request(location, reject.requestId).path,
           'test/fixtures/unassigned-and-proposals.json',
           output,
+          partial,
         ]);
         expect(node.exitCode, 0, reason: '${node.stdout}\n${node.stderr}');
+        // 採用の判断記録だけが先に届き、確認待ち一覧が作り直される前の端末では、採用した案が操作できない案になる。
+        // 一覧では確認待ちのままの代表の案をまとめた判断は、まだ止める（保存しても、本体は受け付けない）。
+        final early = HubRepository(
+          VaultSnapshot(
+            nativeReviewFiles(
+              Map<String, String>.from(
+                jsonDecode(await File(partial).readAsString()) as Map,
+              ),
+            ),
+          ),
+        ).review;
+        expect(early.byId(members.last.id)!.status, 'unavailable');
+        expect(early.byId(members.last.id)!.data['status'], 'pending');
+        final waiting = early.byId(lead.id)!;
+        expect(waiting.status, 'pending');
+        expect(early.groupMembers(waiting).map((m) => m.id), [
+          members.first.id,
+        ]);
+        expect(
+          early.groupBlocker(waiting, early.groupMembers(waiting))!.id,
+          members.last.id,
+        );
         final repo = HubRepository(
               VaultSnapshot(
                 nativeReviewFiles(
@@ -926,6 +962,39 @@ void main() {
         )).covers.map((m) => m.id),
         [members.last.id],
       );
+      // 採用を依頼した案が、先に届いた別の判断（却下）で確定していたら、プロジェクトはできないので、待つ理由にしない。
+      await show(
+        c,
+        access,
+        withIndex(
+          {...files, approve.key: approve.value},
+          (items) =>
+              items.singleWhere((i) => i['id'] == members.last.id)['status'] =
+                  'rejected',
+        ),
+      );
+      expect(c.review!.warnings, isEmpty);
+      expect(c.review!.byId(members.last.id)!.status, 'rejected');
+      expect(blocker(), isNull);
+      // 採用を依頼した案が、この端末で操作できない案になっても（根拠が未同期、採用の判断記録だけが先に届いた）、
+      // 一覧では確認待ちのままなので、待つ理由から外さない。
+      await show(
+        c,
+        access,
+        unsynced({...files, approve.key: approve.value}, members.last),
+      );
+      expect(c.review!.byId(members.last.id)!.status, 'unavailable');
+      expect(blocker()!.id, members.last.id);
+      await expectLater(
+        c.prepareReview(lead.id),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('採用が反映されるまで'),
+          ),
+        ),
+      );
     });
 
     test('まとめた判断が反映を待つ間は、名前か別名が同じ案を採用しない', () async {
@@ -1021,6 +1090,14 @@ void main() {
       r = HubRepository(VaultSnapshot(rewritten(waiting, lead.id))).review;
       expect(r.byId(lead.id)!.status, 'pending');
       expect(r.approveBlocker(r.byId(members.last.id)!), isNull);
+      // まとめた判断に含まれる案が、この端末で操作できない案になっても（根拠が未同期、判断記録だけが先に届いた）、
+      // 一覧では確認待ちのままなので、採用を止める。
+      r = renamedBy(unsynced(waiting, members.first), [' 読書ｱﾌﾟﾘ ']);
+      expect(r.byId(members.first.id)!.status, 'unavailable');
+      expect(r.approveBlocker(r.byId(single.id)!)!.id, lead.id);
+      r = HubRepository(VaultSnapshot(unsynced(waiting, lead))).review;
+      expect(r.byId(lead.id)!.status, 'unavailable');
+      expect(r.approveBlocker(r.byId(members.last.id)!)!.id, lead.id);
       // 空白だけの別名は、名前として比べない（本体と同じ）。
       r = HubRepository(
         VaultSnapshot(
@@ -1289,6 +1366,12 @@ void main() {
       await t.tap(find.byKey(Key('review-${lead.id}')));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('review-group-blocked')), findsOneWidget);
+      // 代表の案の名前が、採用を依頼済みの案の別名と同じ。外せる案がないので、同期を待つよう示す。
+      expect(
+        find.textContaining('名前か別名が同じ「${lead.title}」は古い案になり'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('同期して、採用の反映を確かめてから判断してください'), findsOneWidget);
       expect(find.byKey(const Key('review-approve-blocked')), findsNothing);
       expect(
         t
@@ -1312,6 +1395,51 @@ void main() {
             .onPressed,
         isNotNull,
       );
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('まとめた判断を止めるときは、外せば判断できる案の名前を示す', (t) async {
+      final files = inboxFiles(),
+          before = HubRepository(VaultSnapshot(files)).review,
+          lead = leadOf(before),
+          members = before.groupMembers(lead),
+          single = before.pendingRows.singleWhere((i) => i.id != lead.id),
+          // 組の外の案の別名を、まとめた案の別名と同じにする。
+          renamed = withIndex(
+            files,
+            (items) =>
+                items.singleWhere((i) => i['id'] == single.id)['aliases'] = [
+                  ...members.first.aliases,
+                ],
+          );
+      late MapEntry<String, String> approve;
+      await t.runAsync(() async {
+        approve = await request(
+          1,
+          HubRepository(VaultSnapshot(renamed)).review.byId(single.id)!,
+          'approve',
+        );
+      });
+      final a = MemoryUIAccess();
+      await sample(t, a, {...renamed, approve.key: approve.value});
+      await t.tap(find.byKey(const Key('home-review')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(Key('review-${lead.id}')));
+      await t.pumpAndSettle();
+      OutlinedButton reject() =>
+          t.widget<OutlinedButton>(find.byKey(const Key('review-reject')));
+      expect(find.byKey(const Key('review-group-blocked')), findsOneWidget);
+      expect(
+        find.textContaining('「${members.first.title}」のチェックを外すと、残りの案を判断できます。'),
+        findsOneWidget,
+      );
+      expect(reject().onPressed, isNull);
+      // 名前の重なる案を外すと、残りをまとめて判断できる。
+      await t.tap(find.byKey(Key('review-include-${members.first.id}')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('review-group-blocked')), findsNothing);
+      expect(find.text('2件をまとめて却下する'), findsOneWidget);
+      expect(reject().onPressed, isNotNull);
       expect(t.takeException(), isNull);
     });
 
@@ -1397,6 +1525,58 @@ void main() {
     });
   });
 
+  group('適用停止の依頼', () {
+    testWidgets('適用停止を依頼でき、保存した後は押せなくなる', (t) async {
+      t.view.physicalSize = const Size(1280, 4000);
+      t.view.devicePixelRatio = 1;
+      final files = scopedFiles(), a = MemoryUIAccess();
+      a.current = VaultSnapshot(files);
+      final c = HubController(a, sampleLoader: () async => files);
+      addTearDown(() {
+        c.dispose();
+        t.view.resetPhysicalSize();
+        t.view.resetDevicePixelRatio();
+      });
+      await c.useSample();
+      final old = c.review!.history.firstWhere((i) => i.retirable);
+      await t.pumpWidget(
+        MaterialApp(
+          home: ReviewDetail(
+            controller: c,
+            id: old.id,
+            identity: c.location!.identity,
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+      FilledButton retire() =>
+          t.widget<FilledButton>(find.byKey(const Key('review-retire')));
+      expect(retire().onPressed, isNotNull);
+      expect(find.byKey(const Key('review-approve')), findsNothing);
+      expect(find.byKey(const Key('review-failed')), findsNothing);
+      await t.tap(find.byKey(const Key('review-retire')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('confirm-review')));
+      await t.pumpAndSettle();
+      expect(a.writes, 1);
+      final saved = a.requests.entries.single;
+      expect(parseMarkdown(saved.value).meta['operation'], 'knowledge-retire');
+      // 保存した後は、依頼が同期される前でも押せない。
+      expect(find.textContaining('依頼をこの端末に保存しました'), findsOneWidget);
+      expect(retire().onPressed, isNull);
+      // 依頼が同期されたら、依頼済みとして示す。
+      a.current = VaultSnapshot({
+        ...files,
+        'Input/${saved.key}.md': saved.value,
+      });
+      await c.reload();
+      await t.pumpAndSettle();
+      expect(c.review!.retirementRequestIdFor(old.id), saved.key);
+      expect(retire().onPressed, isNull);
+      expect(t.takeException(), isNull);
+    });
+  });
+
   group('判断待ちの既読', () {
     test('代表の案を見た後で、まとめた案が1件ずつ見えても新着にしない', () {
       final files = inboxFiles(),
@@ -1453,6 +1633,13 @@ void main() {
         AttentionItem('candidate', lead.id, 'review').key,
       ]);
       expect(grouped.fresh(rows), isEmpty);
+      // 上限を超えて覚えきれなかった間に届いた組は、代表の案もまとめた案も既読として扱う。
+      final over = const AttentionState(
+        identity: 'vault',
+        full: true,
+      ).sync('vault', attentionItems(repo));
+      expect(over.fresh(attentionItems(repo)), isEmpty);
+      expect(over.fresh(rows), isEmpty);
       // 端末に残す形は変えない（鍵と既読だけ）。
       expect(
         AttentionState.fromJson(jsonDecode(jsonEncode(seen.toJson()))),
