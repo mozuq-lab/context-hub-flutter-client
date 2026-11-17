@@ -14,11 +14,17 @@ class MainFlutterWindow: NSWindow {
     // 記録した位置と大きさがあれば戻す（画面の外にはみ出す場合はAppKitが画面内へ寄せる）。
     // なければ初回の大きさ（サイドバーが出る幅）で、画面の中央に開く。
     if !self.setFrameUsingName(MainFlutterWindow.frameName) {
-      self.setFrame(windowFrame, display: true)
+      var frame = windowFrame
+      // 小さい画面では、Dockやメニューバーを除いた範囲に収まるよう縮める。
+      if let visible = (self.screen ?? NSScreen.main)?.visibleFrame {
+        frame.size.width = min(frame.width, visible.width)
+        frame.size.height = min(frame.height, visible.height)
+      }
+      self.setFrame(frame, display: true)
       self.center()
     }
     // 以後、移動・大きさの変更のたびに記録する。
-    self.setFrameAutosaveName(MainFlutterWindow.frameName)
+    _ = self.setFrameAutosaveName(MainFlutterWindow.frameName)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     vaultBridge = VaultBridge(flutterViewController.engine.binaryMessenger)

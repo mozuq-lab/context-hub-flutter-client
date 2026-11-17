@@ -83,14 +83,12 @@ class _HubShellState extends State<HubShell> {
     }
     if (action == null || !mounted) return;
     final navigator = Navigator.of(context);
-    // いちばん上の画面を調べる（何も閉じない）。
-    Route<dynamic>? top;
-    navigator.popUntil((route) {
-      top ??= route;
-      return true;
-    });
     // 入力・保存・確認の途中には割り込まず、開けなかったことを知らせる。
-    if (c.composing || c.saving || top is PopupRoute) {
+    // 本文の領域に開いた選択肢の一覧なども、確認の途中として扱う。
+    if (c.composing ||
+        c.saving ||
+        topRoute(navigator) is PopupRoute ||
+        contentPopupOpen) {
       notice(context, '開いている入力や確認を閉じてから、もう一度お試しください。');
       return;
     }
@@ -155,7 +153,27 @@ class _HubShellState extends State<HubShell> {
   }
 
   /// フォームや確認が開いている間は、メニューからの操作を受け付けない（画面のショートカットはその外に届かない）。
-  bool get idle => mounted && (ModalRoute.of(context)?.isCurrent ?? true);
+  bool get idle =>
+      mounted &&
+      (ModalRoute.of(context)?.isCurrent ?? true) &&
+      !contentPopupOpen;
+
+  /// [navigator]のいちばん上の画面（何も閉じない）。
+  static Route<dynamic>? topRoute(NavigatorState? navigator) {
+    Route<dynamic>? top;
+    navigator?.popUntil((route) {
+      top ??= route;
+      return true;
+    });
+    return top;
+  }
+
+  /// 本文の領域に、選択肢の一覧などのポップアップが開いているか。
+  bool get contentPopupOpen =>
+      topRoute(contentNavigator.currentState) is PopupRoute;
+
+  /// メニュー（drawer）が開いているか。Androidの「戻る」では先にメニューを閉じる。
+  bool drawerOpen = false;
   bool get canCompose =>
       c.repository != null && c.captureWarning == null && !c.loading;
   bool get canReload => c.location != null && !c.loading;
@@ -165,6 +183,11 @@ class _HubShellState extends State<HubShell> {
   /// 画面を切り替える。開いた画面で判断できる判断待ちは、見たものとして既読にする。
   /// 本文の領域に開いている詳細（記録・候補など）は閉じて、選んだ画面を出す。
   void show(String target) {
+    // 保存の途中で詳細を閉じると、結果の案内を出せなくなるため、終わるまで待ってもらう。
+    if (c.saving && (contentNavigator.currentState?.canPop() ?? false)) {
+      notice(context, '保存が終わってから、ほかの画面へ移ってください。');
+      return;
+    }
     closeDetails();
     setState(() => page = target);
     c.showPage(target);
@@ -692,6 +715,7 @@ class _HubShellState extends State<HubShell> {
         Scaffold(
           key: shellScaffold,
           drawer: wide || !has ? null : Drawer(child: navigation(true)),
+          onDrawerChanged: (open) => setState(() => drawerOpen = open),
           body: Row(
             children: [
               if (wide && has)
@@ -714,9 +738,17 @@ class _HubShellState extends State<HubShell> {
                       ? null
                       : () => shellScaffold.currentState?.openDrawer(),
                   // Androidの「戻る」は、開いている詳細を先に閉じる。
+                  // メニューが開いている間はメニューを先に閉じる（詳細は閉じない）。
                   child: NavigatorPopHandler<Object?>(
-                    onPopWithResult: (_) =>
-                        contentNavigator.currentState?.maybePop(),
+                    enabled: !drawerOpen,
+                    onPopWithResult: (_) {
+                      final scaffold = shellScaffold.currentState;
+                      if (scaffold?.isDrawerOpen ?? false) {
+                        scaffold!.closeDrawer();
+                      } else {
+                        contentNavigator.currentState?.maybePop();
+                      }
+                    },
                     child: Navigator(
                       key: contentNavigator,
                       pages: [

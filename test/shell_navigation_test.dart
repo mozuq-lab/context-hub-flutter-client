@@ -116,6 +116,41 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('狭い画面で詳細の上にメニューを開いたとき、Androidの戻る操作はメニューだけを閉じる', (tester) async {
+    await openSample(tester, const Size(390, 844));
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('nav-recent')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(memoTitle).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('detail-menu')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Drawer), findsOneWidget);
+    expect(await tester.binding.handlePopRoute(), isTrue);
+    await tester.pumpAndSettle();
+    expect(find.byType(Drawer), findsNothing);
+    expect(find.text('出典・日時'), findsOneWidget);
+    // もう一度の「戻る」で詳細を閉じる。
+    expect(await tester.binding.handlePopRoute(), isTrue);
+    await tester.pumpAndSettle();
+    expect(find.text('出典・日時'), findsNothing);
+    expect(topTitle(tester), '最近のメモ');
+  });
+
+  testWidgets('本文の領域で選択肢の一覧を開いている間は、ショートカットで入力フォームを開かない', (tester) async {
+    await openSample(tester, const Size(1280, 900));
+    await press(tester, LogicalKeyboardKey.keyF);
+    final dropdown = find.byWidgetPredicate(
+      (w) => w is DropdownButtonFormField,
+    );
+    expect(dropdown, findsWidgets);
+    await tester.tap(dropdown.first);
+    await tester.pumpAndSettle();
+    await press(tester, LogicalKeyboardKey.keyN);
+    expect(find.text('思いつきを、そのまま。'), findsNothing);
+  });
+
   testWidgets('続けて出した案内は、前の案内が消えるのを待たずに出る', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
