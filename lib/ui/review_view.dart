@@ -35,6 +35,8 @@ String requestNote(ReviewRepository r, ReviewCandidate i) => !i.actionable
     ? '\n依頼保存済み・Miniの判断待ち'
     : r.failedRequestIdFor(i.id) != null
     ? '\n前の依頼は受け付けられませんでした'
+    : r.groupMembers(i).any((m) => r.failedRequestIdFor(m.id) != null)
+    ? '\nまとめた案の前の依頼は受け付けられませんでした'
     : '';
 
 class ReviewView extends StatelessWidget {
@@ -125,6 +127,9 @@ class ReviewDetail extends StatefulWidget {
 class _ReviewDetailState extends State<ReviewDetail> {
   HubController get c => widget.controller;
   String? result, error;
+
+  /// この画面で保存した依頼のREQ ID。本体が受け付けられなかったら、保存済みの表示をやめる。
+  String? savedId;
   bool busy = false;
   AdoptionTarget? selectedTarget;
   bool targetInitialized = false;
@@ -230,11 +235,12 @@ class _ReviewDetailState extends State<ReviewDetail> {
       if (yes != true) return;
       final saved = await c.submitReview(ticket, action);
       if (mounted) {
-        setState(
-          () => result = saved.saved
+        setState(() {
+          savedId = saved.requestId;
+          result = saved.saved
               ? '依頼をこの端末に保存しました。同期・Miniの判断待ちです。'
-              : '保存結果が不明です。再送せず、受付状況から同じ操作の保存確認をしてください。',
-        );
+              : '保存結果が不明です。再送せず、受付状況から同じ操作の保存確認をしてください。';
+        });
       }
     } catch (e) {
       if (mounted) setState(() => error = HubController.message(e));
@@ -329,15 +335,25 @@ class _ReviewDetailState extends State<ReviewDetail> {
               ? const <ReviewCandidate>[]
               : c.review!.groupMembers(item),
           lead = item == null ? null : c.review!.groupLead(item);
-      // この判断にまとめる案（本人が外した案を除く）と、依頼の状況。
-      final included = [
-            for (final member in members)
-              if (!excluded.contains(member.id)) member,
-          ],
-          requested = item != null && c.review!.requestIdFor(item.id) != null,
-          blocker = item == null || included.isEmpty
+      // 依頼の状況と、この判断にまとめる案（本人が外した案を除く）。依頼済みのときは、依頼に含めた案がそのまま対象になる。
+      final requested = item != null && c.review!.requestIdFor(item.id) != null,
+          included = requested
+              ? members
+              : [
+                  for (final member in members)
+                    if (!excluded.contains(member.id)) member,
+                ],
+          failed = item == null
+              ? const <String>[]
+              : c.review!.failedRequestIdsFor(item.id),
+          // この画面で保存した依頼を本体が受け付けられなかったら、保存済みの表示をやめて、もう一度判断できるようにする。
+          notice = failed.contains(savedId)
               ? null
-              : c.review!.groupBlocker(item);
+              : result,
+          blocker = item == null
+              ? null
+              : c.review!.groupBlocker(item, included),
+          waiting = item == null ? null : c.review!.approveBlocker(item);
       if (!targetInitialized && item != null) {
         targetInitialized = true;
         if (item.suggestedTarget?.scope == 'project') {
@@ -383,8 +399,16 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: NoticeBox(
-                            '同じ対象の案「${blocker.title}」の採用を依頼済みです。採用でプロジェクトができると、名前の重なる残りの案は古い案として扱われ、まとめた依頼の全体が受け付けられなくなります。反映されるまで、まとめた判断は依頼できません。チェックを外すと、この案だけを判断できます。',
+                            '「${blocker.title}」の採用を依頼済みです。採用が反映されると、名前か別名が同じ案は古い案になり、その案を含むまとめた依頼は全体が受け付けられなくなります。反映されるまで、まとめた判断は依頼できません。名前か別名が同じ案のチェックを外すか、すべて外してこの案だけを判断することはできます。',
                             key: const Key('review-group-blocked'),
+                          ),
+                        ),
+                      if (waiting != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '「${waiting.title}」をまとめた判断を依頼済みです。この案の採用が先に反映されると、名前か別名が同じ案が古い案になり、まとめた依頼の全体が受け付けられなくなります。まとめた判断が反映されるまで、この案の採用は依頼できません。却下はできます。',
+                            key: const Key('review-approve-blocked'),
                           ),
                         ),
                       if (lead != null)
@@ -417,14 +441,14 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           ),
                         ),
                       if (error != null) NoticeBox(error!, error: true),
-                      if (result != null) NoticeBox(result!),
+                      if (notice != null) NoticeBox(notice),
                       if (item.actionable && requested)
                         const NoticeBox('依頼保存済み・Miniの判断待ちです。受付状況で結果を確認してください。'),
                       if (item.actionable &&
-                          result == null &&
-                          c.review!.failedRequestIdFor(item.id) != null)
+                          notice == null &&
+                          failed.isNotEmpty)
                         const NoticeBox(
-                          '前の依頼は、Miniが受け付けられませんでした（理由は受付状況で確認できます）。内容を確かめて、もう一度判断できます。',
+                          '前の依頼は、Miniが受け付けられませんでした。確認した後に、候補やまとめた案の状況が変わった可能性があります。内容を確かめて、もう一度判断できます。',
                           key: Key('review-failed'),
                           error: true,
                         ),
@@ -441,13 +465,22 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         ),
                         const SizedBox(height: 12),
                         ReviewContent(controller: c, item: member),
+                        if (c.review!.failedRequestIdFor(member.id) != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: NoticeBox(
+                              'この案の前の依頼は、Miniが受け付けられませんでした。',
+                              key: Key('review-member-failed-${member.id}'),
+                              error: true,
+                            ),
+                          ),
                         CheckboxListTile(
                           key: Key('review-include-${member.id}'),
                           contentPadding: EdgeInsets.zero,
                           controlAffinity: ListTileControlAffinity.leading,
-                          value: !excluded.contains(member.id),
+                          value: included.contains(member),
                           // 依頼を保存した後は、まとめる案を選び直せない。
-                          onChanged: busy || requested || result != null
+                          onChanged: busy || requested || notice != null
                               ? null
                               : (value) => setState(
                                   () => value == true
@@ -486,7 +519,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           key: const Key('review-retire'),
                           onPressed:
                               busy ||
-                                  result != null ||
+                                  notice != null ||
                                   c.captureWarning != null ||
                                   c.review!.retirementRequestIdFor(item.id) !=
                                       null
@@ -508,9 +541,10 @@ class _ReviewDetailState extends State<ReviewDetail> {
                                   busy ||
                                       (item.kind != 'project' &&
                                           selectedTarget == null) ||
-                                      result != null ||
+                                      notice != null ||
                                       requested ||
                                       blocker != null ||
+                                      waiting != null ||
                                       c.captureWarning != null
                                   ? null
                                   : () => decide('approve'),
@@ -524,7 +558,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                               key: const Key('review-reject'),
                               onPressed:
                                   busy ||
-                                      result != null ||
+                                      notice != null ||
                                       requested ||
                                       blocker != null ||
                                       c.captureWarning != null

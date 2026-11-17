@@ -2244,7 +2244,7 @@ class _HubViewState extends State<HubView> {
         Padding(
           padding: const EdgeInsets.only(top: 8),
           child: Text(
-            'ほか$rest件は、ここに載せていない古いメモか、原文がこの端末に届いていないメモです。',
+            'ほか$rest件は、ここに載せていない古いメモか、原文がこの端末に届いていないメモ、訂正の反映を待っているメモです。',
             key: const Key('unassigned-rest'),
             style: const TextStyle(fontSize: 12),
           ),

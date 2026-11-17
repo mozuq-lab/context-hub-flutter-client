@@ -876,17 +876,16 @@ class HubController extends ChangeNotifier {
     );
   }
 
-  /// 同じ組の案の採用が反映を待っている間は、まとめた判断を依頼しない。
-  /// 採用でプロジェクトができると、名前の重なる残りの案が古い案になり、まとめた依頼の全体を本体が受け付けられなくなる。
+  /// 名前か別名が同じ案の採用が反映を待っている間は、まとめた判断を依頼しない。
+  /// 採用でプロジェクトができると、名前か別名が同じ案が古い案になり、その案を含むまとめた依頼の全体を本体が受け付けられなくなる。
   void _refuseBlockedGroup(
     ReviewCandidate candidate,
     List<ReviewCandidate> covers,
   ) {
-    if (covers.isEmpty) return;
-    final blocker = review!.groupBlocker(candidate);
+    final blocker = review!.groupBlocker(candidate, covers);
     if (blocker != null) {
       throw StateError(
-        '同じ対象の案「${blocker.title}」の採用が反映されるまで、まとめた判断は依頼できません。同期後に確認するか、1件ずつ判断してください。',
+        '「${blocker.title}」の採用が反映されるまで、名前か別名が同じ案を含むまとめた判断は依頼できません。同期後に確認するか、その案を外して判断してください。',
       );
     }
   }
@@ -947,6 +946,16 @@ class HubController extends ChangeNotifier {
           covers.add(member);
         }
         _refuseBlockedGroup(candidate, covers);
+      }
+      // まとめた判断が反映を待っている間は、名前か別名が同じ案を採用しない。本体は同じ実行に届いた依頼を
+      // IDの順に受け付けるので、後から依頼した採用が先に反映されると、まとめた依頼の全体が受け付けられなくなる。
+      if (action == 'approve') {
+        final waiting = review!.approveBlocker(candidate);
+        if (waiting != null) {
+          throw StateError(
+            '「${waiting.title}」をまとめた判断が反映されるまで、名前か別名が同じこの案の採用は依頼できません。同期後に確認してください。',
+          );
+        }
       }
       // 同じ候補への同じ内容の依頼は、同じ操作として1回だけ保存する。本体が受け付けられなかった依頼の
       // 後の判断は、新しい操作として保存する（同じ操作のままでは、保存済みの依頼を確かめ直すだけになる）。

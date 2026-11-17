@@ -26,12 +26,13 @@ Future<MapEntry<String, String>> request(
   ReviewCandidate candidate,
   String action, {
   List<ReviewCandidate> covers = const [],
+  AdoptionTarget? target,
 }) async {
   final access = MemoryUIAccess(),
       result = await ReviewService(
         access,
         location,
-      ).submit(uuid(n), candidate, action, covers: covers);
+      ).submit(uuid(n), candidate, action, covers: covers, target: target);
   return MapEntry(
     'Input/${result.requestId}.md',
     access.requests[result.requestId]!,
@@ -87,6 +88,39 @@ Map<String, String> withIndex(
   final root = jsonDecode(files[indexPath]!) as Map<String, dynamic>;
   change((root['items'] as List).cast<Map<String, dynamic>>());
   return {...files, indexPath: jsonEncode(root)};
+}
+
+/// 候補の内容を書き換える（依頼の後で、候補が作り直された状態）。確認待ちのまま、内容のhashだけが変わる。
+Map<String, String> rewritten(Map<String, String> source, String id) {
+  final files = {...source};
+  return withIndex(files, (items) {
+    final row = items.singleWhere((i) => i['id'] == id),
+        path = row['path'] as String,
+        confirmation = '90_system/project-confirmations/$id.json';
+    files[path] = '${files[path]}\n';
+    files[confirmation] = jsonEncode({
+      ...jsonDecode(files[confirmation]!) as Map,
+      'candidate_hash': digest(files[path]!),
+    });
+    row['candidateHash'] = digest(files[path]!);
+    (row['dependencies'] as Map)
+      ..[path] = digest(files[path]!)
+      ..[confirmation] = digest(files[confirmation]!);
+  });
+}
+
+/// 確認待ちの知識の候補を1件、[title]の名前で加える（候補と根拠は、候補確認のサンプルのもの）。
+Map<String, String> withKnowledge(Map<String, String> source, String title) {
+  final other = reviewFiles(),
+      row = ((jsonDecode(other[indexPath]!) as Map)['items'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere(
+            (i) => i['status'] == 'pending' && i['kind'] == 'knowledge',
+          );
+  return withIndex({
+    ...other,
+    ...source,
+  }, (items) => items.add({...row, 'title': title}));
 }
 
 /// 候補を複製する。[lead]を渡すと代表の案にまとめた案として、渡さなければ単独の案として加える。
@@ -361,7 +395,8 @@ void main() {
             );
         final output = '${access.directory.path}/after.json';
         final node = await Process.run('node', [
-          'scripts/check_refused_review_protocol.mjs',
+          'scripts/check_review_sequence_protocol.mjs',
+          'refused',
           access.request(location, approve.requestId).path,
           access.request(location, reject.requestId).path,
           'test/fixtures/unassigned-and-proposals.json',
@@ -399,6 +434,57 @@ void main() {
       timeout: const Timeout(Duration(minutes: 2)),
     );
 
+    test(
+      '名前も別名も一致しない案の採用の後に届いたまとめた却下は、固定上流が受け付ける',
+      () async {
+        final access = TempAccess();
+        await access.init();
+        addTearDown(() => access.directory.delete(recursive: true));
+        final r = HubRepository(VaultSnapshot(inboxFiles())).review,
+            lead = leadOf(r),
+            members = r.groupMembers(lead),
+            service = ReviewService(access, location);
+        // 代表の案と名前が含まれる関係にあるだけの案を採用しても、残りの案は古い案にならない。
+        final approve = await service.submit(uuid(1), members.first, 'approve'),
+            reject = await service.submit(
+              uuid(2),
+              lead,
+              'reject',
+              covers: [members.last],
+            );
+        final output = '${access.directory.path}/after.json';
+        final node = await Process.run('node', [
+          'scripts/check_review_sequence_protocol.mjs',
+          'accepted',
+          access.request(location, approve.requestId).path,
+          access.request(location, reject.requestId).path,
+          'test/fixtures/unassigned-and-proposals.json',
+          output,
+        ]);
+        expect(node.exitCode, 0, reason: '${node.stdout}\n${node.stderr}');
+        final repo = HubRepository(
+              VaultSnapshot(
+                nativeReviewFiles(
+                  Map<String, String>.from(
+                    jsonDecode(await File(output).readAsString()) as Map,
+                  ),
+                ),
+              ),
+            ),
+            review = repo.review;
+        expect(review.warnings, isEmpty);
+        expect(review.byId(members.first.id)!.status, 'approved');
+        expect(review.byId(lead.id)!.status, 'rejected');
+        expect(review.byId(members.last.id)!.status, 'rejected');
+        expect(review.byId(members.last.id)!.coveredBy, lead.id);
+        expect(
+          {for (final i in repo.intake) i.id: i.state},
+          {approve.requestId: 'accepted', reject.requestId: 'accepted'},
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
     testWidgets('受け付けられなかった依頼を一覧と詳細で示し、もう一度判断できる', (t) async {
       final files = inboxFiles(),
           before = HubRepository(VaultSnapshot(files)).review,
@@ -428,6 +514,99 @@ void main() {
       await t.pumpAndSettle();
       expect(a.writes, 1);
       expect(a.requests.keys.single, isNot(idOf(saved)));
+      // 保存し直した後は、前の依頼の表示をやめる。
+      expect(find.byKey(const Key('review-failed')), findsNothing);
+      expect(find.textContaining('依頼をこの端末に保存しました'), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('詳細を開いたまま、保存した依頼が受け付けられなかったら、もう一度判断できる', (t) async {
+      final files = inboxFiles(),
+          a = MemoryUIAccess(),
+          c = await sample(t, a, files);
+      final lead = leadOf(c.review!), members = c.review!.groupMembers(lead);
+      await t.tap(find.byKey(const Key('home-review')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(Key('review-${lead.id}')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('3件をまとめて却下する'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('confirm-review')));
+      await t.pumpAndSettle();
+      expect(a.writes, 1);
+      expect(find.textContaining('依頼をこの端末に保存しました'), findsOneWidget);
+      final saved = MapEntry(
+        'Input/${a.requests.keys.single}.md',
+        a.requests.values.single,
+      );
+      OutlinedButton reject() =>
+          t.widget<OutlinedButton>(find.byKey(const Key('review-reject')));
+      // 依頼が同期されて、Miniの判断を待つ間は、判断し直せない。
+      a.current = VaultSnapshot({...files, saved.key: saved.value});
+      await c.reload();
+      await t.pumpAndSettle();
+      expect(reject().onPressed, isNull);
+      expect(find.byKey(const Key('review-failed')), findsNothing);
+      // 受け付けられなかった記録が届いたら、保存済みの表示をやめて、もう一度判断できるようにする。
+      a.current = VaultSnapshot({
+        ...files,
+        saved.key: saved.value,
+        ...refused(saved),
+      });
+      await c.reload();
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('review-failed')), findsOneWidget);
+      expect(find.textContaining('依頼をこの端末に保存しました'), findsNothing);
+      expect(reject().onPressed, isNotNull);
+      expect(
+        t
+            .widget<CheckboxListTile>(
+              find.byKey(Key('review-include-${members.last.id}')),
+            )
+            .onChanged,
+        isNotNull,
+      );
+      await t.tap(find.text('3件をまとめて採用する'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('confirm-review')));
+      await t.pumpAndSettle();
+      expect(a.writes, 2);
+      expect(a.requests.keys, hasLength(2));
+      expect(find.byKey(const Key('review-failed')), findsNothing);
+      expect(find.textContaining('依頼をこの端末に保存しました'), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('まとめた案の前の依頼が受け付けられなかったことも、代表の行と詳細に示す', (t) async {
+      final files = inboxFiles(),
+          before = HubRepository(VaultSnapshot(files)).review,
+          lead = leadOf(before),
+          members = before.groupMembers(lead);
+      late MapEntry<String, String> saved;
+      await t.runAsync(() async {
+        saved = await request(1, members.last, 'reject');
+      });
+      final a = MemoryUIAccess();
+      await sample(t, a, {...files, saved.key: saved.value, ...refused(saved)});
+      await t.tap(find.byKey(const Key('home-review')));
+      await t.pumpAndSettle();
+      expect(
+        find.text(
+          'プロジェクト案 · 未承認 · 根拠のメモ3件（同じ対象の案をまとめて表示）\nまとめた案の前の依頼は受け付けられませんでした',
+        ),
+        findsOneWidget,
+      );
+      await t.tap(find.byKey(Key('review-${lead.id}')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('review-failed')), findsNothing);
+      expect(
+        find.byKey(Key('review-member-failed-${members.last.id}')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(Key('review-member-failed-${members.first.id}')),
+        findsNothing,
+      );
       expect(t.takeException(), isNull);
     });
   });
@@ -582,25 +761,36 @@ void main() {
       );
     });
 
-    test('同じ組の案の採用が反映を待つ間は、まとめて判断しない', () async {
+    test('名前か別名が同じ案の採用が反映を待つ間は、その案を含むまとめた判断をしない', () async {
       final files = inboxFiles(),
           before = HubRepository(VaultSnapshot(files)).review,
           lead = leadOf(before),
           members = before.groupMembers(lead),
-          approve = await request(1, members.first, 'approve'),
+          // 別名が、代表の案の名前と同じ案。
+          approve = await request(
+            1,
+            members.last,
+            'approve',
+          ),
           access = MemoryUIAccess(),
           c = await controllerOf(access, {
             ...files,
             approve.key: approve.value,
           });
-      // 採用でプロジェクトができると、名前の重なる残りの案は古い案になり、まとめた依頼の全体が受け付けられなくなる。
+      ReviewCandidate? blocker() {
+        final current = c.review!.byId(lead.id)!;
+        return c.review!.groupBlocker(current, c.review!.groupMembers(current));
+      }
+
+      // 採用でプロジェクトができると、名前か別名が同じ代表の案は古い案になり、まとめた依頼の全体が受け付けられなくなる。
       expect(
-        c.review!.groupBlocker(c.review!.byId(lead.id)!)!.id,
-        members.first.id,
+        c.review!.groupMembers(c.review!.byId(lead.id)!).map((m) => m.id),
+        [members.first.id],
       );
+      expect(blocker()!.id, members.last.id);
       await expectLater(c.prepareReview(lead.id), throwsStateError);
       // 確認した後に採用の依頼が届いたときも、依頼しない。
-      final real = await c.prepareReview(lead.id, exclude: {members.last.id});
+      final real = await c.prepareReview(lead.id, exclude: {members.first.id});
       expect(real.covers, isEmpty);
       await expectLater(
         c.submitReview(
@@ -609,7 +799,7 @@ void main() {
             real.fingerprint,
             real.identity,
             real.epoch,
-            covers: [c.review!.byId(members.last.id)!],
+            covers: [c.review!.byId(members.first.id)!],
           ),
           'reject',
         ),
@@ -620,44 +810,280 @@ void main() {
       expect((await c.submitReview(real, 'reject')).saved, isTrue);
       expect(
         (await c.submitReview(
-          await c.prepareReview(members.last.id),
+          await c.prepareReview(members.first.id),
           'reject',
         )).saved,
         isTrue,
       );
-      // 却下の依頼は、残りの案の判断を妨げない。
-      final reject = await request(2, members.first, 'reject');
-      await show(c, access, {...files, reject.key: reject.value});
-      expect(c.review!.groupBlocker(c.review!.byId(lead.id)!), isNull);
+      // 名前も別名も一致しない案の採用は、まとめた判断を妨げない（本体は、どちらの順でも受け付ける）。
+      final apart = await request(2, members.first, 'approve');
+      await show(c, access, {...files, apart.key: apart.value});
+      expect(blocker(), isNull);
       expect((await c.prepareReview(lead.id)).covers.map((m) => m.id), [
         members.last.id,
       ]);
-      // 受け付けられなかった採用の依頼も、妨げない。
+      // 却下の依頼は、残りの案の判断を妨げない。
+      final reject = await request(3, members.last, 'reject');
+      await show(c, access, {...files, reject.key: reject.value});
+      expect(blocker(), isNull);
+      expect((await c.prepareReview(lead.id)).covers.map((m) => m.id), [
+        members.first.id,
+      ]);
+      // 同じ案に却下と採用の依頼が両方あるときは、並びの順によらず、採用の反映を待つ。
+      for (final both in [
+        {reject.key: reject.value, approve.key: approve.value},
+        {approve.key: approve.value, reject.key: reject.value},
+      ]) {
+        await show(c, access, {...files, ...both});
+        expect(blocker()!.id, members.last.id);
+      }
+      // 受け付けられなかった採用の依頼は、妨げない。
       await show(c, access, {
         ...files,
         approve.key: approve.value,
         ...refused(approve),
       });
-      expect(c.review!.groupBlocker(c.review!.byId(lead.id)!), isNull);
+      expect(blocker(), isNull);
       expect((await c.prepareReview(lead.id)).covers, hasLength(2));
-      // 代表の案とまとめて採用を依頼した後は、待つ理由を示さない（もう判断しない）。
-      final grouped = await request(4, lead, 'approve', covers: members);
-      await show(c, access, {...files, grouped.key: grouped.value});
-      expect(c.review!.requestIdFor(members.first.id), idOf(grouped));
-      expect(c.review!.groupBlocker(c.review!.byId(lead.id)!), isNull);
-      // ほかの案の採用の依頼に含まれている案も、待つ理由になる。
+      // 採用を依頼済みの案そのものは、待つ理由にしない（依頼済みの案は、もう判断しない）。
+      await show(c, access, {...files, approve.key: approve.value});
+      expect(
+        c.review!.groupBlocker(c.review!.byId(members.last.id)!, [
+          c.review!.byId(members.first.id)!,
+        ]),
+        isNull,
+      );
+      // 依頼の後で内容が変わった案の採用は、本体が受け付けないので、妨げない。
+      await show(
+        c,
+        access,
+        rewritten({...files, approve.key: approve.value}, members.last.id),
+      );
+      expect(c.review!.byId(members.last.id)!.status, 'pending');
+      expect(c.review!.requestIdFor(members.last.id), isNull);
+      expect(
+        c.review!.groupBlocker(c.review!.byId(lead.id)!, [
+          c.review!.byId(members.first.id)!,
+        ]),
+        isNull,
+      );
+      // 知識の候補の採用は、名前が同じでも、プロジェクトができないので妨げない。
+      final mixed = withKnowledge(files, lead.title),
+          knowledge = HubRepository(
+            VaultSnapshot(mixed),
+          ).review.pending.singleWhere((i) => i.kind == 'knowledge'),
+          learned = await request(
+            6,
+            knowledge,
+            'approve',
+            target: AdoptionTarget.global(),
+          ),
+          learning = HubRepository(
+            VaultSnapshot({...mixed, learned.key: learned.value}),
+          ).review;
+      expect(learning.warnings, isEmpty);
+      expect(knowledge.title, lead.title);
+      expect(learning.requestIdFor(knowledge.id), idOf(learned));
+      expect(
+        learning.groupBlocker(
+          learning.byId(lead.id)!,
+          learning.groupMembers(learning.byId(lead.id)!),
+        ),
+        isNull,
+      );
+      // ほかの案の採用にまとめられているだけの案は、その名前でプロジェクトができないので、妨げない。
       final single = before.pendingRows.singleWhere((i) => i.id != lead.id),
           covering = await request(
-            3,
+            4,
             single,
             'approve',
-            covers: [members.first],
+            covers: [members.last],
           );
       await show(c, access, {...files, covering.key: covering.value});
+      expect(c.review!.requestIdFor(members.last.id), idOf(covering));
+      expect(blocker(), isNull);
+      // 組の外の案でも、別名が同じ案の採用は、その案を含むまとめた判断を妨げる。
+      // 半角カナと前後の空白の違いは、本体と同じ正規化で同じ名前として扱う。
+      expect(members.first.aliases, ['読書アプリ']);
+      final renamed = withIndex(files, (items) {
+            items.singleWhere((i) => i['id'] == single.id)['aliases'] = [
+              ' 読書ｱﾌﾟﾘ ',
+            ];
+          }),
+          outside = await request(
+            5,
+            HubRepository(VaultSnapshot(renamed)).review.byId(single.id)!,
+            'approve',
+          );
+      await show(c, access, {...renamed, outside.key: outside.value});
+      expect(blocker()!.id, single.id);
+      await expectLater(c.prepareReview(lead.id), throwsStateError);
+      // 名前の重なる案を外せば、残りをまとめて判断できる。
       expect(
-        c.review!.groupBlocker(c.review!.byId(lead.id)!)!.id,
-        members.first.id,
+        (await c.prepareReview(
+          lead.id,
+          exclude: {members.first.id},
+        )).covers.map((m) => m.id),
+        [members.last.id],
       );
+    });
+
+    test('まとめた判断が反映を待つ間は、名前か別名が同じ案を採用しない', () async {
+      final access = MemoryUIAccess(),
+          files = inboxFiles(),
+          c = await controllerOf(access, files),
+          lead = leadOf(c.review!),
+          members = c.review!.groupMembers(lead),
+          single = c.review!.pendingRows.singleWhere((i) => i.id != lead.id);
+      // 別名が代表の案の名前と同じ案を外して、残りをまとめて却下する。
+      final grouped = await c.submitReview(
+            await c.prepareReview(lead.id, exclude: {members.last.id}),
+            'reject',
+          ),
+          saved = MapEntry(
+            'Input/${grouped.requestId}.md',
+            access.requests[grouped.requestId]!,
+          ),
+          waiting = {...files, saved.key: saved.value};
+      await show(c, access, waiting);
+      // 外した案は1件で並ぶ。先に採用が反映されると、代表の案が古い案になり、まとめた却下の全体が受け付けられなくなる。
+      expect(c.review!.pendingRows.map((i) => i.id), contains(members.last.id));
+      expect(
+        c.review!.approveBlocker(c.review!.byId(members.last.id)!)!.id,
+        lead.id,
+      );
+      await expectLater(
+        c
+            .prepareReview(members.last.id)
+            .then((ticket) => c.submitReview(ticket, 'approve')),
+        throwsStateError,
+      );
+      expect(access.writes, 1);
+      // 名前も別名も一致しない案の採用と、却下は止めない。
+      expect(c.review!.approveBlocker(c.review!.byId(single.id)!), isNull);
+      expect(
+        (await c.submitReview(
+          await c.prepareReview(single.id),
+          'approve',
+        )).saved,
+        isTrue,
+      );
+      expect(
+        (await c.submitReview(
+          await c.prepareReview(members.last.id),
+          'reject',
+        )).saved,
+        isTrue,
+      );
+      expect(access.writes, 3);
+      // まとめた判断に含まれている案そのものは、依頼済みとして扱う（採用を待つ理由にはしない）。
+      expect(c.review!.approveBlocker(c.review!.byId(lead.id)!), isNull);
+      expect(
+        c.review!.approveBlocker(c.review!.byId(members.first.id)!),
+        isNull,
+      );
+      // まとめた判断が受け付けられなかった後は、採用を止めない。
+      final other = MemoryUIAccess(),
+          second = await controllerOf(other, {...waiting, ...refused(saved)});
+      expect(
+        second.review!.approveBlocker(second.review!.byId(members.last.id)!),
+        isNull,
+      );
+      expect(
+        (await second.submitReview(
+          await second.prepareReview(members.last.id),
+          'approve',
+        )).saved,
+        isTrue,
+      );
+      // まとめた案と別名が同じ案の採用も止める（半角カナと前後の空白の違いは、同じ名前として扱う）。
+      ReviewRepository renamedBy(
+        Map<String, String> source,
+        List<String> aliases,
+      ) => HubRepository(
+        VaultSnapshot(
+          withIndex(
+            source,
+            (items) =>
+                items.singleWhere((i) => i['id'] == single.id)['aliases'] =
+                    aliases,
+          ),
+        ),
+      ).review;
+      expect(members.first.aliases, ['読書アプリ']);
+      var r = renamedBy(waiting, [' 読書ｱﾌﾟﾘ ']);
+      expect(r.approveBlocker(r.byId(single.id)!)!.id, lead.id);
+      // 依頼の後で内容が変わった案は、まとめた判断に含まれないので、その案と別名が同じ案の採用は止めない。
+      r = renamedBy(rewritten(waiting, members.first.id), [' 読書ｱﾌﾟﾘ ']);
+      expect(r.requestIdFor(members.first.id), isNull);
+      expect(r.approveBlocker(r.byId(single.id)!), isNull);
+      // 代表の案の内容が変わった依頼は、本体が受け付けないので、採用を止めない。
+      r = HubRepository(VaultSnapshot(rewritten(waiting, lead.id))).review;
+      expect(r.byId(lead.id)!.status, 'pending');
+      expect(r.approveBlocker(r.byId(members.last.id)!), isNull);
+      // 空白だけの別名は、名前として比べない（本体と同じ）。
+      r = HubRepository(
+        VaultSnapshot(
+          withIndex(waiting, (items) {
+            items.singleWhere((i) => i['id'] == single.id)['aliases'] = [' '];
+            items.singleWhere((i) => i['id'] == members.first.id)['aliases'] = [
+              '　',
+              ...members.first.aliases,
+            ];
+          }),
+        ),
+      ).review;
+      expect(r.warnings, isEmpty);
+      expect(r.requestIdFor(members.first.id), idOf(saved));
+      expect(r.approveBlocker(r.byId(single.id)!), isNull);
+      // まとめた判断が反映された後は、採用を止めない。
+      r = HubRepository(
+        VaultSnapshot(
+          withIndex({...waiting, ...accepted(saved)}, (items) {
+            for (final id in [lead.id, members.first.id]) {
+              items.singleWhere((i) => i['id'] == id)['status'] = 'rejected';
+            }
+            items.singleWhere((i) => i['id'] == members.first.id)['coveredBy'] =
+                lead.id;
+          }),
+        ),
+      ).review;
+      expect(r.warnings, isEmpty);
+      expect(r.byId(members.last.id)!.actionable, isTrue);
+      expect(r.approveBlocker(r.byId(members.last.id)!), isNull);
+      // まとめていない1件の依頼は、名前か別名が同じ案の採用を止めない（その依頼だけが受け付けられなくなる）。
+      final alone = await request(7, members.last, 'reject');
+      r = HubRepository(
+        VaultSnapshot({...files, alone.key: alone.value}),
+      ).review;
+      expect(r.requestIdFor(members.last.id), idOf(alone));
+      expect(r.approveBlocker(r.byId(lead.id)!), isNull);
+      // 判断を依頼済みの案と、判断できない案（古い案など）には、採用を待つ理由を示さない。
+      final own = await request(8, members.last, 'reject');
+      r = HubRepository(VaultSnapshot({...waiting, own.key: own.value})).review;
+      expect(r.requestIdFor(members.last.id), idOf(own));
+      expect(r.approveBlocker(r.byId(members.last.id)!), isNull);
+      r = HubRepository(
+        VaultSnapshot(
+          withIndex(
+            waiting,
+            (items) =>
+                items.singleWhere((i) => i['id'] == members.last.id)['status'] =
+                    'stale',
+          ),
+        ),
+      ).review;
+      expect(r.warnings, isEmpty);
+      expect(r.byId(members.last.id)!.status, 'stale');
+      expect(r.approveBlocker(r.byId(members.last.id)!), isNull);
+      // 知識の候補の採用は、名前が同じでも止めない。
+      r = HubRepository(
+        VaultSnapshot(withKnowledge(waiting, lead.title)),
+      ).review;
+      expect(r.warnings, isEmpty);
+      final knowledge = r.pending.singleWhere((i) => i.kind == 'knowledge');
+      expect(knowledge.title, lead.title);
+      expect(r.approveBlocker(knowledge), isNull);
     });
 
     test('まとめる案を選んで判断でき、確認した案と違う組は依頼しない', () async {
@@ -770,6 +1196,15 @@ void main() {
       expect(a.writes, 1);
       final saved = a.requests.entries.single;
       expect(parseMarkdown(saved.value).meta['cover_ids'], [members.last.id]);
+      // 保存した直後（依頼が同期される前）も、まとめる案を選び直せない。
+      expect(
+        t
+            .widget<CheckboxListTile>(
+              find.byKey(Key('review-include-${members.last.id}')),
+            )
+            .onChanged,
+        isNull,
+      );
       // 依頼が同期されると、外した案は1件として確認待ちに残る。
       a.current = VaultSnapshot({
         ...files,
@@ -838,14 +1273,14 @@ void main() {
       expect(t.takeException(), isNull);
     });
 
-    testWidgets('同じ組の案の採用が反映を待つ間は、まとめた判断のボタンを止めて理由を示す', (t) async {
+    testWidgets('名前か別名が同じ案の採用が反映を待つ間は、まとめた判断のボタンを止めて理由を示す', (t) async {
       final files = inboxFiles(),
           before = HubRepository(VaultSnapshot(files)).review,
           lead = leadOf(before),
           members = before.groupMembers(lead);
       late MapEntry<String, String> approve;
       await t.runAsync(() async {
-        approve = await request(1, members.first, 'approve');
+        approve = await request(1, members.last, 'approve');
       });
       final a = MemoryUIAccess();
       await sample(t, a, {...files, approve.key: approve.value});
@@ -854,6 +1289,7 @@ void main() {
       await t.tap(find.byKey(Key('review-${lead.id}')));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('review-group-blocked')), findsOneWidget);
+      expect(find.byKey(const Key('review-approve-blocked')), findsNothing);
       expect(
         t
             .widget<OutlinedButton>(find.byKey(const Key('review-reject')))
@@ -867,7 +1303,7 @@ void main() {
         isNull,
       );
       // まとめる案を外すと、代表の案だけを判断できる。
-      await t.tap(find.byKey(Key('review-include-${members.last.id}')));
+      await t.tap(find.byKey(Key('review-include-${members.first.id}')));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('review-group-blocked')), findsNothing);
       expect(
@@ -876,6 +1312,67 @@ void main() {
             .onPressed,
         isNotNull,
       );
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('まとめた判断が反映を待つ間は、名前か別名が同じ案の採用のボタンを止めて理由を示す', (t) async {
+      final files = inboxFiles(),
+          before = HubRepository(VaultSnapshot(files)).review,
+          lead = leadOf(before),
+          members = before.groupMembers(lead);
+      late MapEntry<String, String> grouped;
+      await t.runAsync(() async {
+        grouped = await request(1, lead, 'reject', covers: [members.first]);
+      });
+      final a = MemoryUIAccess();
+      await sample(t, a, {...files, grouped.key: grouped.value});
+      await t.tap(find.byKey(const Key('home-review')));
+      await t.pumpAndSettle();
+      // まとめた判断から外した案は、1件で並ぶ。
+      await t.tap(find.byKey(Key('review-${members.last.id}')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('review-approve-blocked')), findsOneWidget);
+      expect(find.byKey(const Key('review-group-blocked')), findsNothing);
+      expect(
+        t
+            .widget<FilledButton>(find.byKey(const Key('review-approve')))
+            .onPressed,
+        isNull,
+      );
+      // 却下は止めない。
+      expect(
+        t
+            .widget<OutlinedButton>(find.byKey(const Key('review-reject')))
+            .onPressed,
+        isNotNull,
+      );
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('外した案が、ほかの端末のまとめた依頼に含まれて届いたら、依頼に含まれる案として示す', (t) async {
+      final files = inboxFiles(),
+          a = MemoryUIAccess(),
+          c = await sample(t, a, files);
+      final lead = leadOf(c.review!), members = c.review!.groupMembers(lead);
+      late MapEntry<String, String> other;
+      await t.runAsync(() async {
+        other = await request(1, lead, 'reject', covers: members);
+      });
+      await t.tap(find.byKey(const Key('home-review')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(Key('review-${lead.id}')));
+      await t.pumpAndSettle();
+      CheckboxListTile box() => t.widget<CheckboxListTile>(
+        find.byKey(Key('review-include-${members.first.id}')),
+      );
+      await t.tap(find.byKey(Key('review-include-${members.first.id}')));
+      await t.pumpAndSettle();
+      expect(box().value, isFalse);
+      a.current = VaultSnapshot({...files, other.key: other.value});
+      await c.reload();
+      await t.pumpAndSettle();
+      expect(box().value, isTrue);
+      expect(box().onChanged, isNull);
       expect(t.takeException(), isNull);
     });
 
@@ -960,6 +1457,52 @@ void main() {
       expect(
         AttentionState.fromJson(jsonDecode(jsonEncode(seen.toJson()))),
         seen,
+      );
+    });
+  });
+
+  group('判断待ちの既読（組に加わった案）', () {
+    test('代表の案を見た後で組に加わった案は、見るまで既読にしない', () {
+      final files = inboxFiles(),
+          repo = HubRepository(VaultSnapshot(files)),
+          lead = leadOf(repo.review),
+          members = repo.review.groupMembers(lead),
+          // 一覧を閉じた後で、新しい案が同じ組に加わる。
+          more = clones(
+            1,
+            of: members.first.title,
+          ),
+          grown = HubRepository(VaultSnapshot(more)),
+          added = AttentionItem('candidate', 'PCAN-${'0' * 26}', 'review');
+      expect(
+        grown.review.groupMembers(leadOf(grown.review)).map((m) => m.id),
+        contains('PCAN-${'0' * 26}'),
+      );
+      // 代表の案だけが未同期になると、まとめた案が1件ずつ並ぶ。
+      final rows = attentionItems(
+        HubRepository(
+          VaultSnapshot(
+            {...more}
+              ..remove('90_system/project-confirmations/${lead.id}.json'),
+          ),
+        ),
+      );
+      expect(rows.map((i) => i.key), contains(added.key));
+      final seen = const AttentionState().sync('vault', attentionItems(repo)),
+          joined = seen.sync('vault', attentionItems(grown));
+      // 加わった案だけを新着として示す。組の件数としては出ていたので、通知はしない。
+      expect(joined.fresh(rows).map((i) => i.key), [added.key]);
+      expect(joined.unknown(rows), isEmpty);
+      // 一覧で代表の案を見ると、加わった案も見たものとして扱う。
+      expect(
+        joined.markSeen('review', attentionItems(grown)).fresh(rows),
+        isEmpty,
+      );
+      expect(
+        seen
+            .sync('vault', attentionItems(grown), visible: 'review')
+            .fresh(rows),
+        isEmpty,
       );
     });
   });

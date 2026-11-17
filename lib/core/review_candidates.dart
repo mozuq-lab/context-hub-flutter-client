@@ -554,17 +554,83 @@ class ReviewRepository {
         : null;
   }
 
+  /// 名前と別名を、本体が名前の重なりを比べるときと同じ規則で正規化したもの。
+  Set<String> _namesOf(ReviewCandidate c) => identical(_byId[c.id], c)
+      ? _names[c.id] ??= _normalized(c)
+      : _normalized(c);
+  final Map<String, Set<String>> _names = {};
+  static Set<String> _normalized(ReviewCandidate c) => {
+    for (final name in [c.title, ...c.aliases]) normalizeProjectName(name),
+  }..remove('');
+
+  /// 名前か別名が一致するか。本体は、採用でできたプロジェクトと名前か別名が一致する残りの案を、古い案として扱う。
+  bool _sameName(ReviewCandidate a, ReviewCandidate b) =>
+      _namesOf(a).any(_namesOf(b).contains);
+
+  /// 採用の依頼が反映を待っている、確認待ちのプロジェクト案（その案の名前と別名でプロジェクトができる）。
+  /// ほかの案の採用にまとめられているだけの案は、名前がプロジェクトに加わらないので含めない。
+  late final List<ReviewCandidate> _approving = [
+    for (final c in pending)
+      if (c.kind == 'project' &&
+          (_own[c.id]?.any(
+                (r) =>
+                    !r.failed &&
+                    r.approves &&
+                    r.candidateHash == c.candidateHash,
+              ) ??
+              false))
+        c,
+  ];
+
+  /// 確認待ちで、依頼が確認したときの内容のままの案。そうでなければnull。
+  ReviewCandidate? _unchanged(Object? id, Object? hash) {
+    final c = _byId[id];
+    return c != null && c.status == 'pending' && c.candidateHash == hash
+        ? c
+        : null;
+  }
+
+  /// 反映を待っている、まとめた判断の依頼ごとの案（先頭が代表の案、続いてまとめた案）。
+  late final List<List<ReviewCandidate>> _grouped = [
+    for (final r in _requests)
+      if (!r.failed && r.covers.isNotEmpty)
+        if (_unchanged(r.candidateId, r.candidateHash) case final lead?)
+          [lead, for (final e in r.covers.entries) ?_unchanged(e.key, e.value)],
+  ];
+
   /// まとめた判断を待つ理由になっている案。なければnull。
   ///
-  /// 本体が同じ組にまとめた案のどれかに、採用の依頼が反映を待っているものがあれば、その案を返す。
-  /// 採用でプロジェクトができると、名前の重なる残りの案は古い案になり、まとめた依頼の全体が
-  /// 受け付けられなくなる。反映を待ってから、残った案をまとめて判断する（1件ずつの判断は止めない）。
-  ReviewCandidate? groupBlocker(ReviewCandidate lead) {
-    // 判断を依頼済みの代表の案は、もう判断しないので待つ理由がない。
-    if (lead.status != 'pending' || _request(lead) != null) return null;
-    for (final id in lead.duplicates) {
-      final other = byId(id);
-      if (other != null && _request(other)?.approves == true) return other;
+  /// 採用の依頼が反映を待っている案のうち、名前か別名が、代表の案かまとめる案（[covers]）のどれかと一致する案を返す。
+  /// 採用でプロジェクトができると、名前か別名が一致する残りの案は古い案になり、古い案を含むまとめた依頼は
+  /// 全体が受け付けられなくなる。反映を待ってから判断するか、一致する案を外して判断する（1件ずつの判断は止めない）。
+  ReviewCandidate? groupBlocker(
+    ReviewCandidate lead,
+    List<ReviewCandidate> covers,
+  ) {
+    // まとめる案がない判断は止めない。判断を依頼済みの代表の案は、もう判断しないので待つ理由がない。
+    if (covers.isEmpty || _request(lead) != null) return null;
+    final deciding = [lead, ...covers];
+    for (final other in _approving) {
+      if (deciding.any((c) => _sameName(other, c))) return other;
+    }
+    return null;
+  }
+
+  /// この案の採用を待つ理由になっている、まとめた判断の代表の案。なければnull。
+  ///
+  /// 反映を待っているまとめた判断に含まれる案のどれかと、この案の名前か別名が一致するとき、その判断の代表の案を返す。
+  /// この案の採用が先に反映されると、名前か別名が一致する案が古い案になり、まとめた依頼の全体が受け付けられなくなる。
+  /// 本体は、同じ実行に届いた依頼をIDの順に受け付けるので、後から依頼しても先に反映されることがある（却下は止めない）。
+  ReviewCandidate? approveBlocker(ReviewCandidate candidate) {
+    // 採用でプロジェクトができるのは、プロジェクト案だけ。判断できない案と、判断を依頼済みの案
+    // （まとめた判断に含まれている案を含む）は、もう判断しないので待つ理由がない。
+    if (candidate.kind != 'project' ||
+        !candidate.actionable ||
+        _request(candidate) != null) {
+      return null;
+    }
+    for (final group in _grouped) {
+      if (group.any((c) => _sameName(candidate, c))) return group.first;
     }
     return null;
   }

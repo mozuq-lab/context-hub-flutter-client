@@ -27,7 +27,7 @@ class AttentionItem {
 
   /// この1件に含めて示しているもの（代表の案にまとめたプロジェクト案）の鍵。
   /// 代表の案がこの端末で読めなくなると、まとめた案は1件ずつ並ぶ。そのときに新着として
-  /// 知らせ直さないよう、代表の案と同じ既読の記録を残す。
+  /// 知らせ直さないよう、代表の案を画面で見たときに、まとめた案も見たものとして記録を残す。
   final List<String> memberKeys;
 }
 
@@ -132,11 +132,13 @@ class AttentionState {
       final before = first ? true : seen(item);
       current[item.key] = before || item.page == visible;
     }
-    // 1件に含めて示しているものは、その1件と同じ既読にする（先に1件ずつ見ていたものは既読のまま）。
+    // 1件に含めて示しているものは、その1件と一緒に件数として出たものとして覚える。
+    // 既読にするのは、含めて示している1件を画面で見たときだけ（先に1件ずつ見ていたものは既読のまま）。
+    // 代表の案を見た後で組に加わった案は、まだ見ていないので、1件ずつ並んだときに新着として示す。
     for (final item in items) {
+      final shown = first || item.page == visible;
       for (final key in item.memberKeys) {
-        current[key] =
-            current[item.key]! || (current[key] ?? keys[key] ?? false);
+        current[key] = shown || (current[key] ?? keys[key] ?? false);
       }
     }
     if (current.length > attentionMaxKeys) {
