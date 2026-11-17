@@ -173,6 +173,14 @@
 - 適用停止理由の専用入力・履歴表示は未対応です。判断者・日時・対象snapshotは保持します。
 - MacのDeveloper ID署名・公証・Intel Mac、Play公開は未対応です。検証APKの鍵はGitに含めません。
 
+## 画面の使い勝手（2026-11-17）
+
+- Linux上のFlutter 3.41.5で、静的解析の指摘なし、共通411テスト成功。
+- 記録・候補の詳細を本文の領域に開くようにし、広い画面で詳細を開いたままメニュー・プロジェクト・移動キーから別の画面へ移れること、狭い画面で詳細のメニューボタンから移れること、詳細の「戻る」とAndroidの戻る操作（`handlePopRoute`）が詳細だけを閉じること、詳細の上でメニューを開いているときはメニューだけを閉じること、本文の領域で選択肢の一覧を開いている間はショートカットで入力フォームを開かないことをwidgetテストで確認。保存の途中は、詳細を閉じるほかの画面への移動を止めて案内します。
+- 画面下の案内を続けて出したとき、前の案内が消えるのを待たずに新しい案内へ置き換わることをwidgetテストで確認。
+- 配色を灰色の面と藍色のアクセントに変え、明るい表示と暗い表示でカードの余白・枠、入力欄の形をそろえた。架空サンプルの画面を明るい表示・暗い表示、広い画面・狭い画面でテスト上に描画して見た目を確認（実機の書体・描画ではない）。
+- 未検証: Macのウインドウの位置と大きさの記録・復元（`MainFlutterWindow.swift`の`setFrameUsingName`・`setFrameAutosaveName`）と、初回の大きさ・最小の大きさ。この環境にXcodeがなく、ビルドと実アプリでの確認をしていません。Android実機での詳細の開閉・戻る操作・メニューボタンも未確認です。
+
 ## 再検証
 
 基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.41.5を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。

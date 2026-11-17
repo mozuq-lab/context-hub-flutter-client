@@ -6,6 +6,7 @@ import '../core/guided.dart';
 import '../core/models.dart';
 import '../core/parser.dart' show clip;
 import '../storage/guided_store.dart';
+import 'notice.dart';
 import 'views.dart' show NoticeBox, checkSecretsBeforeSave, timeLabel;
 
 /// 選んで深掘りを開く。入力フォームと同じく、開いている間はVaultを切り替えない。
@@ -17,7 +18,8 @@ Future<void> showGuided(
   if (c.composing || c.repository == null) return;
   c.composing = true;
   try {
-    await Navigator.of(context).push(
+    // 本文の領域ではなく、画面全体に開く（詳細の上から開いても同じ）。
+    await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<void>(
         fullscreenDialog: true,
         builder: (_) => GuidedPage(hub: c, project: project),
@@ -171,11 +173,7 @@ class _GuidedPageState extends State<GuidedPage> {
     if (includeContext && !_materialShown(project)) {
       setState(() {});
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Vaultの資料が更新されました。表示した資料を確かめてから、もう一度「始める」を押してください。'),
-          ),
-        );
+        notice(context, 'Vaultの資料が更新されました。表示した資料を確かめてから、もう一度「始める」を押してください。');
       }
       return;
     }

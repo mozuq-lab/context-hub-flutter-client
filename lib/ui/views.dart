@@ -16,9 +16,10 @@ import 'template_view.dart';
 import 'review_view.dart';
 import 'guided_view.dart';
 import 'shortcuts.dart';
+import 'notice.dart';
+import 'shell_scope.dart';
 
-void notice(BuildContext context, String text) =>
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+export 'notice.dart';
 
 /// 秘密情報らしい文字列があれば、保存の前に知らせる。
 /// 保存する本文（伏せ字にしたもの、またはそのまま）を返す。戻って直すならnull。
@@ -1676,7 +1677,10 @@ class _HubViewState extends State<HubView> {
       context,
       MaterialPageRoute(
         builder: (_) => Scaffold(
-          appBar: AppBar(title: Text('${project.title}の$label')),
+          appBar: AppBar(
+            title: Text('${project.title}の$label'),
+            actions: const [HubMenuButton()],
+          ),
           body: ListView(
             key: Key('$keyName-view'),
             padding: const EdgeInsets.all(24),
@@ -2961,6 +2965,7 @@ class RecordView extends StatelessWidget {
               labeled: true,
             ),
           ),
+        const HubMenuButton(),
       ],
     ),
     body: Center(

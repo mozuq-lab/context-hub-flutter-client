@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../app/controller.dart';
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
+import 'shell_scope.dart';
 import 'views.dart';
 
 String reviewState(ReviewCandidate i) => switch (i.status) {
@@ -373,7 +374,10 @@ class _ReviewDetailState extends State<ReviewDetail> {
         }
       }
       return Scaffold(
-        appBar: AppBar(title: const Text('候補の詳細')),
+        appBar: AppBar(
+          title: const Text('候補の詳細'),
+          actions: const [HubMenuButton()],
+        ),
         body: item == null
             ? const Center(child: Text('候補を再取得してください。一覧へ戻ってください。'))
             : Center(
