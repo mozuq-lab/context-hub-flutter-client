@@ -406,7 +406,7 @@ void main() {
           lead = leadOf(r),
           covers = r.groupMembers(lead),
           service = ReviewService(access, location);
-      // 代表の案そのもの・重複・プロジェクト案でない候補は、まとめられない。
+      // 代表の案そのものと、同じ案の重複は、まとめられない（ほかの条件は proposal_requests_test.dart）。
       await expectLater(
         service.submit(op, lead, 'reject', covers: [lead]),
         throwsFormatException,

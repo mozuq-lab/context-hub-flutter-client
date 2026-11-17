@@ -760,6 +760,14 @@ class HubRepository {
         // 原文が届いていないメモは開いて確かめられないので、届いてから載せる。
         final input = _inputs[id];
         if (input == null || input.kind == 'correction') continue;
+        // 訂正が届いたメモは、一覧が訂正を反映するまで載せない（本体も、訂正の反映を待つメモを載せない）。
+        // 本人の言葉として載っている行は訂正前の一覧のもので、AIの要約の行は訂正の整理が済むまで古い。
+        final unit = _unitBySource[id];
+        if (unit != null &&
+            unit.chain.length > 1 &&
+            (own || unit.receipt?['input_id'] != unit.chain.last.sourceId)) {
+          continue;
+        }
         unassignedMemos.add(
           UnassignedMemo(
             inputId: id,

@@ -6,8 +6,15 @@ import 'repository.dart';
 ///
 /// 似ているアイデアの組と「片付いたかも」は数が増えやすく急がないため、数えない。
 class AttentionItem {
-  AttentionItem(this.kind, String id, this.page)
-    : key = digest('$kind:$id').substring(0, 12);
+  AttentionItem(
+    this.kind,
+    String id,
+    this.page, {
+    Iterable<String> members = const [],
+  }) : key = _keyOf(kind, id),
+       memberKeys = [for (final member in members) _keyOf(kind, member)];
+  static String _keyOf(String kind, String id) =>
+      digest('$kind:$id').substring(0, 12);
 
   /// candidate（候補）・draft（下書き）・conflict（止まったNOW）。
   final String kind;
@@ -17,6 +24,11 @@ class AttentionItem {
 
   /// 端末に残す既読の鍵。IDそのものではなく短いhashにして、設定ファイルの容量を抑える。
   final String key;
+
+  /// この1件に含めて示しているもの（代表の案にまとめたプロジェクト案）の鍵。
+  /// 代表の案がこの端末で読めなくなると、まとめた案は1件ずつ並ぶ。そのときに新着として
+  /// 知らせ直さないよう、代表の案と同じ既読の記録を残す。
+  final List<String> memberKeys;
 }
 
 /// 通知と件数の表示に使う種類の順と呼び名。
@@ -34,7 +46,14 @@ List<AttentionItem> attentionItems(HubRepository repo) {
   // 同じ対象を指すプロジェクト案は、代表の案の1件として数える（一覧と同じ数え方）。
   for (final c in repo.review.pendingRows) {
     if (repo.review.requestIdFor(c.id) != null) continue;
-    items.add(AttentionItem('candidate', c.id, 'review'));
+    items.add(
+      AttentionItem(
+        'candidate',
+        c.id,
+        'review',
+        members: [for (final m in repo.review.groupMembers(c)) m.id],
+      ),
+    );
   }
   for (final p in repo.orderedProjects) {
     for (final d in p.drafts) {
@@ -113,6 +132,13 @@ class AttentionState {
       final before = first ? true : seen(item);
       current[item.key] = before || item.page == visible;
     }
+    // 1件に含めて示しているものは、その1件と同じ既読にする（先に1件ずつ見ていたものは既読のまま）。
+    for (final item in items) {
+      for (final key in item.memberKeys) {
+        current[key] =
+            current[item.key]! || (current[key] ?? keys[key] ?? false);
+      }
+    }
     if (current.length > attentionMaxKeys) {
       final kept = current.keys.toList()..sort();
       return AttentionState(
@@ -145,7 +171,9 @@ class AttentionState {
         keys: {
           ...keys,
           for (final i in items)
-            if (i.page == page && keys.containsKey(i.key)) i.key: true,
+            if (i.page == page)
+              for (final key in [i.key, ...i.memberKeys])
+                if (keys.containsKey(key)) key: true,
         },
         full: full,
       );
