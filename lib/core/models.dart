@@ -633,6 +633,35 @@ class NewProjectRequest {
   }
 }
 
+/// 本体が書く、どのプロジェクトにも結び付いていないメモのタスク候補とAIの提案
+/// （90_system/unassigned-actions.json）。表示だけで、完了の報告や期日の対象にはならない。
+class UnassignedMemo {
+  const UnassignedMemo({
+    required this.inputId,
+    required this.at,
+    required this.text,
+    required this.ownWords,
+    required this.task,
+    required this.suggestions,
+  });
+
+  /// 元のメモ。
+  final String inputId;
+  final DateTime at;
+
+  /// 訂正のない短いメモは本人の言葉、それ以外はAIの一行要約（未検証）。
+  final String text;
+
+  /// [text]が本人の言葉か。falseならAIの一行要約（未検証）。
+  final bool ownWords;
+
+  /// AIが「タスク」と分類したメモか（未検証）。
+  final bool task;
+
+  /// AIが挙げた次の一手の提案（未検証）。
+  final List<String> suggestions;
+}
+
 /// 本体が書く、似ているアイデアの未確認の組（90_system/idea-index.json）。
 class IdeaCandidate {
   const IdeaCandidate(this.a, this.b, this.score, this.hashA, this.hashB);

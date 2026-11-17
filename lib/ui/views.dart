@@ -180,6 +180,13 @@ class _HubViewState extends State<HubView> {
 
   /// 「次の一手」画面で表示する欄（next または open）。
   String nextSection = 'next';
+
+  /// 「次の一手」画面のプロジェクト未定のメモは[unassignedPageSize]件ずつ並べ、「さらに表示」で残りを出す。
+  static const unassignedPageSize = 10;
+  int unassignedShown = unassignedPageSize;
+
+  /// ホームに並べる、プロジェクト未定のメモと確認待ちのプロジェクト案の数。
+  static const homeUnassigned = 3, homeProposals = 3;
   HubController get c => widget.controller;
   HubRepository get repo => c.repository!;
 
@@ -194,6 +201,7 @@ class _HubViewState extends State<HubView> {
     super.didUpdateWidget(old);
     if (old.page != widget.page) {
       shown = pageSize;
+      unassignedShown = unassignedPageSize;
       _visit();
     }
   }
@@ -454,48 +462,61 @@ class _HubViewState extends State<HubView> {
           ),
         ),
       );
-      children.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 20),
-          child: Card(
-            child: ListTile(
-              key: const Key('home-review'),
-              leading: const Icon(Icons.fact_check_outlined),
-              title: Text('確認待ち ${c.review!.pending.length}件'),
-              subtitle: Text(
-                '要確認 ${c.review!.attention.length}件 · 採用前に内容と元のメモを確認',
+      if (repo.unassignedMemos.isNotEmpty) {
+        // プロジェクトに結び付いていないメモの行動は、どのプロジェクトの次の一手にも出ない。ここで拾う。
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Card(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ListTile(
+                    key: const Key('home-unassigned'),
+                    leading: const Icon(Icons.lightbulb_outline),
+                    title: Text('プロジェクト未定の次の一手 メモ${repo.unassignedTotal}件'),
+                    subtitle: const Text(
+                      'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証） · 完了の報告はできません',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      nextSection = 'next';
+                      widget.onNavigate('next');
+                    },
+                  ),
+                  for (final memo in repo.unassignedMemos.take(homeUnassigned))
+                    ListTile(
+                      key: Key('home-unassigned-${memo.inputId}'),
+                      dense: true,
+                      contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
+                      title: Text(
+                        memo.text,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        [
+                          hubToday(memo.at),
+                          memo.ownWords ? '本人のメモ' : 'AIの要約・未検証',
+                          if (memo.task) 'AIがタスクと分類',
+                          if (memo.suggestions.isNotEmpty)
+                            'AI提案: ${memo.suggestions.first}',
+                        ].join(' · '),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () {
+                        final record = repo.inputRecord(memo.inputId);
+                        if (record != null) open(record.id);
+                      },
+                    ),
+                ],
               ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => widget.onNavigate('review'),
             ),
           ),
-        ),
-      );
-      final now = DateTime.now(),
-          stale = repo.projects.values.where((p) => p.stale(now)).length;
-      children.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 20),
-          child: Card(
-            child: ListTile(
-              key: const Key('home-digest'),
-              leading: const Icon(Icons.event_note_outlined),
-              title: Text(
-                repo.digestDocument == null
-                    ? 'ふりかえり（未生成）'
-                    : '直近${repo.digestDocument!.periodDays ?? 7}日のふりかえり',
-              ),
-              subtitle: Text(
-                stale == 0
-                    ? '動いたプロジェクトと現在地の変化を確認'
-                    : '停滞しているプロジェクト $stale件 · 再開か休止・完了かを判断',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => widget.onNavigate('digest'),
-            ),
-          ),
-        ),
-      );
+        );
+      }
+      final now = DateTime.now();
       if (repo.projects.isEmpty) {
         children.add(const Text('プロジェクトはまだありません。メモはproject未指定でも追加できます。'));
       }
@@ -672,10 +693,89 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
-      children.add(const SizedBox(height: 28));
+      // 確認待ちは、同じ対象を指すプロジェクト案を1件と数える。
+      // プロジェクト案は、根拠のメモが多いものから数件をここに出す（依頼を保存済みのものは除く）。
+      final review = c.review!,
+          proposals = [
+            for (final (index, item) in review.pendingRows.indexed)
+              if (item.kind == 'project' &&
+                  review.requestIdFor(item.id) == null)
+                (index, item, review.groupMembers(item).length + 1),
+          ]..sort((a, b) => b.$3 != a.$3 ? b.$3 - a.$3 : a.$1.compareTo(b.$1));
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 20),
+          child: Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ListTile(
+                  key: const Key('home-review'),
+                  leading: const Icon(Icons.fact_check_outlined),
+                  title: Text('確認待ち ${review.pendingRows.length}件'),
+                  subtitle: Text(
+                    '要確認 ${review.attention.length}件 · 採用前に内容と元のメモを確認',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => widget.onNavigate('review'),
+                ),
+                for (final (_, item, memos) in proposals.take(homeProposals))
+                  ListTile(
+                    key: Key('home-proposal-${item.id}'),
+                    dense: true,
+                    contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
+                    title: Text(
+                      '「${item.title}」をプロジェクトにしますか？',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text('AIのプロジェクト案・未承認 · 根拠のメモ$memos件'),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ReviewDetail(
+                          controller: c,
+                          id: item.id,
+                          identity: c.location!.identity,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+      final stale = repo.projects.values.where((p) => p.stale(now)).length;
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Card(
+            child: ListTile(
+              key: const Key('home-digest'),
+              leading: const Icon(Icons.event_note_outlined),
+              title: Text(
+                repo.digestDocument == null
+                    ? 'ふりかえり（未生成）'
+                    : '直近${repo.digestDocument!.periodDays ?? 7}日のふりかえり',
+              ),
+              subtitle: Text(
+                stale == 0
+                    ? '動いたプロジェクトと現在地の変化を確認'
+                    : '停滞しているプロジェクト $stale件 · 再開か休止・完了かを判断',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => widget.onNavigate('digest'),
+            ),
+          ),
+        ),
+      );
+      children.add(const SizedBox(height: 8));
       children.add(
         const Text(
           '最近のメモ',
+          key: Key('home-recent'),
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
       );
@@ -690,6 +790,35 @@ class _HubViewState extends State<HubView> {
               ),
             ),
       );
+      // 受付と整理の状況は1行にまとめ、詳細は「受付状況」で見る。
+      if (repo.intake.isNotEmpty || c.pending.isNotEmpty) {
+        final waiting = repo.intake.where((s) => s.state == 'waiting').length,
+            failing = repo.intake
+                .where(
+                  (s) => const [
+                    'failed',
+                    'rejected',
+                    'conflict',
+                  ].contains(s.state),
+                )
+                .length;
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: InkWell(
+              key: const Key('home-status'),
+              onTap: () => widget.onNavigate('intake'),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  '受付状況: Mini受領待ち $waiting件 · 失敗・競合 $failing件 · 保存確認待ち ${c.pending.length}件（詳細は「受付状況」）',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
     } else if (page == 'search') {
       children.addAll(searchView());
     } else if (page == 'basket') {
@@ -1937,7 +2066,7 @@ class _HubViewState extends State<HubView> {
       title(
         'NEXT ACTIONS',
         '次の一手',
-        '進行中のプロジェクトの「次の一手」と「未解決」を、ピン留めしたプロジェクトから順に、残りは最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '進行中のプロジェクトの「次の一手」と「未解決」を、ピン留めしたプロジェクトから順に、残りは最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。どのプロジェクトにも結び付いていないメモのタスク候補とAIの提案は、「次の一手」の後ろの「プロジェクト未定」に並べます。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
       Align(
         alignment: Alignment.centerLeft,
@@ -1954,12 +2083,18 @@ class _HubViewState extends State<HubView> {
       ),
       const SizedBox(height: 20),
       if (projects.isEmpty)
-        const Text('進行中のプロジェクトはありません。')
+        const Padding(
+          padding: EdgeInsets.only(bottom: 24),
+          child: Text('進行中のプロジェクトはありません。'),
+        )
       else if (count[section] == 0)
-        Text(
-          section == 'next'
-              ? '進行中のプロジェクトに次の一手はありません。'
-              : '進行中のプロジェクトに未解決はありません。',
+        Padding(
+          padding: const EdgeInsets.only(bottom: 24),
+          child: Text(
+            section == 'next'
+                ? '進行中のプロジェクトに次の一手はありません。'
+                : '進行中のプロジェクトに未解決はありません。',
+          ),
         ),
       for (final bucket in [
         ScheduleBucket.overdue,
@@ -2038,6 +2173,8 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
+      if (section == 'next' && repo.unassignedMemos.isNotEmpty)
+        ...unassignedGroup(),
       if (resting.isNotEmpty)
         Card(
           child: ExpansionTile(
@@ -2062,6 +2199,96 @@ class _HubViewState extends State<HubView> {
           ),
         ),
     ];
+  }
+
+  /// 「次の一手」画面の「プロジェクト未定」。どのプロジェクトにも結び付いていないメモの、
+  /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。
+  List<Widget> unassignedGroup() {
+    final memos = repo.unassignedMemos,
+        listed = memos.take(unassignedShown).toList(),
+        rest = repo.unassignedTotal - memos.length;
+    return [
+      Text(
+        'プロジェクト未定（メモ${repo.unassignedTotal}件）',
+        key: const Key('next-unassigned'),
+        style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 4),
+      const Text(
+        'どのプロジェクトにも結び付いていないメモから、AIが「タスク」と分類したものと、AIが挙げた次の一手の提案を新しい順に集めています。AI生成・未検証で、完了の報告や期日の対象にはなりません。メモがプロジェクトに結び付くと、そのプロジェクトの次の一手へ移ります。',
+        style: TextStyle(fontSize: 12, height: 1.6),
+      ),
+      const SizedBox(height: 8),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [for (final memo in listed) unassignedEntry(memo)],
+          ),
+        ),
+      ),
+      if (memos.length > listed.length)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Center(
+            child: OutlinedButton(
+              key: const Key('unassigned-more'),
+              onPressed: () =>
+                  setState(() => unassignedShown += unassignedPageSize),
+              child: Text('さらに表示（残り${memos.length - listed.length}件）'),
+            ),
+          ),
+        )
+      else if (rest > 0)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(
+            'ほか$rest件は、ここに載せていない古いメモか、原文がこの端末に届いていないメモ、訂正の反映を待っているメモです。',
+            key: const Key('unassigned-rest'),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ),
+      const SizedBox(height: 24),
+    ];
+  }
+
+  /// プロジェクト未定のメモ1件。完了の報告や期日の対象ではないので、できる操作は元のメモを開くことだけ。
+  Widget unassignedEntry(UnassignedMemo memo) {
+    final record = repo.inputRecord(memo.inputId);
+    return Padding(
+      key: Key('unassigned-${memo.inputId}'),
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${hubToday(memo.at)} · ${memo.ownWords ? '本人のメモ' : 'AIの要約・未検証'}${memo.task ? ' · AIがタスクと分類' : ''}',
+            style: const TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            memo.text,
+            style: const TextStyle(fontWeight: FontWeight.w600, height: 1.5),
+          ),
+          for (final suggestion in memo.suggestions)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 12),
+              child: Text(
+                'AI提案: $suggestion',
+                style: const TextStyle(height: 1.5),
+              ),
+            ),
+          if (record != null)
+            TextButton.icon(
+              key: Key('unassigned-open-${memo.inputId}'),
+              onPressed: () => open(record.id),
+              icon: const Icon(Icons.article_outlined, size: 15),
+              label: const Text('元のメモを開く'),
+            ),
+        ],
+      ),
+    );
   }
 
   List<Widget> projectView(HubProject project) {

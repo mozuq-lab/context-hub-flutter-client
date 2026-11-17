@@ -9,8 +9,8 @@ import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
 const repo=resolve(import.meta.dirname,'..');
-const fixtures=['assets/sample.json','assets/review.json','assets/scoped-policy.json','test/fixtures/numeric-policy.json'];
-const generators=['scripts/prepare_policy_fixtures.mjs','scripts/prepare_numeric_policy_fixture.mjs'];
+const fixtures=['assets/sample.json','assets/review.json','assets/scoped-policy.json','test/fixtures/numeric-policy.json','test/fixtures/unassigned-and-proposals.json'];
+const generators=['scripts/prepare_policy_fixtures.mjs','scripts/prepare_numeric_policy_fixture.mjs','scripts/prepare_inbox_fixture.mjs'];
 
 // 日時・ULID・hashは生成ごとに変わるため置換する。hashを先に置換し、16進の一部を小文字ULIDと誤認しない。
 const volatile=s=>s.replace(/[a-f0-9]{64}/g,'<HASH>').replace(/[0-9A-HJKMNP-TV-Z]{26}/g,'<ULID>').replace(/[0-9a-hjkmnp-tv-z]{26}/g,'<ulid>')
@@ -57,7 +57,7 @@ try{
   }
   if(problems.length){
     console.error(`fixtureが固定参照の本体の出力形式と一致しません（${problems.length}件）。\n`+problems.map(p=>`  - ${p}`).join('\n')+
-      '\n本体の更新に合わせて node scripts/prepare_policy_fixtures.mjs と node scripts/prepare_numeric_policy_fixture.mjs で再生成し、Dart側の読取を確認してください。');
+      '\n本体の更新に合わせて '+generators.map(g=>`node ${g}`).join('、')+' で再生成し、Dart側の読取を確認してください。');
     process.exitCode=1;
   }else console.log(`fixtureの形式は固定参照の本体と一致: ${fixtures.length}件`);
 }finally{await rm(root,{recursive:true,force:true});}

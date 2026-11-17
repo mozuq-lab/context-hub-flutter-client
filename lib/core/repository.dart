@@ -70,6 +70,13 @@ class HubRepository {
   /// 似ているアイデアの索引を本体が作った日時。読めなければnull。
   DateTime? _ideaIndexAt;
 
+  /// どのプロジェクトにも結び付いていないメモのタスク候補とAIの提案（新しい順）。
+  /// 本体が一覧を書いていない・読めないときは空。
+  final List<UnassignedMemo> unassignedMemos = [];
+
+  /// 対象のメモの総数。[unassignedMemos]は新しい順に本体の上限までで、原文が届いたものだけ。
+  int unassignedTotal = 0;
+
   /// アイデアの組（ideaPairKey）→ 反映待ちの判断の依頼のREQ ID。
   final Map<String, String> _outstandingIdeaLinks = {};
 
@@ -240,6 +247,12 @@ class HubRepository {
         input.status = receipt['status'];
       }
     }
+    // 訂正が届いているメモ。短いメモでも、訂正を重ねた解釈（AIの要約）を題にする。
+    final corrected = {
+      for (final input in _inputs.values)
+        if (input.metadata['corrects_input_id'] case final String target)
+          target,
+    };
     for (final entry in _files.entries) {
       final path = entry.key;
       if (!validPath(path)) continue;
@@ -281,7 +294,9 @@ class HubRepository {
           final record = HubRecord(
             sourceId: m['id'] is String ? m['id'] : path,
             path: path,
-            title: readableTitle(doc.body),
+            title: path.startsWith('20_ideas/')
+                ? _ownIdeaTitle(doc.body, refs, corrected)
+                : readableTitle(doc.body),
             body: doc.body,
             kind: path.startsWith('20_ideas/') ? 'idea' : 'knowledge',
             origin: 'ai-generated',
@@ -320,9 +335,23 @@ class HubRepository {
     _readHistories();
     _readGitDrafts();
     _readIdeaIndex();
+    _readUnassignedActions();
     _readIntake();
     _readDigest();
     _readBackupChecks();
+  }
+
+  /// アイデアの題。訂正のない短いメモ1件から作られたアイデアは、AIの言い換えではなく本人の言葉を題にする。
+  /// 本体は新しく整理する短いメモの要約に本人の言葉を使う。それより前に整理されたアイデアも同じ見え方にする。
+  String _ownIdeaTitle(String body, List<String> refs, Set<String> corrected) {
+    if (refs.length == 1 && !corrected.contains(refs.single)) {
+      final input = _inputs[refs.single];
+      if (input != null && input.kind == 'memo') {
+        final own = shortMemoText(input.body);
+        if (own != null) return own;
+      }
+    }
+    return readableTitle(body);
   }
 
   /// バックアップの確認結果を読む。最後の確認と、確かめた復元点（復元できたいちばん新しいバックアップ）だけを使う。
@@ -684,6 +713,77 @@ class HubRepository {
     }
     for (final p in projects.values) {
       p.drafts.sort((a, b) => a.id.compareTo(b.id));
+    }
+  }
+
+  /// 本体が書く「プロジェクト未定の次の一手」の一覧。
+  static const unassignedActionsPath = '90_system/unassigned-actions.json';
+
+  /// 本体が書く「プロジェクト未定の次の一手」の一覧を読む。原文が届いているメモだけを使う。
+  void _readUnassignedActions() {
+    const path = unassignedActionsPath;
+    final raw = snapshot.files[path];
+    if (raw == null) return;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      final memos = j['memos'], total = j['total_memos'];
+      if (j['schema_version'] != 1 ||
+          timestamp(j['generated_at']) == null ||
+          memos is! List ||
+          memos.length > 200 ||
+          total is! int ||
+          total < memos.length) {
+        throw const FormatException();
+      }
+      final seen = <String>{};
+      for (final m in memos) {
+        if (m is! Map) throw const FormatException();
+        final id = m['input_id'],
+            text = m['text'],
+            own = m['own_words'],
+            task = m['task'],
+            suggestions = m['suggestions'],
+            at = timestamp(m['occurred_at']);
+        if (id is! String ||
+            !inputIdPattern.hasMatch(id) ||
+            !seen.add(id) ||
+            text is! String ||
+            text.trim().isEmpty ||
+            own is! bool ||
+            task is! bool ||
+            at == null ||
+            suggestions is! List ||
+            suggestions.length > 10 ||
+            !suggestions.every((s) => s is String && s.trim().isNotEmpty)) {
+          throw const FormatException();
+        }
+        // 原文が届いていないメモは開いて確かめられないので、届いてから載せる。
+        final input = _inputs[id];
+        if (input == null || input.kind == 'correction') continue;
+        // 訂正が届いたメモは、一覧が訂正を反映するまで載せない（本体も、訂正の反映を待つメモを載せない）。
+        // 本人の言葉として載っている行は訂正前の一覧のもので、AIの要約の行は訂正の整理が済むまで古い。
+        final unit = _unitBySource[id];
+        if (unit != null &&
+            unit.chain.length > 1 &&
+            (own || unit.receipt?['input_id'] != unit.chain.last.sourceId)) {
+          continue;
+        }
+        unassignedMemos.add(
+          UnassignedMemo(
+            inputId: id,
+            at: at,
+            text: text.trim(),
+            ownWords: own,
+            task: task,
+            suggestions: [for (final s in suggestions) (s as String).trim()],
+          ),
+        );
+      }
+      unassignedTotal = total;
+    } catch (_) {
+      unassignedMemos.clear();
+      unassignedTotal = 0;
+      _problem(path);
     }
   }
 
@@ -1059,12 +1159,17 @@ class HubRepository {
 
   /// 別AIへ渡す資料を止める注意があるか。[scope]は資料に入るプロジェクト（nullなら全体）。
   /// 本人のInput（取り込み前の依頼）とアイデアの問題、[scope]に入らないプロジェクトのフォルダーの
-  /// 問題、同期の競合コピーは、資料の内容に関係しないので止めない。メモ・処理記録・知識など、
-  /// どのプロジェクトに関係するか分からないものの問題は、これまでどおり止める。
+  /// 問題、同期の競合コピー、表示だけに使うプロジェクト未定の一覧の問題は、資料の内容に関係しないので
+  /// 止めない。メモ・処理記録・知識など、どのプロジェクトに関係するか分からないものの問題は、
+  /// これまでどおり止める。
   bool copyBlocked([Set<String>? scope]) {
     if (_unscopedProblem) return true;
     for (final path in problemPaths) {
-      if (path.startsWith('Input/') || path.startsWith('20_ideas/')) continue;
+      if (path.startsWith('Input/') ||
+          path.startsWith('20_ideas/') ||
+          path == unassignedActionsPath) {
+        continue;
+      }
       final folder = RegExp(r'^10_projects/([^/]+)/').firstMatch(path)?[1];
       if (folder != null &&
           scope != null &&
@@ -1731,6 +1836,28 @@ class HubRepository {
                       ).hasMatch(m['confirmation_token'])))) {
             throw const FormatException();
           }
+          // 同じ対象を指すプロジェクト案をまとめて判断する依頼は、案のIDと確認した内容のhashを同じ順で持つ。
+          final covers = m['cover_ids'], coverHashes = m['cover_hashes'];
+          if (covers != null || coverHashes != null) {
+            if (!project ||
+                covers is! List ||
+                coverHashes is! List ||
+                covers.isEmpty ||
+                covers.length > maxProposalCovers ||
+                covers.length != coverHashes.length ||
+                covers.toSet().length != covers.length ||
+                covers.contains(m['candidate_id']) ||
+                !covers.every(
+                  (c) =>
+                      c is String &&
+                      RegExp(r'^PCAN-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(c),
+                ) ||
+                !coverHashes.every(
+                  (h) => h is String && RegExp(r'^[a-f0-9]{64}$').hasMatch(h),
+                )) {
+              throw const FormatException();
+            }
+          }
         }
         final item = IntakeStatus(
           id: id,
@@ -1762,7 +1889,7 @@ class HubRepository {
               : retiring
               ? '適用停止依頼: ${m['target_id']}'
               : decision
-              ? '${(m['operation'] as String).endsWith('approve') ? '採用' : '却下'}依頼: ${m['candidate_id']}'
+              ? '${(m['operation'] as String).endsWith('approve') ? '採用' : '却下'}依頼: ${m['candidate_id']}${m['cover_ids'] is List ? '（同じ対象の案${(m['cover_ids'] as List).length}件をまとめて判断）' : ''}'
               : correction
               ? '訂正: ${readableTitle(doc.body)}'
               : readableTitle(doc.body),

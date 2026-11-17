@@ -303,11 +303,15 @@ class CaptureService {
       text,
     );
   });
+
+  /// 候補の採用・却下を依頼する。[covers]は、同じ対象を指す案として同じ判断にまとめるプロジェクト案
+  /// （本人が確認の画面で内容を見たもの）。本体が同じ組の確認待ちの案かを検証する。
   Future<CaptureResult> saveReview(
     String operationId,
     ReviewCandidate candidate,
     String action, {
     AdoptionTarget? target,
+    List<ReviewCandidate> covers = const [],
   }) => _serial(() async {
     if (!_uuid.hasMatch(operationId) ||
         !candidate.actionable ||
@@ -316,6 +320,20 @@ class CaptureService {
       throw const FormatException('候補と操作内容を確認してください。');
     }
     final project = candidate.kind == 'project';
+    if (covers.isNotEmpty &&
+        (!project ||
+            covers.length > maxProposalCovers ||
+            {candidate.id, for (final c in covers) c.id}.length !=
+                covers.length + 1 ||
+            covers.any(
+              (c) =>
+                  !c.actionable ||
+                  c.kind != 'project' ||
+                  !RegExp(r'^PCAN-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(c.id) ||
+                  !RegExp(r'^[a-f0-9]{64}$').hasMatch(c.candidateHash),
+            ))) {
+      throw const FormatException('まとめて判断する案を確認してください。');
+    }
     if (!project && action == 'approve' && target == null) {
       throw const FormatException('採用先を選択してください。');
     }
@@ -343,6 +361,9 @@ class CaptureService {
       'candidate_hash': candidate.candidateHash,
       'confirmed': true,
       if (project) 'confirmation_token': candidate.confirmationToken,
+      if (covers.isNotEmpty) 'cover_ids': [for (final c in covers) c.id],
+      if (covers.isNotEmpty)
+        'cover_hashes': [for (final c in covers) c.candidateHash],
       if (!project && action == 'approve') ...target!.fields,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

@@ -42,6 +42,9 @@ class AdoptionTarget {
   String get label => scope == 'global' ? '全ての作業に共通' : 'プロジェクト: $projectId';
 }
 
+/// 1回の判断でまとめられるプロジェクト案の上限（本体のPROJECT_COVERS_MAXと同じ）。
+const maxProposalCovers = 20;
+
 class ReviewCandidate {
   ReviewCandidate(
     this.data, {
@@ -95,6 +98,16 @@ class ReviewCandidate {
   List<String> get keywords =>
       List<String>.from(data['keywords'] as List? ?? const []);
   List<String> get inputIds => List<String>.from(data['inputIds'] as List);
+
+  /// プロジェクト案だけ。同じ対象を指す確認待ちの案をまとめたとき、まとめられた側の案に付く代表の案のID。
+  String? get duplicateOf => data['duplicateOf'] as String?;
+
+  /// プロジェクト案だけ。代表の案に付く、まとめた案のID。判断済みの案では、同じ判断としてまとめた案のID。
+  List<String> get duplicates =>
+      List<String>.from(data['duplicates'] as List? ?? const []);
+
+  /// プロジェクト案だけ。代表の案とまとめて判断された案に付く、代表の案のID。
+  String? get coveredBy => data['coveredBy'] as String?;
   Map<String, dynamic> get dependencies =>
       Map<String, dynamic>.from(data['dependencies'] as Map);
   bool get actionable => status == 'pending';
@@ -322,6 +335,29 @@ class ReviewRepository {
         ).hasMatch(d['supersedes'] as String)) {
       throw const FormatException();
     }
+    // 同じ対象を指すプロジェクト案のまとめ。代表の案（duplicates）とまとめられた案（duplicateOf）は両立しない。
+    final proposal = RegExp(r'^PCAN-[0-9A-HJKMNP-TV-Z]{26}$');
+    for (final key in ['duplicateOf', 'coveredBy']) {
+      final other = d[key];
+      if (other != null &&
+          (kind != 'project' ||
+              other is! String ||
+              !proposal.hasMatch(other) ||
+              other == id)) {
+        throw const FormatException();
+      }
+    }
+    if (d['duplicates'] != null) {
+      final others = List<String>.from(d['duplicates'] as List);
+      if (kind != 'project' ||
+          d['duplicateOf'] != null ||
+          others.isEmpty ||
+          others.length > 5000 ||
+          others.toSet().length != others.length ||
+          others.any((o) => !proposal.hasMatch(o) || o == id)) {
+        throw const FormatException();
+      }
+    }
     if (d['targetPath'] != null && !validPath(d['targetPath'] as String)) {
       throw const FormatException();
     }
@@ -400,41 +436,312 @@ class ReviewRepository {
   final List<ReviewCandidate> items = [];
   final List<String> warnings = [];
   final VaultSnapshot snapshot;
-  String? requestIdFor(String candidateId) {
+
+  /// 候補のID → 候補。読み込んだ後は変わらないので、1回だけ作る。
+  late final Map<String, ReviewCandidate> _byId = {
+    for (final i in items) i.id: i,
+  };
+
+  /// 保存済みの採用・却下の依頼（Input）。snapshotは変わらないので、1回だけ読む。
+  late final List<_DecisionRequest> _requests = [
     for (final e in snapshot.files.entries.where(
       (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
-    )) {
-      try {
-        final m = parseMarkdown(e.value).meta, id = m['request_id'];
-        if (m['candidate_id'] == candidateId &&
-            m['candidate_hash'] == byId(candidateId)?.candidateHash &&
-            id is String &&
-            requestIdPattern.hasMatch(id) &&
-            e.key == 'Input/$id.md' &&
-            m['confirmed'] == true &&
-            [
-              'knowledge-approve',
-              'knowledge-reject',
-              'project-approve',
-              'project-reject',
-            ].contains(m['operation'])) {
-          return id;
-        }
-      } catch (_) {
-        /* 不正な受付は既存の受付画面で報告する。 */
+    ))
+      ?_DecisionRequest.read(e.key, e.value, snapshot),
+  ];
+
+  /// 候補のID → その候補そのものを対象にした依頼。
+  late final Map<Object?, List<_DecisionRequest>> _own = () {
+    final map = <Object?, List<_DecisionRequest>>{};
+    for (final r in _requests) {
+      (map[r.candidateId] ??= []).add(r);
+    }
+    return map;
+  }();
+
+  /// 候補のID → その候補を、代表の案とまとめて判断する依頼（cover_ids）。
+  late final Map<Object?, List<_DecisionRequest>> _covering = () {
+    final map = <Object?, List<_DecisionRequest>>{};
+    for (final r in _requests) {
+      for (final id in r.covers.keys) {
+        (map[id] ??= []).add(r);
       }
+    }
+    return map;
+  }();
+
+  /// この候補の、いまの内容を確認して保存した依頼。候補そのものを対象にした依頼を先に、
+  /// 代表の案とまとめて判断する依頼を後に返す。
+  Iterable<_DecisionRequest> _requestsFor(ReviewCandidate c) => [
+    ...?_own[c.id]?.where((r) => r.candidateHash == c.candidateHash),
+    ...?_covering[c.id]?.where((r) => r.covers[c.id] == c.candidateHash),
+  ];
+
+  /// この候補そのものを対象にした、判断を待っている依頼。まとめて判断する依頼に含まれているだけの案は対象外。
+  _DecisionRequest? _ownRequest(ReviewCandidate c) => _own[c.id]
+      ?.where((r) => !r.failed && r.candidateHash == c.candidateHash)
+      .firstOrNull;
+
+  /// この候補の、判断を待っている依頼。本体が受け付けられなかった依頼は含めない。
+  _DecisionRequest? _request(ReviewCandidate c) =>
+      _requestsFor(c).where((r) => !r.failed).firstOrNull;
+
+  /// この候補の採用・却下の依頼が保存済みで、判断を待っているなら、そのREQ ID。
+  /// 代表の案とまとめて判断する依頼（cover_ids）に含まれている案も、依頼済みとして扱う。
+  /// 本体が受け付けられなかった依頼は、依頼済みとして扱わない（もう一度判断できる）。
+  String? requestIdFor(String candidateId) {
+    final c = byId(candidateId);
+    return c == null ? null : _request(c)?.id;
+  }
+
+  /// 本体が受け付けられなかった、この候補の採用・却下の依頼のREQ ID（ID順）。
+  /// 判断を待っている依頼があるとき（依頼し直した後）は示さない。
+  List<String> failedRequestIdsFor(String candidateId) {
+    final c = byId(candidateId);
+    if (c == null || _request(c) != null) return const [];
+    return {
+      for (final r in _requestsFor(c))
+        if (r.failed) r.id,
+    }.toList()..sort();
+  }
+
+  /// 本体が受け付けられなかった、この候補の採用・却下の依頼のREQ ID。なければnull。
+  String? failedRequestIdFor(String candidateId) =>
+      failedRequestIdsFor(candidateId).firstOrNull;
+
+  List<ReviewCandidate> get pending =>
+      items.where((i) => i.status == 'pending').toList();
+
+  /// 代表の案にまとめる、同じ対象を指す確認待ちの案（本体の一覧の順）。
+  ///
+  /// 代表の案もまとめる案も、この端末で確認待ちとして読めているものだけをまとめる。
+  /// 判断を依頼済みの案（その案だけの依頼も、ほかの案とまとめた依頼も）はまとめない。
+  /// 代表の案の判断を依頼済みのときは、その依頼に含めた案だけをまとめる（含めなかった案は、1件ずつ判断を待つ）。
+  /// 代表の案がほかの案の依頼に含まれているときは、残りの案を依頼済みの行に隠さないよう、まとめない。
+  /// 1回の判断でまとめられる上限（[maxProposalCovers]）を超える分も、1件ずつ示す。
+  List<ReviewCandidate> groupMembers(ReviewCandidate lead) =>
+      identical(_byId[lead.id], lead)
+      ? _groups[lead.id] ??= _groupMembers(lead)
+      : _groupMembers(lead);
+  final Map<String, List<ReviewCandidate>> _groups = {};
+  List<ReviewCandidate> _groupMembers(ReviewCandidate lead) {
+    if (lead.status != 'pending' || lead.duplicates.isEmpty) return const [];
+    final request = _ownRequest(lead), members = <ReviewCandidate>[];
+    if (request == null && _request(lead) != null) return const [];
+    for (final id in lead.duplicates) {
+      final member = byId(id);
+      if (member != null &&
+          member.status == 'pending' &&
+          member.duplicateOf == lead.id &&
+          (request == null
+              ? _request(member) == null
+              : _ownRequest(member) == null &&
+                    request.covers[member.id] == member.candidateHash)) {
+        members.add(member);
+        if (members.length == maxProposalCovers) break;
+      }
+    }
+    return List.unmodifiable(members);
+  }
+
+  /// この案をまとめている、確認待ちの代表の案。まとめられていなければnull。
+  ReviewCandidate? groupLead(ReviewCandidate member) {
+    final id = member.duplicateOf;
+    if (id == null) return null;
+    final lead = byId(id);
+    return lead != null && groupMembers(lead).any((m) => m.id == member.id)
+        ? lead
+        : null;
+  }
+
+  /// 名前と別名を、本体が名前の重なりを比べるときと同じ規則（NFKC・前後の空白の除去・小文字化）で正規化したもの。
+  Set<String> _namesOf(ReviewCandidate c) => identical(_byId[c.id], c)
+      ? _names[c.id] ??= _normalized(c)
+      : _normalized(c);
+  final Map<String, Set<String>> _names = {};
+  static Set<String> _normalized(ReviewCandidate c) => {
+    for (final name in [c.title, ...c.aliases]) normalizeProjectName(name),
+  }..remove('');
+
+  /// 名前か別名が一致するか。本体は、採用でできたプロジェクトと名前か別名が一致する残りの案を、古い案として扱う。
+  bool _sameName(ReviewCandidate a, ReviewCandidate b) =>
+      _namesOf(a).any(_namesOf(b).contains);
+
+  /// 採用の依頼が反映を待っている、一覧では確認待ちのプロジェクト案（その案の名前と別名でプロジェクトができる）。
+  /// ほかの案の採用にまとめられているだけの案は、名前がプロジェクトに加わらないので含めない。
+  ///
+  /// 一覧（index.json）に書かれた状態で見る。採用の判断記録だけが先に届いた案や、根拠が未同期の案は、
+  /// この端末では操作できない案（unavailable）になる。それでも一覧が作り直されるまでは、名前か別名が同じ
+  /// 残りの案が確認待ちとして並び続けるので、待つ理由から外さない。
+  late final List<ReviewCandidate> _approving = [
+    for (final c in items)
+      if (c.kind == 'project' &&
+          c.data['status'] == 'pending' &&
+          (_own[c.id]?.any(
+                (r) =>
+                    !r.failed &&
+                    r.approves &&
+                    r.candidateHash == c.candidateHash,
+              ) ??
+              false))
+        c,
+  ];
+
+  /// 一覧では確認待ちで、依頼が確認したときの内容のままの案。そうでなければnull。
+  /// この端末では操作できない案（判断記録だけが先に届いた、根拠が未同期）も、一覧が作り直されるまでは含める。
+  ReviewCandidate? _unchanged(Object? id, Object? hash) {
+    final c = _byId[id];
+    return c != null && c.data['status'] == 'pending' && c.candidateHash == hash
+        ? c
+        : null;
+  }
+
+  /// 反映を待っている、まとめた判断の依頼ごとの案（先頭が代表の案、続いてまとめた案）。
+  late final List<List<ReviewCandidate>> _grouped = [
+    for (final r in _requests)
+      if (!r.failed && r.covers.isNotEmpty)
+        if (_unchanged(r.candidateId, r.candidateHash) case final lead?)
+          [lead, for (final e in r.covers.entries) ?_unchanged(e.key, e.value)],
+  ];
+
+  /// まとめた判断を待つ理由になっている案。なければnull。
+  ///
+  /// 採用の依頼が反映を待っている案のうち、名前か別名が、代表の案かまとめる案（[covers]）のどれかと一致する案を返す。
+  /// 採用でプロジェクトができると、名前か別名が一致する残りの案は古い案になり、古い案を含むまとめた依頼は
+  /// 全体が受け付けられなくなる。反映を待ってから判断するか、一致する案を外して判断する（1件ずつの判断は止めない）。
+  ReviewCandidate? groupBlocker(
+    ReviewCandidate lead,
+    List<ReviewCandidate> covers,
+  ) {
+    // まとめる案がない判断は止めない。判断を依頼済みの代表の案は、もう判断しないので待つ理由がない。
+    if (covers.isEmpty || _request(lead) != null) return null;
+    final deciding = [lead, ...covers];
+    for (final other in _approving) {
+      if (deciding.any((c) => _sameName(other, c))) return other;
     }
     return null;
   }
 
-  List<ReviewCandidate> get pending =>
-      items.where((i) => i.status == 'pending').toList();
+  /// [among]のうち、[other]と名前か別名が同じ案。
+  List<ReviewCandidate> sameNamed(
+    ReviewCandidate other,
+    Iterable<ReviewCandidate> among,
+  ) => [
+    for (final c in among)
+      if (_sameName(other, c)) c,
+  ];
+
+  /// この案の採用を待つ理由になっている、まとめた判断の代表の案。なければnull。
+  ///
+  /// 反映を待っているまとめた判断に含まれる案のどれかと、この案の名前か別名が一致するとき、その判断の代表の案を返す。
+  /// この案の採用が先に反映されると、名前か別名が一致する案が古い案になり、まとめた依頼の全体が受け付けられなくなる。
+  /// 本体は、同じ実行に届いた依頼をIDの順に受け付けるので、後から依頼しても先に反映されることがある（却下は止めない）。
+  ReviewCandidate? approveBlocker(ReviewCandidate candidate) {
+    // 採用でプロジェクトができるのは、プロジェクト案だけ。判断できない案と、判断を依頼済みの案
+    // （まとめた判断に含まれている案を含む）は、もう判断しないので待つ理由がない。
+    if (candidate.kind != 'project' ||
+        !candidate.actionable ||
+        _request(candidate) != null) {
+      return null;
+    }
+    for (final group in _grouped) {
+      if (group.any((c) => _sameName(candidate, c))) return group.first;
+    }
+    return null;
+  }
+
+  /// 確認待ちの一覧に並べる候補。代表の案にまとめた案は、代表の行に含めて1件と数える。
+  late final List<ReviewCandidate> pendingRows = List.unmodifiable(
+    pending.where((i) => groupLead(i) == null),
+  );
   List<ReviewCandidate> get attention =>
       items.where((i) => ['stale', 'unavailable'].contains(i.status)).toList();
   List<ReviewCandidate> get history =>
       items.where((i) => ['approved', 'rejected'].contains(i.status)).toList();
-  ReviewCandidate? byId(String id) =>
-      items.where((i) => i.id == id).firstOrNull;
+  ReviewCandidate? byId(String id) => _byId[id];
+}
+
+/// 保存済みの採用・却下の依頼（Input/REQ-*.md）の、候補との照合に使う部分。
+class _DecisionRequest {
+  _DecisionRequest(
+    this.id,
+    this.candidateId,
+    this.candidateHash,
+    this.covers, {
+    required this.approves,
+    required this.failed,
+  });
+  final String id;
+  final Object? candidateId, candidateHash;
+
+  /// 代表の案とまとめて判断する案のID → 確認した内容のhash。
+  final Map<Object?, Object?> covers;
+
+  /// 採用の依頼か（却下の依頼ならfalse）。
+  final bool approves;
+
+  /// 本体が受け付けられなかった依頼か。受け付けた記録がなく、この内容の依頼への失敗の記録がある。
+  /// 本体は実行のたびに受け付け直すので、後で受け付けられれば、受け付けた記録ができて依頼済みに戻る。
+  final bool failed;
+
+  /// 採用・却下の依頼でなければnull。不正な受付は既存の受付画面で報告する。
+  static _DecisionRequest? read(
+    String path,
+    String raw,
+    VaultSnapshot snapshot,
+  ) {
+    try {
+      final m = parseMarkdown(raw).meta, id = m['request_id'];
+      if (id is! String ||
+          !requestIdPattern.hasMatch(id) ||
+          path != 'Input/$id.md' ||
+          m['confirmed'] != true ||
+          ![
+            'knowledge-approve',
+            'knowledge-reject',
+            'project-approve',
+            'project-reject',
+          ].contains(m['operation'])) {
+        return null;
+      }
+      final ids = m['cover_ids'], hashes = m['cover_hashes'];
+      return _DecisionRequest(
+        id,
+        m['candidate_id'],
+        m['candidate_hash'],
+        {
+          if (ids is List && hashes is List && ids.length == hashes.length)
+            for (final (i, cover) in ids.indexed) cover: hashes[i],
+        },
+        approves: (m['operation'] as String).endsWith('-approve'),
+        failed: _refused(path, raw, id, snapshot),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 本体がこの内容の依頼を受け付けられなかった記録（90_system/intake-errors）があり、受け付けた記録がない。
+  static bool _refused(
+    String path,
+    String raw,
+    String id,
+    VaultSnapshot snapshot,
+  ) {
+    if (snapshot.files.containsKey('90_system/intake/$id.json')) return false;
+    final record =
+        snapshot.files['90_system/intake-errors/${digest(path)}.json'];
+    if (record == null) return false;
+    try {
+      final error = jsonDecode(record) as Map;
+      return error['schema_version'] == 1 &&
+          error['path'] == path &&
+          ['error', 'conflict'].contains(error['status']) &&
+          error['file_hash'] == digest(raw);
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 /// 未整理のメモのmeta。読めなければnull。

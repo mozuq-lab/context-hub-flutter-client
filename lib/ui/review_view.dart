@@ -17,6 +17,40 @@ String reviewState(ReviewCandidate i) => switch (i.status) {
   _ => '同期・形式の確認が必要',
 };
 
+/// 同じ対象を指すプロジェクト案のまとめを、一覧の行に添える。
+/// 代表の案には根拠のメモの件数（まとめた案の数＋1）を、まとめて判断された案には代表の案の名前を示す。
+String groupNote(ReviewRepository r, ReviewCandidate i) {
+  final members = r.groupMembers(i).length;
+  if (members > 0) return ' · 根拠のメモ${members + 1}件（同じ対象の案をまとめて表示）';
+  if (i.coveredBy case final lead?) {
+    return ' · 「${r.byId(lead)?.title ?? lead}」とまとめて判断';
+  }
+  return '';
+}
+
+/// 採用・却下の依頼の状況を、一覧の行に添える。
+String requestNote(ReviewRepository r, ReviewCandidate i) => !i.actionable
+    ? ''
+    : r.requestIdFor(i.id) != null
+    ? '\n依頼保存済み・Miniの判断待ち'
+    : r.failedRequestIdFor(i.id) != null
+    ? '\n前の依頼は受け付けられませんでした'
+    : r.groupMembers(i).any((m) => r.failedRequestIdFor(m.id) != null)
+    ? '\nまとめた案の前の依頼は受け付けられませんでした'
+    : '';
+
+/// まとめた判断を止めている理由と、どの案を外せば判断できるかの説明。
+/// [clashes]は、採用を依頼済みの[blocker]と名前か別名が同じ、判断する案（代表の案[lead]とまとめる案）。
+String groupBlockedNote(
+  ReviewCandidate blocker,
+  ReviewCandidate lead,
+  List<ReviewCandidate> clashes,
+) {
+  String names(Iterable<ReviewCandidate> items) =>
+      items.map((c) => '「${c.title}」').join();
+  return '「${blocker.title}」の採用を依頼済みです。採用が反映されると、名前か別名が同じ${names(clashes)}は古い案になり、その案を含むまとめた依頼は全体が受け付けられなくなります。反映されるまで、まとめた判断は依頼できません。${clashes.any((c) => c.id == lead.id) ? '同期して、採用の反映を確かめてから判断してください（すべてのチェックを外すと、この案だけの判断はできます）。' : '${names(clashes)}のチェックを外すと、残りの案を判断できます。'}';
+}
+
 class ReviewView extends StatelessWidget {
   const ReviewView({super.key, required this.controller});
   final HubController controller;
@@ -42,7 +76,7 @@ class ReviewView extends StatelessWidget {
                 key: Key('review-${i.id}'),
                 title: Text(i.title),
                 subtitle: Text(
-                  '${i.label} · ${reviewState(i)}${r.requestIdFor(i.id) != null ? '\n依頼保存済み・Miniの判断待ち' : ''}',
+                  '${i.label} · ${reviewState(i)}${groupNote(r, i)}${requestNote(r, i)}',
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.push(
@@ -79,7 +113,7 @@ class ReviewView extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 12),
                 child: NoticeBox(w, error: true),
               ),
-            section('確認待ち', r.pending),
+            section('確認待ち', r.pendingRows),
             section('要確認', r.attention),
             section('判断履歴', r.history),
           ],
@@ -105,9 +139,15 @@ class ReviewDetail extends StatefulWidget {
 class _ReviewDetailState extends State<ReviewDetail> {
   HubController get c => widget.controller;
   String? result, error;
+
+  /// この画面で保存した依頼のREQ ID。本体が受け付けられなかったら、保存済みの表示をやめる。
+  String? savedId;
   bool busy = false;
   AdoptionTarget? selectedTarget;
   bool targetInitialized = false;
+
+  /// まとめた案のうち、本人がこの判断から外した案。
+  final excluded = <String>{};
   Future<void> decide(String action) async {
     if (busy || c.composing) return;
     setState(() {
@@ -123,6 +163,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
         widget.id,
         target: action == 'approve' ? selectedTarget : null,
         retiring: action == 'retire',
+        exclude: {...excluded},
       );
       if (!mounted) return;
       final yes = await showDialog<bool>(
@@ -131,6 +172,8 @@ class _ReviewDetailState extends State<ReviewDetail> {
           title: Text(
             action == 'retire'
                 ? 'この採用済み記録を適用停止しますか？'
+                : ticket.covers.isNotEmpty
+                ? 'まとめた${ticket.covers.length + 1}件の案を${action == 'approve' ? '採用' : '却下'}しますか？'
                 : action == 'approve'
                 ? 'この内容を採用しますか？'
                 : 'この候補を却下しますか？',
@@ -148,11 +191,34 @@ class _ReviewDetailState extends State<ReviewDetail> {
                     ),
                   if (action == 'retire')
                     const Text('自動適用を止めます。本文と採用履歴は保持します。'),
+                  if (ticket.covers.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        action == 'approve'
+                            ? '「${ticket.candidate.title}」の名前・別名・検索語でプロジェクトを作ります。同じ対象を指す案${ticket.covers.length}件にも、同じ採用を記録します。'
+                            : '同じ対象を指す案${ticket.covers.length}件にも、同じ却下を記録します。',
+                        key: const Key('review-covers-note'),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
                   ReviewContent(
                     controller: c,
                     item: ticket.candidate,
                     links: false,
                   ),
+                  for (final cover in ticket.covers) ...[
+                    const Divider(height: 40),
+                    Text(
+                      '同じ判断にまとめる案: ${cover.title}',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ReviewContent(controller: c, item: cover, links: false),
+                  ],
                   const SizedBox(height: 20),
                   const Text('これは依頼の保存です。Miniで判断が確定し反映されるまで、正式データは変わりません。'),
                 ],
@@ -181,11 +247,12 @@ class _ReviewDetailState extends State<ReviewDetail> {
       if (yes != true) return;
       final saved = await c.submitReview(ticket, action);
       if (mounted) {
-        setState(
-          () => result = saved.saved
+        setState(() {
+          savedId = saved.requestId;
+          result = saved.saved
               ? '依頼をこの端末に保存しました。同期・Miniの判断待ちです。'
-              : '保存結果が不明です。再送せず、受付状況から同じ操作の保存確認をしてください。',
-        );
+              : '保存結果が不明です。再送せず、受付状況から同じ操作の保存確認をしてください。';
+        });
       }
     } catch (e) {
       if (mounted) setState(() => error = HubController.message(e));
@@ -275,6 +342,30 @@ class _ReviewDetailState extends State<ReviewDetail> {
       final item = c.location?.identity == widget.identity
           ? c.review?.byId(widget.id)
           : null;
+      // 同じ対象を指すプロジェクト案のまとめ。代表の案ならまとめた案を、まとめられた案なら代表の案を示す。
+      final members = item == null
+              ? const <ReviewCandidate>[]
+              : c.review!.groupMembers(item),
+          lead = item == null ? null : c.review!.groupLead(item);
+      // 依頼の状況と、この判断にまとめる案（本人が外した案を除く）。依頼済みのときは、依頼に含めた案がそのまま対象になる。
+      final requested = item != null && c.review!.requestIdFor(item.id) != null,
+          included = requested
+              ? members
+              : [
+                  for (final member in members)
+                    if (!excluded.contains(member.id)) member,
+                ],
+          failed = item == null
+              ? const <String>[]
+              : c.review!.failedRequestIdsFor(item.id),
+          // この画面で保存した依頼を本体が受け付けられなかったら、保存済みの表示をやめて、もう一度判断できるようにする。
+          notice = failed.contains(savedId)
+              ? null
+              : result,
+          blocker = item == null
+              ? null
+              : c.review!.groupBlocker(item, included),
+          waiting = item == null ? null : c.review!.approveBlocker(item);
       if (!targetInitialized && item != null) {
         targetInitialized = true;
         if (item.suggestedTarget?.scope == 'project') {
@@ -308,13 +399,132 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           padding: const EdgeInsets.only(bottom: 8),
                           child: NoticeBox(warning),
                         ),
+                      if (members.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '同じ対象を指す案${members.length}件をまとめています（根拠のメモ${members.length + 1}件）。採用・却下は、チェックを付けた案にも同じ判断として記録します。別の取り組みの案は、チェックを外すとこの判断から外れ、確認待ちに残ります。「この案だけを判断する」から1件ずつ判断することもできます。',
+                            key: const Key('review-group'),
+                          ),
+                        ),
+                      if (blocker != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            groupBlockedNote(
+                              blocker,
+                              item,
+                              c.review!.sameNamed(blocker, [item, ...included]),
+                            ),
+                            key: const Key('review-group-blocked'),
+                          ),
+                        ),
+                      if (waiting != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '「${waiting.title}」をまとめた判断を依頼済みです。この案の採用が先に反映されると、名前か別名が同じ案が古い案になり、まとめた依頼の全体が受け付けられなくなります。まとめた判断が反映されるまで、この案の採用は依頼できません。却下はできます。',
+                            key: const Key('review-approve-blocked'),
+                          ),
+                        ),
+                      if (lead != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '「${lead.title}」と同じ対象の案としてまとめて表示しています。ここでの採用・却下は、この案だけに記録します。',
+                            key: const Key('review-grouped'),
+                          ),
+                        ),
+                      if (item.coveredBy case final by?)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '「${c.review!.byId(by)?.title ?? by}」と同じ対象の案として、まとめて判断しました。',
+                            key: const Key('review-covered'),
+                          ),
+                        ),
+                      // 判断済みの案だけに示す（この端末で読めないだけの確認待ちの案には示さない）。
+                      if (const [
+                            'approved',
+                            'rejected',
+                          ].contains(item.data['status']) &&
+                          item.duplicates.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '同じ判断にまとめた案: ${item.duplicates.map((id) => c.review!.byId(id)?.title ?? id).join('、')}',
+                            key: const Key('review-covers'),
+                          ),
+                        ),
                       if (error != null) NoticeBox(error!, error: true),
-                      if (result != null) NoticeBox(result!),
-                      if (item.actionable &&
-                          c.review!.requestIdFor(item.id) != null)
+                      if (notice != null) NoticeBox(notice),
+                      if (item.actionable && requested)
                         const NoticeBox('依頼保存済み・Miniの判断待ちです。受付状況で結果を確認してください。'),
+                      if (item.actionable &&
+                          notice == null &&
+                          failed.isNotEmpty)
+                        const NoticeBox(
+                          '前の依頼は、Miniが受け付けられませんでした。確認した後に、候補・採用先・まとめた案の状況が変わった可能性があります（受付状況に理由が出ることがあります）。内容を確かめて、もう一度判断できます。',
+                          key: Key('review-failed'),
+                          error: true,
+                        ),
                       const SizedBox(height: 20),
                       ReviewContent(controller: c, item: item),
+                      for (final member in members) ...[
+                        const Divider(height: 48),
+                        Text(
+                          'まとめた案: ${member.title}',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        ReviewContent(controller: c, item: member),
+                        if (c.review!.failedRequestIdFor(member.id) != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: NoticeBox(
+                              'この案の前の依頼は、Miniが受け付けられませんでした。',
+                              key: Key('review-member-failed-${member.id}'),
+                              error: true,
+                            ),
+                          ),
+                        CheckboxListTile(
+                          key: Key('review-include-${member.id}'),
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          value: included.contains(member),
+                          // 依頼を保存した後は、まとめる案を選び直せない。
+                          onChanged: busy || requested || notice != null
+                              ? null
+                              : (value) => setState(
+                                  () => value == true
+                                      ? excluded.remove(member.id)
+                                      : excluded.add(member.id),
+                                ),
+                          title: const Text('この案にも同じ判断を記録する'),
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: Key('review-member-${member.id}'),
+                            onPressed: busy
+                                ? null
+                                : () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ReviewDetail(
+                                        controller: c,
+                                        id: member.id,
+                                        identity: widget.identity,
+                                      ),
+                                    ),
+                                  ),
+                            child: const Text('この案だけを判断する'),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 24),
                       if (item.actionable && item.kind != 'project') ...[
                         _targetPicker(item),
@@ -325,7 +535,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           key: const Key('review-retire'),
                           onPressed:
                               busy ||
-                                  result != null ||
+                                  notice != null ||
                                   c.captureWarning != null ||
                                   c.review!.retirementRequestIdFor(item.id) !=
                                       null
@@ -347,23 +557,34 @@ class _ReviewDetailState extends State<ReviewDetail> {
                                   busy ||
                                       (item.kind != 'project' &&
                                           selectedTarget == null) ||
-                                      result != null ||
-                                      c.review!.requestIdFor(item.id) != null ||
+                                      notice != null ||
+                                      requested ||
+                                      blocker != null ||
+                                      waiting != null ||
                                       c.captureWarning != null
                                   ? null
                                   : () => decide('approve'),
-                              child: const Text('採用する'),
+                              child: Text(
+                                included.isEmpty
+                                    ? '採用する'
+                                    : '${included.length + 1}件をまとめて採用する',
+                              ),
                             ),
                             OutlinedButton(
                               key: const Key('review-reject'),
                               onPressed:
                                   busy ||
-                                      result != null ||
-                                      c.review!.requestIdFor(item.id) != null ||
+                                      notice != null ||
+                                      requested ||
+                                      blocker != null ||
                                       c.captureWarning != null
                                   ? null
                                   : () => decide('reject'),
-                              child: const Text('却下する'),
+                              child: Text(
+                                included.isEmpty
+                                    ? '却下する'
+                                    : '${included.length + 1}件をまとめて却下する',
+                              ),
                             ),
                             TextButton(
                               onPressed: busy

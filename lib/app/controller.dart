@@ -24,12 +24,16 @@ class ReviewConfirmation {
     this.epoch, {
     this.target,
     this.retiring = false,
+    this.covers = const [],
   });
   final ReviewCandidate candidate;
   final String fingerprint, identity;
   final int epoch;
   final AdoptionTarget? target;
   final bool retiring;
+
+  /// 同じ対象を指す案として、同じ判断にまとめるプロジェクト案。確認の画面で内容を示す。
+  final List<ReviewCandidate> covers;
 }
 
 /// 既読判定に使うNOWの1行。hashは欄と本文（出典・訂正の注記を除く）から作る。
@@ -825,6 +829,7 @@ class HubController extends ChangeNotifier {
     String id, {
     AdoptionTarget? target,
     bool retiring = false,
+    Set<String> exclude = const {},
   }) async {
     final vaultTarget = location, old = repository, epoch = _epoch;
     if (vaultTarget == null ||
@@ -852,6 +857,14 @@ class HubController extends ChangeNotifier {
       throw StateError('この候補の依頼は保存済みです。受付状況を確認してください。');
     }
     if (target != null && !retiring) review!.validateTarget(target);
+    // まとめて判断する案。本人が外した案（[exclude]）は含めず、確認待ちに残す。
+    final covers = retiring
+        ? const <ReviewCandidate>[]
+        : [
+            for (final member in review!.groupMembers(candidate))
+              if (!exclude.contains(member.id)) member,
+          ];
+    _refuseBlockedGroup(candidate, covers);
     return ReviewConfirmation(
       candidate,
       fresh.fingerprint,
@@ -859,7 +872,22 @@ class HubController extends ChangeNotifier {
       epoch,
       target: target,
       retiring: retiring,
+      covers: covers,
     );
+  }
+
+  /// 名前か別名が同じ案の採用が反映を待っている間は、まとめた判断を依頼しない。
+  /// 採用でプロジェクトができると、名前か別名が同じ案が古い案になり、その案を含むまとめた依頼の全体を本体が受け付けられなくなる。
+  void _refuseBlockedGroup(
+    ReviewCandidate candidate,
+    List<ReviewCandidate> covers,
+  ) {
+    final blocker = review!.groupBlocker(candidate, covers);
+    if (blocker != null) {
+      throw StateError(
+        '「${blocker.title}」の採用が反映されるまで、名前か別名が同じ案を含むまとめた判断は依頼できません。同期後に確認するか、その案を外して判断してください。',
+      );
+    }
   }
 
   Future<CaptureResult> submitReview(
@@ -903,8 +931,39 @@ class HubController extends ChangeNotifier {
       if (ticket.target != null && !ticket.retiring) {
         review!.validateTarget(ticket.target!);
       }
+      // まとめて判断する案は、確認の画面で示したものと同じ内容で、いまもこの案にまとめられる案でなければ依頼しない。
+      final covers = <ReviewCandidate>[];
+      if (!ticket.retiring) {
+        final members = {
+          for (final member in review!.groupMembers(candidate))
+            member.id: member,
+        };
+        for (final shown in ticket.covers) {
+          final member = members[shown.id];
+          if (member == null || member.candidateHash != shown.candidateHash) {
+            throw StateError('確認中に候補・根拠・受付が変わりました。再読込して確認してください。');
+          }
+          covers.add(member);
+        }
+        _refuseBlockedGroup(candidate, covers);
+      }
+      // まとめた判断が反映を待っている間は、名前か別名が同じ案を採用しない。本体は同じ実行に届いた依頼を
+      // IDの順に受け付けるので、後から依頼した採用が先に反映されると、まとめた依頼の全体が受け付けられなくなる。
+      if (action == 'approve') {
+        final waiting = review!.approveBlocker(candidate);
+        if (waiting != null) {
+          throw StateError(
+            '「${waiting.title}」をまとめた判断が反映されるまで、名前か別名が同じこの案の採用は依頼できません。同期後に確認してください。',
+          );
+        }
+      }
+      // 同じ候補への同じ内容の依頼は、同じ操作として1回だけ保存する。本体が受け付けられなかった依頼の
+      // 後の判断は、新しい操作として保存する（同じ操作のままでは、保存済みの依頼を確かめ直すだけになる）。
+      final failed = ticket.retiring
+          ? const <String>[]
+          : review!.failedRequestIdsFor(candidate.id);
       final key =
-          '${target.identity}/${candidate.id}/${ticket.retiring ? 'retire/${candidate.dependencies[candidate.targetPath]}' : candidate.candidateHash}';
+          '${target.identity}/${candidate.id}/${ticket.retiring ? 'retire/${candidate.dependencies[candidate.targetPath]}' : candidate.candidateHash}${failed.isEmpty ? '' : '/after/${failed.join('+')}'}';
       final operation = _reviewOperations.putIfAbsent(
         key,
         () => const Uuid().v4(),
@@ -917,6 +976,7 @@ class HubController extends ChangeNotifier {
               candidate,
               action,
               target: ticket.target,
+              covers: covers,
             );
     } finally {
       saving = false;

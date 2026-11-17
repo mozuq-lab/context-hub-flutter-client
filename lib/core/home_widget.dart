@@ -57,7 +57,7 @@ Map<String, Object?> homeWidgetContent(
   DateTime? now,
 }) {
   final active = repo.actionableProjects;
-  final review = repo.review.pending.length;
+  final review = repo.review.pendingRows.length;
   final scoped = settings.projectId != null;
   final chosen = scoped
       ? active.where((p) => p.id == settings.projectId).firstOrNull
