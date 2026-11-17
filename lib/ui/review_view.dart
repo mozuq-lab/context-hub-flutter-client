@@ -17,6 +17,17 @@ String reviewState(ReviewCandidate i) => switch (i.status) {
   _ => '同期・形式の確認が必要',
 };
 
+/// 同じ対象を指すプロジェクト案のまとめを、一覧の行に添える。
+/// 代表の案には根拠のメモの件数（まとめた案の数＋1）を、まとめて判断された案には代表の案の名前を示す。
+String groupNote(ReviewRepository r, ReviewCandidate i) {
+  final members = r.groupMembers(i).length;
+  if (members > 0) return ' · 根拠のメモ${members + 1}件（同じ対象の案をまとめて表示）';
+  if (i.coveredBy case final lead?) {
+    return ' · 「${r.byId(lead)?.title ?? lead}」とまとめて判断';
+  }
+  return '';
+}
+
 class ReviewView extends StatelessWidget {
   const ReviewView({super.key, required this.controller});
   final HubController controller;
@@ -42,7 +53,7 @@ class ReviewView extends StatelessWidget {
                 key: Key('review-${i.id}'),
                 title: Text(i.title),
                 subtitle: Text(
-                  '${i.label} · ${reviewState(i)}${r.requestIdFor(i.id) != null ? '\n依頼保存済み・Miniの判断待ち' : ''}',
+                  '${i.label} · ${reviewState(i)}${groupNote(r, i)}${i.actionable && r.requestIdFor(i.id) != null ? '\n依頼保存済み・Miniの判断待ち' : ''}',
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.push(
@@ -79,7 +90,7 @@ class ReviewView extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 12),
                 child: NoticeBox(w, error: true),
               ),
-            section('確認待ち', r.pending),
+            section('確認待ち', r.pendingRows),
             section('要確認', r.attention),
             section('判断履歴', r.history),
           ],
@@ -131,6 +142,8 @@ class _ReviewDetailState extends State<ReviewDetail> {
           title: Text(
             action == 'retire'
                 ? 'この採用済み記録を適用停止しますか？'
+                : ticket.covers.isNotEmpty
+                ? 'まとめた${ticket.covers.length + 1}件の案を${action == 'approve' ? '採用' : '却下'}しますか？'
                 : action == 'approve'
                 ? 'この内容を採用しますか？'
                 : 'この候補を却下しますか？',
@@ -148,11 +161,34 @@ class _ReviewDetailState extends State<ReviewDetail> {
                     ),
                   if (action == 'retire')
                     const Text('自動適用を止めます。本文と採用履歴は保持します。'),
+                  if (ticket.covers.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        action == 'approve'
+                            ? '「${ticket.candidate.title}」の名前・別名・検索語でプロジェクトを作ります。同じ対象を指す案${ticket.covers.length}件にも、同じ採用を記録します。'
+                            : '同じ対象を指す案${ticket.covers.length}件にも、同じ却下を記録します。',
+                        key: const Key('review-covers-note'),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
                   ReviewContent(
                     controller: c,
                     item: ticket.candidate,
                     links: false,
                   ),
+                  for (final cover in ticket.covers) ...[
+                    const Divider(height: 40),
+                    Text(
+                      '同じ判断にまとめる案: ${cover.title}',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ReviewContent(controller: c, item: cover, links: false),
+                  ],
                   const SizedBox(height: 20),
                   const Text('これは依頼の保存です。Miniで判断が確定し反映されるまで、正式データは変わりません。'),
                 ],
@@ -275,6 +311,11 @@ class _ReviewDetailState extends State<ReviewDetail> {
       final item = c.location?.identity == widget.identity
           ? c.review?.byId(widget.id)
           : null;
+      // 同じ対象を指すプロジェクト案のまとめ。代表の案ならまとめた案を、まとめられた案なら代表の案を示す。
+      final members = item == null
+              ? const <ReviewCandidate>[]
+              : c.review!.groupMembers(item),
+          lead = item == null ? null : c.review!.groupLead(item);
       if (!targetInitialized && item != null) {
         targetInitialized = true;
         if (item.suggestedTarget?.scope == 'project') {
@@ -308,6 +349,38 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           padding: const EdgeInsets.only(bottom: 8),
                           child: NoticeBox(warning),
                         ),
+                      if (members.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '同じ対象を指す案${members.length}件をまとめています（根拠のメモ${members.length + 1}件）。採用・却下は、まとめた案にも同じ判断として記録します。別の取り組みの案が混ざっているときは、下の「この案だけを判断する」から1件ずつ判断できます。',
+                            key: const Key('review-group'),
+                          ),
+                        ),
+                      if (lead != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '「${lead.title}」と同じ対象の案としてまとめて表示しています。ここでの採用・却下は、この案だけに記録します。',
+                            key: const Key('review-grouped'),
+                          ),
+                        ),
+                      if (item.coveredBy case final by?)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '「${c.review!.byId(by)?.title ?? by}」と同じ対象の案として、まとめて判断しました。',
+                            key: const Key('review-covered'),
+                          ),
+                        ),
+                      if (!item.actionable && item.duplicates.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: NoticeBox(
+                            '同じ判断にまとめた案: ${item.duplicates.map((id) => c.review!.byId(id)?.title ?? id).join('、')}',
+                            key: const Key('review-covers'),
+                          ),
+                        ),
                       if (error != null) NoticeBox(error!, error: true),
                       if (result != null) NoticeBox(result!),
                       if (item.actionable &&
@@ -315,6 +388,37 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         const NoticeBox('依頼保存済み・Miniの判断待ちです。受付状況で結果を確認してください。'),
                       const SizedBox(height: 20),
                       ReviewContent(controller: c, item: item),
+                      for (final member in members) ...[
+                        const Divider(height: 48),
+                        Text(
+                          'まとめた案: ${member.title}',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        ReviewContent(controller: c, item: member),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: Key('review-member-${member.id}'),
+                            onPressed: busy
+                                ? null
+                                : () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ReviewDetail(
+                                        controller: c,
+                                        id: member.id,
+                                        identity: widget.identity,
+                                      ),
+                                    ),
+                                  ),
+                            child: const Text('この案だけを判断する'),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 24),
                       if (item.actionable && item.kind != 'project') ...[
                         _targetPicker(item),
@@ -352,7 +456,11 @@ class _ReviewDetailState extends State<ReviewDetail> {
                                       c.captureWarning != null
                                   ? null
                                   : () => decide('approve'),
-                              child: const Text('採用する'),
+                              child: Text(
+                                members.isEmpty
+                                    ? '採用する'
+                                    : '${members.length + 1}件をまとめて採用する',
+                              ),
                             ),
                             OutlinedButton(
                               key: const Key('review-reject'),
@@ -363,7 +471,11 @@ class _ReviewDetailState extends State<ReviewDetail> {
                                       c.captureWarning != null
                                   ? null
                                   : () => decide('reject'),
-                              child: const Text('却下する'),
+                              child: Text(
+                                members.isEmpty
+                                    ? '却下する'
+                                    : '${members.length + 1}件をまとめて却下する',
+                              ),
                             ),
                             TextButton(
                               onPressed: busy

@@ -31,7 +31,8 @@ const attentionKindLabels = {
 /// この端末から依頼済みで反映を待っているものは、もう判断が済んでいるので数えない。
 List<AttentionItem> attentionItems(HubRepository repo) {
   final items = <AttentionItem>[];
-  for (final c in repo.review.pending) {
+  // 同じ対象を指すプロジェクト案は、代表の案の1件として数える（一覧と同じ数え方）。
+  for (final c in repo.review.pendingRows) {
     if (repo.review.requestIdFor(c.id) != null) continue;
     items.add(AttentionItem('candidate', c.id, 'review'));
   }

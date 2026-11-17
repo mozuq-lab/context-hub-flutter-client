@@ -100,6 +100,16 @@ String clip(String text, int size) {
   return text.substring(0, end);
 }
 
+/// この文字数以下のメモは、AIの要約ではなく本人の言葉をそのまま見せる（本体のSHORT_MEMO_CHARSと同じ）。
+const shortMemoChars = 100;
+
+/// 短いメモの本文を、空白と改行をまとめた1行で返す。短くなければnull（本体のshortMemoTextと同じ基準）。
+/// メモの種類と訂正の有無は呼び出し側で確かめる。
+String? shortMemoText(String body) {
+  final text = body.trim().replaceAll(RegExp(r'\s+'), ' ');
+  return text.isNotEmpty && text.runes.length <= shortMemoChars ? text : null;
+}
+
 String readableTitle(String body) {
   final lines = body
       .split('\n')

@@ -24,12 +24,16 @@ class ReviewConfirmation {
     this.epoch, {
     this.target,
     this.retiring = false,
+    this.covers = const [],
   });
   final ReviewCandidate candidate;
   final String fingerprint, identity;
   final int epoch;
   final AdoptionTarget? target;
   final bool retiring;
+
+  /// 同じ対象を指す案として、同じ判断にまとめるプロジェクト案。確認の画面で内容を示す。
+  final List<ReviewCandidate> covers;
 }
 
 /// 既読判定に使うNOWの1行。hashは欄と本文（出典・訂正の注記を除く）から作る。
@@ -859,6 +863,7 @@ class HubController extends ChangeNotifier {
       epoch,
       target: target,
       retiring: retiring,
+      covers: retiring ? const [] : review!.groupMembers(candidate),
     );
   }
 
@@ -903,6 +908,18 @@ class HubController extends ChangeNotifier {
       if (ticket.target != null && !ticket.retiring) {
         review!.validateTarget(ticket.target!);
       }
+      // まとめて判断する案は、確認の画面で示したものと同じ内容でなければ依頼しない。
+      final covers = ticket.retiring
+          ? const <ReviewCandidate>[]
+          : review!.groupMembers(candidate);
+      if (covers.length != ticket.covers.length ||
+          covers.indexed.any(
+            (e) =>
+                e.$2.id != ticket.covers[e.$1].id ||
+                e.$2.candidateHash != ticket.covers[e.$1].candidateHash,
+          )) {
+        throw StateError('確認中に候補・根拠・受付が変わりました。再読込して確認してください。');
+      }
       final key =
           '${target.identity}/${candidate.id}/${ticket.retiring ? 'retire/${candidate.dependencies[candidate.targetPath]}' : candidate.candidateHash}';
       final operation = _reviewOperations.putIfAbsent(
@@ -917,6 +934,7 @@ class HubController extends ChangeNotifier {
               candidate,
               action,
               target: ticket.target,
+              covers: covers,
             );
     } finally {
       saving = false;

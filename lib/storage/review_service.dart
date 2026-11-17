@@ -11,11 +11,15 @@ class ReviewService {
     ReviewCandidate candidate,
     String action, {
     AdoptionTarget? target,
+    List<ReviewCandidate> covers = const [],
   }) async {
-    return CaptureService(
-      access,
-      location,
-    ).saveReview(operationId, candidate, action, target: target);
+    return CaptureService(access, location).saveReview(
+      operationId,
+      candidate,
+      action,
+      target: target,
+      covers: covers,
+    );
   }
 
   Future<CaptureResult> retire(String operationId, ReviewCandidate candidate) =>
