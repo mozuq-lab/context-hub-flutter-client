@@ -77,6 +77,9 @@ class HubRepository {
   /// 対象のメモの総数。[unassignedMemos]は新しい順に本体の上限までで、原文が届いたものだけ。
   int unassignedTotal = 0;
 
+  /// 今週の気づき（週次の統合の結果）。本体で無効・一覧を書いていない・読めないときはnull。
+  Insights? insights;
+
   /// アイデアの組（ideaPairKey）→ 反映待ちの判断の依頼のREQ ID。
   final Map<String, String> _outstandingIdeaLinks = {};
 
@@ -336,6 +339,7 @@ class HubRepository {
     _readGitDrafts();
     _readIdeaIndex();
     _readUnassignedActions();
+    _readInsights();
     _readIntake();
     _readDigest();
     _readBackupChecks();
@@ -787,6 +791,137 @@ class HubRepository {
     }
   }
 
+  /// 本体が書く「今週の気づき」の一覧。
+  static const insightsPath = '90_system/insights.json';
+  static final _insightRunId = RegExp(r'^SYN-[0-9A-HJKMNP-TV-Z]{26}$');
+  static final _insightKey = RegExp(r'^[a-f0-9]{64}$');
+
+  /// 本体が書く「今週の気づき」の一覧を読む。根拠のメモがすべて届いている項目だけを使う。
+  /// このアプリの知らない項目や欄（本体が後から足したもの）は無視する。
+  void _readInsights() {
+    const path = insightsPath;
+    final raw = snapshot.files[path];
+    if (raw == null) return;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      final latest = j['latest'],
+          attempt = j['last_attempt'],
+          interval = j['interval_days'],
+          problems = j['record_problems'];
+      if (j['schema_version'] != 1 ||
+          timestamp(j['generated_at']) == null ||
+          j['enabled'] is! bool ||
+          interval is! int ||
+          interval < 1 ||
+          problems is! int ||
+          problems < 0 ||
+          (latest != null && latest is! Map) ||
+          (attempt != null && attempt is! Map) ||
+          (j['next_due_at'] != null && timestamp(j['next_due_at']) == null)) {
+        throw const FormatException();
+      }
+      // 本体で無効にしたときは、何も出さない。
+      if (j['enabled'] == false) return;
+      DateTime? createdAt;
+      String? mode;
+      final items = <InsightItem>[];
+      var waiting = 0;
+      if (latest is Map) {
+        final id = latest['id'], list = latest['items'], kind = latest['mode'];
+        createdAt = timestamp(latest['created_at']);
+        if (id is! String ||
+            !_insightRunId.hasMatch(id) ||
+            createdAt == null ||
+            kind is! String ||
+            list is! List ||
+            list.length > 100) {
+          throw const FormatException();
+        }
+        mode = kind;
+        final seen = <String>{};
+        for (final item in list) {
+          if (item is! Map) throw const FormatException();
+          final key = item['key'],
+              section = item['section'],
+              text = item['text'],
+              step = item['first_step'],
+              sources = item['sources'];
+          if (key is! String ||
+              !_insightKey.hasMatch(key) ||
+              !seen.add(key) ||
+              section is! String ||
+              text is! String ||
+              text.trim().isEmpty ||
+              (step != null && (step is! String || step.trim().isEmpty)) ||
+              sources is! List ||
+              sources.isEmpty ||
+              sources.length > 20) {
+            throw const FormatException();
+          }
+          final parsed = <InsightSource>[], seenSources = <String>{};
+          var missing = false;
+          for (final source in sources) {
+            if (source is! Map) throw const FormatException();
+            final inputId = source['input_id'],
+                at = timestamp(source['occurred_at']),
+                corrected = source['corrected'];
+            // 本体は同じメモを1つの項目の根拠に重ねて挙げない。
+            if (inputId is! String ||
+                !inputIdPattern.hasMatch(inputId) ||
+                !seenSources.add(inputId) ||
+                at == null ||
+                corrected is! bool) {
+              throw const FormatException();
+            }
+            final input = _inputs[inputId];
+            if (input == null || input.kind == 'correction') missing = true;
+            parsed.add(
+              InsightSource(inputId: inputId, at: at, corrected: corrected),
+            );
+          }
+          // このアプリの知らない欄は載せない。
+          if (!insightSectionLabels.containsKey(section)) continue;
+          // 根拠のメモが届いていない項目は開いて確かめられないので、届いてから載せる。
+          if (missing) {
+            waiting++;
+            continue;
+          }
+          items.add(
+            InsightItem(
+              key: key,
+              section: section,
+              text: text.trim(),
+              firstStep: (step as String?)?.trim(),
+              sources: parsed,
+            ),
+          );
+        }
+      }
+      String? failure;
+      if (attempt is Map) {
+        final status = attempt['status'], error = attempt['error'];
+        if (status is! String || (error != null && error is! String)) {
+          throw const FormatException();
+        }
+        if (status == 'failed') {
+          failure = insightFailureLabels[error] ?? '理由は本体のHOMEで確認';
+        }
+      }
+      insights = Insights(
+        intervalDays: interval,
+        createdAt: createdAt,
+        mode: mode,
+        items: items,
+        waiting: waiting,
+        failure: failure,
+        recordProblems: problems,
+      );
+    } catch (_) {
+      insights = null;
+      _problem(path);
+    }
+  }
+
   /// 本体が書く似ているアイデアの索引を読む。今読めているアイデアの組・束だけを使う。
   void _readIdeaIndex() {
     const path = '90_system/idea-index.json';
@@ -1159,7 +1294,7 @@ class HubRepository {
 
   /// 別AIへ渡す資料を止める注意があるか。[scope]は資料に入るプロジェクト（nullなら全体）。
   /// 本人のInput（取り込み前の依頼）とアイデアの問題、[scope]に入らないプロジェクトのフォルダーの
-  /// 問題、同期の競合コピー、表示だけに使うプロジェクト未定の一覧の問題は、資料の内容に関係しないので
+  /// 問題、同期の競合コピー、表示だけに使うプロジェクト未定の一覧と今週の気づきの一覧の問題は、資料の内容に関係しないので
   /// 止めない。メモ・処理記録・知識など、どのプロジェクトに関係するか分からないものの問題は、
   /// これまでどおり止める。
   bool copyBlocked([Set<String>? scope]) {
@@ -1167,7 +1302,8 @@ class HubRepository {
     for (final path in problemPaths) {
       if (path.startsWith('Input/') ||
           path.startsWith('20_ideas/') ||
-          path == unassignedActionsPath) {
+          path == unassignedActionsPath ||
+          path == insightsPath) {
         continue;
       }
       final folder = RegExp(r'^10_projects/([^/]+)/').firstMatch(path)?[1];

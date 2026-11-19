@@ -9,11 +9,11 @@ import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
 const repo=resolve(import.meta.dirname,'..');
-const fixtures=['assets/sample.json','assets/review.json','assets/scoped-policy.json','test/fixtures/numeric-policy.json','test/fixtures/unassigned-and-proposals.json'];
-const generators=['scripts/prepare_policy_fixtures.mjs','scripts/prepare_numeric_policy_fixture.mjs','scripts/prepare_inbox_fixture.mjs'];
+const fixtures=['assets/sample.json','assets/review.json','assets/scoped-policy.json','test/fixtures/numeric-policy.json','test/fixtures/unassigned-and-proposals.json','test/fixtures/insights.json'];
+const generators=['scripts/prepare_policy_fixtures.mjs','scripts/prepare_numeric_policy_fixture.mjs','scripts/prepare_inbox_fixture.mjs','scripts/prepare_insights_fixture.mjs'];
 
-// 日時・ULID・hashは生成ごとに変わるため置換する。hashを先に置換し、16進の一部を小文字ULIDと誤認しない。
-const volatile=s=>s.replace(/[a-f0-9]{64}/g,'<HASH>').replace(/[0-9A-HJKMNP-TV-Z]{26}/g,'<ULID>').replace(/[0-9a-hjkmnp-tv-z]{26}/g,'<ulid>')
+// 日時・ULID・hash・所要時間は生成ごとに変わるため置換する。hashを先に置換し、16進の一部を小文字ULIDと誤認しない。
+const volatile=s=>s.replace(/"elapsed_ms": ?\d+/g,'"elapsed_ms": <MS>').replace(/[a-f0-9]{64}/g,'<HASH>').replace(/[0-9A-HJKMNP-TV-Z]{26}/g,'<ULID>').replace(/[0-9a-hjkmnp-tv-z]{26}/g,'<ulid>')
   .replace(/\d{4}-\d{2}-\d{2}(?:T[\d:.]+(?:Z|[+-]\d{2}:\d{2})?)?/g,'<DATE>').replace(/<DATE> \d{2}:\d{2}/g,'<DATE> <TIME>');
 // 正規化したパスごとに、正規化した内容の多重集合を作る。値・本文の書式・文言の変更も、Dartが読む形式の変更として扱う。
 function signature(fixture){
