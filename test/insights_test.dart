@@ -27,6 +27,12 @@ Map<String, String> changed(void Function(Map<String, dynamic>) change) {
   return files;
 }
 
+/// 本体が書いた、ほかの状態の一覧（running・failed・disabled）に差し替えたVault。
+Map<String, String> inState(String state) => insightsFiles()
+  ..[insightsPath] = jsonEncode(
+    (expected['states'] as Map<String, dynamic>)[state],
+  );
+
 Map<String, dynamic> latestOf(Map<String, dynamic> j) =>
     j['latest'] as Map<String, dynamic>;
 List<Map<String, dynamic>> itemsOf(Map<String, dynamic> j) =>
@@ -119,6 +125,16 @@ void main() {
       expect(read('interrupted').failure, '実行が途中で止まった');
       // このアプリの知らない理由は、本体のHOMEへ案内する。
       expect(read('quota-exceeded').failure, '理由は本体のHOMEで確認');
+      // 本体がモデルの障害の後に書いた一覧。
+      final failed = HubRepository(VaultSnapshot(inState('failed')));
+      expect(failed.warnings, isEmpty);
+      expect(failed.insights!.failure, 'モデルの呼び出しに失敗');
+      expect(failed.insights!.items, hasLength(expected['total']));
+      // 本体がモデルを待つ間に書いた一覧（実行中）は、失敗として扱わない。
+      final running = HubRepository(VaultSnapshot(inState('running')));
+      expect(running.warnings, isEmpty);
+      expect(running.insights!.failure, isNull);
+      expect(running.insights!.items, hasLength(expected['total']));
       // 実行中・成功・足せる項目がなかった回は、失敗として扱わない。
       for (final status in ['running', 'ok', 'empty']) {
         final files = changed((j) {
@@ -148,16 +164,8 @@ void main() {
     });
 
     test('本体で無効にした・一覧を書いていないときは、何も出さない', () {
-      final disabled = HubRepository(
-        VaultSnapshot(
-          changed((j) {
-            j['enabled'] = false;
-            j['latest'] = null;
-            j['last_attempt'] = null;
-            j['next_due_at'] = null;
-          }),
-        ),
-      );
+      // 本体で有効にした後に無効へ戻したときに、本体が書く一覧。
+      final disabled = HubRepository(VaultSnapshot(inState('disabled')));
       expect(disabled.insights, isNull);
       expect(disabled.warnings, isEmpty);
       final old = HubRepository(
@@ -185,6 +193,9 @@ void main() {
         (j) => itemsOf(j).first['sources'] = [],
         (j) => (itemsOf(j).first['sources'] as List).first['input_id'] = 'IN-1',
         (j) => (itemsOf(j).first['sources'] as List).first['corrected'] = 1,
+        (j) => (itemsOf(j).first['sources'] as List).add(
+          (itemsOf(j).first['sources'] as List).first,
+        ),
         (j) =>
             (itemsOf(j).first['sources'] as List).first['occurred_at'] = '昨日',
         (j) => (j['last_attempt'] as Map<String, dynamic>)['status'] = 1,
@@ -287,20 +298,21 @@ void main() {
 
     testWidgets('前回の実行が失敗したときと、間隔を過ぎた古い結果のときに、それと分かるようにする', (t) async {
       final a = MemoryUIAccess(),
-          files = changed((j) {
-            latestOf(j)['created_at'] = '2026-01-01T00:00:00.000Z';
-            j['last_attempt'] = {
-              ...(j['last_attempt'] as Map<String, dynamic>),
-              'status': 'failed',
-              'error': 'timeout',
-            };
-            j['record_problems'] = 1;
-          });
-      await sample(t, a, files);
+          // 本体がモデルの障害の後に書いた一覧を、間隔を過ぎた古い結果にする。
+          state = Map<String, dynamic>.from(
+            (expected['states'] as Map<String, dynamic>)['failed'] as Map,
+          );
+      state['latest'] = {
+        ...(state['latest'] as Map<String, dynamic>),
+        'created_at': '2026-01-01T00:00:00.000Z',
+      };
+      state['record_problems'] = 1;
+      await sample(t, a, insightsFiles()..[insightsPath] = jsonEncode(state));
+      final failure = find.byKey(const Key('home-insights-failure'));
       expect(
         find.descendant(
-          of: find.byKey(const Key('home-insights-failure')),
-          matching: find.textContaining('応答待ちの時間切れ'),
+          of: failure,
+          matching: find.textContaining('（モデルの呼び出しに失敗）。前回までの気づきを表示しています。'),
         ),
         findsOneWidget,
       );
@@ -315,18 +327,40 @@ void main() {
       expect(t.takeException(), isNull);
     });
 
+    testWidgets('成功した実行がないまま失敗したときは、失敗だけを示す', (t) async {
+      final a = MemoryUIAccess(),
+          state = Map<String, dynamic>.from(
+            (expected['states'] as Map<String, dynamic>)['failed'] as Map,
+          )..['latest'] = null;
+      await sample(t, a, insightsFiles()..[insightsPath] = jsonEncode(state));
+      final text = t
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const Key('home-insights-failure')),
+              matching: find.byType(Text),
+            ),
+          )
+          .data!;
+      expect(text, contains('（モデルの呼び出しに失敗）'));
+      expect(text, isNot(contains('前回までの気づき')));
+      expect(find.byKey(const Key('home-insights')), findsNothing);
+    });
+
+    testWidgets('新しいメモが少なかった回は、以前のメモの見直しが中心と示す', (t) async {
+      final a = MemoryUIAccess();
+      await sample(t, a, changed((j) => latestOf(j)['mode'] = 'quiet'));
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('home-insights')),
+          matching: find.textContaining('以前のメモの見直しが中心'),
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('結果がない・本体で無効のときは、ホームに欄を出さない', (t) async {
       final a = MemoryUIAccess();
-      await sample(
-        t,
-        a,
-        changed((j) {
-          j['enabled'] = false;
-          j['latest'] = null;
-          j['last_attempt'] = null;
-          j['next_due_at'] = null;
-        }),
-      );
+      await sample(t, a, inState('disabled'));
       expect(find.byKey(const Key('home-insights')), findsNothing);
       expect(find.byKey(const Key('home-insights-failure')), findsNothing);
       expect(find.byKey(const Key('home-next')), findsOneWidget);

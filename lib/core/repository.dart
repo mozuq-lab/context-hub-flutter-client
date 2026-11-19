@@ -858,15 +858,17 @@ class HubRepository {
               sources.length > 20) {
             throw const FormatException();
           }
-          final parsed = <InsightSource>[];
+          final parsed = <InsightSource>[], seenSources = <String>{};
           var missing = false;
           for (final source in sources) {
             if (source is! Map) throw const FormatException();
             final inputId = source['input_id'],
                 at = timestamp(source['occurred_at']),
                 corrected = source['corrected'];
+            // 本体は同じメモを1つの項目の根拠に重ねて挙げない。
             if (inputId is! String ||
                 !inputIdPattern.hasMatch(inputId) ||
+                !seenSources.add(inputId) ||
                 at == null ||
                 corrected is! bool) {
               throw const FormatException();

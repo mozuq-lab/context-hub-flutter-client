@@ -1,5 +1,6 @@
 // 週次の統合の結果（今週の気づき。90_system/insights.json）を含む、本体由来の架空fixture。
 // 5つの欄の項目、最初の一歩、複数の根拠、気づきを作った後に訂正が届いた根拠の読取に使う。
+// expected.statesに、実行中・失敗した後・無効に戻した後に本体が書く一覧を含める。
 // モデルは使わず、渡されたメモの参照名から決まった応答を返す偽のクライアントで実行する。
 import {mkdtemp,rm,writeFile,mkdir,readdir,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -45,6 +46,17 @@ try{
  const insights=JSON.parse(await vault.read('90_system/insights.json')),items=insights.latest.items;
  // 実行の記録（90_system/synthesis/）はアプリが読まないので、fixtureに含めない。
  const files=Object.fromEntries(Object.entries(await filesAt(config.vaultPath)).filter(([path])=>!path.startsWith('90_system/synthesis/')));
+ // 本体が書くほかの状態の一覧。モデルを待つ間（実行中）、失敗した後（前回までの気づきは残る）、無効に戻した後。
+ const view=async()=>JSON.parse(await vault.read('90_system/insights.json')),failedAt=new Date('2026-11-16T00:00:00Z');
+ let running;
+ const failing={complete:async()=>{await rebuildDashboard(config,{now:new Date(failedAt.getTime()+60_000)});running=await view();throw new Error('架空のモデルの障害');}};
+ const failedOutcome=await runSynthesis(config,failing,{now:failedAt,force:true});
+ if(!failedOutcome.ran||failedOutcome.status!=='failed'||running?.last_attempt?.status!=='running')throw new Error(`失敗の状態を作れませんでした: ${JSON.stringify(failedOutcome)}`);
+ await rebuildDashboard(config,{now:new Date(failedAt.getTime()+3_600_000)});
+ const failed=await view();
+ config.synthesis={...config.synthesis,enabled:false};
+ await rebuildDashboard(config,{now:new Date(failedAt.getTime()+7_200_000)});
+ const disabled=await view();
  await mkdir('test/fixtures',{recursive:true});
  await writeFile('test/fixtures/insights.json',JSON.stringify({schema_version:1,files,expected:{
   total:items.length,
@@ -52,6 +64,7 @@ try{
   first_step:items.find(i=>i.section==='stalled').first_step,
   sources:items.map(i=>i.sources.length),
   corrected:ids[0],
+  states:{running,failed,disabled},
  }},null,2)+'\n');
  console.log('今週の気づき（週次の統合の結果）の本体fixtureを生成しました');
 }finally{await rm(root,{recursive:true,force:true});}
