@@ -1,11 +1,11 @@
 // 週次の統合の結果（今週の気づき。90_system/insights.json）を含む、本体由来の架空fixture。
-// 5つの欄の項目、最初の一歩、複数の根拠、気づきを作った後に訂正が届いた根拠の読取に使う。
+// 5つの欄の項目、最初の一歩、複数の根拠、気づきを作った後に訂正が届いた根拠、本人の反応と問いへの答えの読取に使う。
 // expected.statesに、実行中・失敗した後・無効に戻した後に本体が書く一覧を含める。
 // モデルは使わず、渡されたメモの参照名から決まった応答を返す偽のクライアントで実行する。
 import {mkdtemp,rm,writeFile,mkdir,readdir,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {defaultConfig,Vault,addProject,capture,correctInput,organize,MockLlm,runSynthesis,rebuildDigest,rebuildDashboard} from '../vendor/context-hub/packages/core/dist/index.js';
+import {defaultConfig,Vault,addProject,capture,correctInput,organize,MockLlm,runSynthesis,rebuildDigest,rebuildDashboard,readSynthesisRuns,setInsightReaction} from '../vendor/context-hub/packages/core/dist/index.js';
 async function filesAt(dir,prefix=''){const out={};for(const e of await readdir(dir,{withFileTypes:true})){if(e.name.startsWith('.'))continue;const p=prefix+e.name;if(e.isDirectory())Object.assign(out,await filesAt(join(dir,e.name),p+'/'));else out[p]=await readFile(join(dir,e.name),'utf8');}return out;}
 const result=extra=>({category:'idea',summary:'AIの要約',project_candidates:[],next_action_suggestions:[],extracted:{current:[],next:[],open:[]},knowledge_candidate:null,new_project_hint:null,...extra});
 // 実行時刻と生成時刻を固定し、HOMEの日付が実行日で変わらないようにする。
@@ -41,6 +41,13 @@ try{
  if(!outcome.ran||outcome.status!=='ok'||outcome.items!==6)throw new Error(`週次の統合が想定どおりに終わりませんでした: ${JSON.stringify(outcome)}`);
  // 気づきを作った後に、根拠のメモへ訂正が届く。
  await correctInput(config,ids[0],{source:'cli',occurredAt:'2026-11-15T10:00:00+09:00',receivedAt:'2026-11-15T10:00:00+09:00',text:'土はもう調べた'});
+ // 本人がつながりの項目に「役に立った」を付け、最初の問いに答える（答えはmeta付きのメモ）。
+ const run=(await readSynthesisRuns(vault)).runs[0],connection=run.items.find(i=>i.section==='connections'),question=run.items.find(i=>i.section==='questions');
+ // 記録する日時も固定し、一覧（clock）より前に記録された反応にする。
+ await setInsightReaction(config,{runId:run.id,itemKey:connection.key,reaction:'useful',source:'fixture',decidedAt:'2026-11-15T10:20:00+09:00'},{now:new Date('2026-11-15T01:20:00Z')});
+ const answered=(await capture(config,{source:'cli',occurredAt:'2026-11-15T10:30:00+09:00',receivedAt:'2026-11-15T10:30:00+09:00',text:'字幕の付け方を試したい',
+  meta:{capture_mode:'insight-answer',insight_run:run.id,insight_key:question.key,insight_question:question.text}})).inputId;
+ await organize(config,new MockLlm([result()]));
  await rebuildDigest(config,{now:clock});
  await rebuildDashboard(config,{now:clock});
  const insights=JSON.parse(await vault.read('90_system/insights.json')),items=insights.latest.items;
@@ -64,6 +71,8 @@ try{
   first_step:items.find(i=>i.section==='stalled').first_step,
   sources:items.map(i=>i.sources.length),
   corrected:ids[0],
+  reaction:{key:connection.key,value:'useful'},
+  answer:{key:question.key,input_id:answered},
   states:{running,failed,disabled},
  }},null,2)+'\n');
  console.log('今週の気づき（週次の統合の結果）の本体fixtureを生成しました');

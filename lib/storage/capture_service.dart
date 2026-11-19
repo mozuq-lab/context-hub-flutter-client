@@ -544,6 +544,30 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// 今週の気づきの項目への反応（役に立った・的外れ。noneは反応を外す）の依頼。
+  /// 本体は実行の記録にその項目があるときだけ記録し、本人が押した日時（occurred_at）が最後の反応を有効にする。
+  Future<CaptureResult> saveInsightReaction(
+    String operationId,
+    String runId,
+    String itemKey,
+    String reaction,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !RegExp(r'^SYN-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(runId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(itemKey) ||
+        !insightReactions.contains(reaction)) {
+      throw const FormatException('気づきと反応を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'insight-reaction',
+      'run_id': runId,
+      'item_key': itemKey,
+      'reaction': reaction,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// 似ているアイデアの組を束ねる（link）か、別の話とする（separate）依頼。
   /// 本体が索引を作ったときのIDEAファイルのhashに結び付け、束ねるときは本体が一致を確かめる。
   Future<CaptureResult> saveIdeaLink(

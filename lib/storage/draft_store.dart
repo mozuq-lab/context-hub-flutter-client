@@ -72,8 +72,17 @@ class DraftStore {
   bool _enabled = true;
   Future<void> _tail = Future.value();
 
-  static String keyFor(String identity, {String? gitDraftId}) =>
-      '$identity\u001f${gitDraftId == null ? 'memo' : 'git:$gitDraftId'}';
+  /// [answerTo]は、今週の気づきの項目へ答えるときの「実行ID/項目キー」。
+  static String keyFor(
+    String identity, {
+    String? gitDraftId,
+    String? answerTo,
+  }) =>
+      '$identity\u001f${gitDraftId != null
+          ? 'git:$gitDraftId'
+          : answerTo != null
+          ? 'insight:$answerTo'
+          : 'memo'}';
 
   /// 読込は1回だけ行い、同時の呼び出しは同じ読込を待つ。
   Future<void> _load() => _loading ??= _read();

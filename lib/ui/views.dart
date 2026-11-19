@@ -2329,43 +2329,137 @@ class _HubViewState extends State<HubView> {
     return widgets;
   }
 
+  /// 今週の気づきの項目へ反応を付ける（同じ反応をもう一度押すと外す）。
+  Future<void> reactToInsight(
+    String runId,
+    InsightItem item,
+    String reaction,
+  ) async {
+    try {
+      final result = await c.requestInsightReaction(runId, item.key, reaction);
+      if (mounted && !result.saved) {
+        notice(context, '保存結果を確認できません。受付状況から同じ操作を確認してください。');
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   /// 今週の気づきの1件。本文はAIが書いたもので、そのまま文字として出す（Markdownとして解釈しない）。
-  Widget insightEntry(InsightItem item) => Padding(
-    key: Key('home-insight-${item.key}'),
-    padding: const EdgeInsets.fromLTRB(72, 4, 16, 6),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(item.text, style: const TextStyle(height: 1.6)),
-        if (item.firstStep != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(
-              '最初の一歩: ${item.firstStep}',
-              style: const TextStyle(fontSize: 13, height: 1.6),
-            ),
-          ),
-        Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            const Text('根拠', style: TextStyle(fontSize: 12)),
-            for (final source in item.sources)
-              TextButton.icon(
-                key: Key('home-insight-source-${item.key}-${source.inputId}'),
-                onPressed: () {
-                  final record = repo.inputRecord(source.inputId);
-                  if (record != null) open(record.id);
-                },
-                icon: const Icon(Icons.article_outlined, size: 15),
-                label: Text(
-                  '${hubToday(source.at)}のメモ${source.corrected ? '（訂正あり）' : ''}',
-                ),
+  /// 反応（役に立った・的外れ）を付けられ、問いと止まっている意図には答えられる。
+  Widget insightEntry(InsightItem item) {
+    // 反応と答えに対応していない本体には、依頼を出さない。
+    final runId = repo.insights?.feedback == true ? repo.insights?.runId : null;
+    final (:reaction, :pending) = repo.insightReactionOf(item);
+    return Padding(
+      key: Key('home-insight-${item.key}'),
+      padding: const EdgeInsets.fromLTRB(72, 4, 16, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(item.text, style: const TextStyle(height: 1.6)),
+          if (item.firstStep != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                '最初の一歩: ${item.firstStep}',
+                style: const TextStyle(fontSize: 13, height: 1.6),
               ),
-          ],
-        ),
-      ],
-    ),
-  );
+            ),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text('根拠', style: TextStyle(fontSize: 12)),
+              for (final source in item.sources)
+                TextButton.icon(
+                  key: Key('home-insight-source-${item.key}-${source.inputId}'),
+                  onPressed: () {
+                    final record = repo.inputRecord(source.inputId);
+                    if (record != null) open(record.id);
+                  },
+                  icon: const Icon(Icons.article_outlined, size: 15),
+                  label: Text(
+                    '${hubToday(source.at)}のメモ${source.corrected ? '（訂正あり）' : ''}',
+                  ),
+                ),
+            ],
+          ),
+          if (item.answers.isNotEmpty)
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Text('答え', style: TextStyle(fontSize: 12)),
+                for (final answer in item.answers)
+                  TextButton.icon(
+                    key: Key(
+                      'home-insight-answered-${item.key}-${answer.inputId}',
+                    ),
+                    onPressed: () {
+                      final record = repo.inputRecord(answer.inputId);
+                      if (record != null) open(record.id);
+                    },
+                    icon: const Icon(Icons.chat_bubble_outline, size: 15),
+                    label: Text('${hubToday(answer.at)}のメモ'),
+                  ),
+              ],
+            ),
+          if (runId != null)
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                for (final value in const ['useful', 'off-target'])
+                  ChoiceChip(
+                    key: Key('home-insight-$value-${item.key}'),
+                    label: Text(insightReactionLabels[value]!),
+                    avatar: Icon(
+                      value == 'useful'
+                          ? Icons.thumb_up_alt_outlined
+                          : Icons.thumb_down_alt_outlined,
+                      size: 16,
+                    ),
+                    showCheckmark: false,
+                    visualDensity: VisualDensity.compact,
+                    selected: reaction == value,
+                    tooltip: reaction == value ? 'もう一度押すと反応を外します' : null,
+                    onSelected: busy
+                        ? null
+                        : (_) => reactToInsight(
+                            runId,
+                            item,
+                            reaction == value ? 'none' : value,
+                          ),
+                  ),
+                if (insightAnswerSections.contains(item.section))
+                  TextButton.icon(
+                    key: Key('home-insight-answer-${item.key}'),
+                    onPressed: busy
+                        ? null
+                        : () => showCapture(
+                            context,
+                            c,
+                            answer: InsightAnswerTarget(
+                              runId: runId,
+                              itemKey: item.key,
+                              question: item.text,
+                            ),
+                          ),
+                    icon: const Icon(Icons.edit_note, size: 18),
+                    label: const Text('答える'),
+                  ),
+                if (pending)
+                  Text(
+                    '反映待ち',
+                    key: Key('home-insight-pending-${item.key}'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
 
   /// 「次の一手」画面の「プロジェクト未定」。どのプロジェクトにも結び付いていないメモの、
   /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。
@@ -3294,6 +3388,7 @@ Future<void> showCapture(
   BuildContext context,
   HubController c, {
   GitDraft? draft,
+  InsightAnswerTarget? answer,
 }) async {
   if (c.composing) {
     return;
@@ -3303,7 +3398,8 @@ Future<void> showCapture(
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => CaptureDialog(controller: c, draft: draft),
+      builder: (_) =>
+          CaptureDialog(controller: c, draft: draft, answer: answer),
     );
   } finally {
     c.composing = false;
@@ -3531,11 +3627,19 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
 }
 
 class CaptureDialog extends StatefulWidget {
-  const CaptureDialog({super.key, required this.controller, this.draft});
+  const CaptureDialog({
+    super.key,
+    required this.controller,
+    this.draft,
+    this.answer,
+  });
   final HubController controller;
 
   /// 作業記録の下書きから入力を作る場合の下書き。本文とプロジェクトを初期値にする。
   final GitDraft? draft;
+
+  /// 今週の気づきの問いに答える場合の対象。答えはふつうのメモとして保存し、どの問いへの答えかをmetaで添える。
+  final InsightAnswerTarget? answer;
   @override
   State<CaptureDialog> createState() => _CaptureDialogState();
 }
@@ -3610,7 +3714,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
   void initState() {
     super.initState();
     _initial();
-    _draftKey = widget.controller.draftKey(gitDraftId: widget.draft?.id);
+    final answer = widget.answer;
+    _draftKey = widget.controller.draftKey(
+      gitDraftId: widget.draft?.id,
+      answerTo: answer == null ? null : '${answer.runId}/${answer.itemKey}',
+    );
     text.addListener(_schedulePersist);
     _lifecycle = AppLifecycleListener(
       onInactive: _persistNow,
@@ -3654,7 +3762,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
       }
       if (!mounted || text.text != (draft?.text ?? '')) return;
       text.text = stored.text;
-      kind = stored.kind;
+      kind = widget.answer != null ? 'memo' : stored.kind;
       project = draft != null
           ? draft.projectId
           : stored.project != null && projects.containsKey(stored.project)
@@ -3799,6 +3907,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
           project: project,
           gitDraftId: widget.draft?.id,
           gitDraftHash: widget.draft?.hash,
+          meta: widget.answer?.meta,
         ),
       );
       await _settled(r);
@@ -3861,7 +3970,13 @@ class _CaptureDialogState extends State<CaptureDialog> {
       child: PopScope(
         canPop: !busy,
         child: AlertDialog(
-          title: Text(widget.draft == null ? '思いつきを、そのまま。' : '下書きから入力を作る'),
+          title: Text(
+            widget.answer != null
+                ? '問いに答える'
+                : widget.draft == null
+                ? '思いつきを、そのまま。'
+                : '下書きから入力を作る',
+          ),
           content: SizedBox(
             width: 620,
             child: !_ready
@@ -3900,8 +4015,41 @@ class _CaptureDialogState extends State<CaptureDialog> {
                               ),
                             ),
                         ],
+                        if (widget.answer case final answer?) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            key: const Key('answer-question'),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .secondaryContainer
+                                  .withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  '今週の気づきの問い（AIの推定・未検証）',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  answer.question,
+                                  style: const TextStyle(height: 1.6),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            '答えはふつうのメモとして保存し、この問いへの答えだと分かるように記録します。次の週の読み直しで使われます。',
+                            style: TextStyle(fontSize: 12, height: 1.5),
+                          ),
+                        ],
                         const SizedBox(height: 8),
-                        if (!locked)
+                        if (!locked && widget.answer == null)
                           Align(
                             alignment: Alignment.centerLeft,
                             child: PopupMenuButton<String>(
@@ -3975,30 +4123,38 @@ class _CaptureDialogState extends State<CaptureDialog> {
                           minLines: 5,
                           maxLines: 10,
                           maxLength: 8000,
-                          decoration: const InputDecoration(
-                            hintText: '断片的なメモ、疑問、あとで考えたいこと…',
+                          decoration: InputDecoration(
+                            hintText: widget.answer != null
+                                ? '1行からで構いません'
+                                : '断片的なメモ、疑問、あとで考えたいこと…',
                             alignLabelWithHint: true,
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        DropdownButtonFormField<String>(
-                          key: ValueKey('memo-kind-$_formGeneration'),
-                          initialValue: kind,
-                          decoration: const InputDecoration(labelText: '種類'),
-                          items: const [
-                            DropdownMenuItem(value: 'memo', child: Text('メモ')),
-                            DropdownMenuItem(
-                              value: 'work-summary',
-                              child: Text('AIの作業要約・未検証'),
-                            ),
-                          ],
-                          onChanged: locked
-                              ? null
-                              : (v) {
-                                  setState(() => kind = v!);
-                                  _schedulePersist();
-                                },
-                        ),
+                        // 問いへの答えは本人のメモとして残すので、種類を選ばせない。
+                        if (widget.answer == null) ...[
+                          const SizedBox(height: 16),
+                          DropdownButtonFormField<String>(
+                            key: ValueKey('memo-kind-$_formGeneration'),
+                            initialValue: kind,
+                            decoration: const InputDecoration(labelText: '種類'),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'memo',
+                                child: Text('メモ'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'work-summary',
+                                child: Text('AIの作業要約・未検証'),
+                              ),
+                            ],
+                            onChanged: locked
+                                ? null
+                                : (v) {
+                                    setState(() => kind = v!);
+                                    _schedulePersist();
+                                  },
+                          ),
+                        ],
                         const SizedBox(height: 16),
                         DropdownButtonFormField<String>(
                           key: ValueKey('memo-project-$_formGeneration'),
