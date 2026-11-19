@@ -823,7 +823,7 @@ class HubRepository {
       // 本体で無効にしたときは、何も出さない。
       if (j['enabled'] == false) return;
       DateTime? createdAt;
-      String? mode;
+      String? mode, runId;
       final items = <InsightItem>[];
       var waiting = 0;
       if (latest is Map) {
@@ -838,6 +838,7 @@ class HubRepository {
           throw const FormatException();
         }
         mode = kind;
+        runId = id;
         final seen = <String>{};
         for (final item in list) {
           if (item is! Map) throw const FormatException();
@@ -845,7 +846,9 @@ class HubRepository {
               section = item['section'],
               text = item['text'],
               step = item['first_step'],
-              sources = item['sources'];
+              sources = item['sources'],
+              reaction = item['reaction'],
+              answers = item['answers'] ?? const [];
           if (key is! String ||
               !_insightKey.hasMatch(key) ||
               !seen.add(key) ||
@@ -855,8 +858,25 @@ class HubRepository {
               (step != null && (step is! String || step.trim().isEmpty)) ||
               sources is! List ||
               sources.isEmpty ||
-              sources.length > 20) {
+              sources.length > 20 ||
+              (reaction != null && reaction is! String) ||
+              answers is! List ||
+              answers.length > 20) {
             throw const FormatException();
+          }
+          // 答えのメモ。この端末に届いていない答えは、届いてから示す（項目は載せる）。
+          final answered = <InsightAnswer>[];
+          for (final answer in answers) {
+            final inputId = answer is Map ? answer['input_id'] : null,
+                at = answer is Map ? timestamp(answer['occurred_at']) : null;
+            if (inputId is! String ||
+                !inputIdPattern.hasMatch(inputId) ||
+                at == null) {
+              throw const FormatException();
+            }
+            if (_inputs[inputId] != null) {
+              answered.add(InsightAnswer(inputId: inputId, at: at));
+            }
           }
           final parsed = <InsightSource>[], seenSources = <String>{};
           var missing = false;
@@ -893,6 +913,11 @@ class HubRepository {
               text: text.trim(),
               firstStep: (step as String?)?.trim(),
               sources: parsed,
+              // このアプリの知らない反応は、反応なしとして扱う。
+              reaction: insightReactionLabels.containsKey(reaction)
+                  ? reaction as String
+                  : null,
+              answers: answered,
             ),
           );
         }
@@ -908,6 +933,8 @@ class HubRepository {
         }
       }
       insights = Insights(
+        runId: runId,
+        generatedAt: timestamp(j['generated_at'])!,
         intervalDays: interval,
         createdAt: createdAt,
         mode: mode,
@@ -1027,6 +1054,9 @@ class HubRepository {
   /// このアイデアを含む束。束ねていなければnull。
   IdeaGroup? ideaGroupOf(String ideaId) =>
       ideaGroups.where((g) => g.ideas.contains(ideaId)).firstOrNull;
+
+  final _pendingInsightReactions =
+      <String, ({String requestId, String? reaction})>{};
 
   /// 反映を待っている、この組への判断の依頼。
   String? ideaLinkRequestIdFor(String a, String b) =>
@@ -1733,6 +1763,7 @@ class HubRepository {
 
   void _readIntake() {
     final ideaLinkItems = <(IntakeStatus, Map, String?)>[];
+    final reactionItems = <(IntakeStatus, Map, String?)>[];
     for (final e in _files.entries.where(
       (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
     )) {
@@ -1761,6 +1792,7 @@ class HubRepository {
               'idea-link',
               'project-merge',
               'project-unmerge',
+              'insight-reaction',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
           throw const FormatException();
@@ -1883,6 +1915,18 @@ class HubRepository {
                 !ideaLinkActions.contains(m['action']))) {
           throw const FormatException();
         }
+        final reacting = m['operation'] == 'insight-reaction';
+        if (reacting &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['run_id'] is! String ||
+                !_insightRunId.hasMatch(m['run_id']) ||
+                m['item_key'] is! String ||
+                !_insightKey.hasMatch(m['item_key']) ||
+                !insightReactions.contains(m['reaction']))) {
+          throw const FormatException();
+        }
+        String? reactionId;
         final creation = m['operation'] == 'project-create',
             conflictResolve = m['operation'] == 'conflict-resolve';
         if (creation &&
@@ -1998,7 +2042,9 @@ class HubRepository {
         final item = IntakeStatus(
           id: id,
           path: e.key,
-          title: ideaLink
+          title: reacting
+              ? '今週の気づきへの反応（${insightReactionLabels[m['reaction']] ?? '反応を外す'}）: ${_insightTitle(m['run_id'], m['item_key'])}'
+              : ideaLink
               ? '${m['action'] == 'link' ? 'アイデアを束ねる依頼' : 'アイデアを別の話とする依頼'}: ${_ideaTitle((m['idea_ids'] as List)[0])} / ${_ideaTitle((m['idea_ids'] as List)[1])}'
               : creation
               ? '新しいプロジェクトの作成依頼: ${m['title']}'
@@ -2176,6 +2222,21 @@ class HubRepository {
                   ? 'Miniがアイデアを束ねました。'
                   : 'Miniが別の話として記録しました。';
             }
+            if (reacting) {
+              final r = ack['result'] as Map;
+              if (r['runId'] != m['run_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['reaction'] != m['reaction'] ||
+                  r['reactionId'] is! String ||
+                  !RegExp(
+                    r'^IRX-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['reactionId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              reactionId = r['reactionId'] as String;
+              item.detail = 'Miniが反応を記録しました。';
+            }
             if (hintDismiss) {
               final r = ack['result'] as Map;
               if (r['projectId'] != m['project_id'] ||
@@ -2340,6 +2401,7 @@ class HubRepository {
         }
         if (itemReport) _itemRequest(item, m, resolutionId);
         if (ideaLink) ideaLinkItems.add((item, m, ideaLinkId));
+        if (reacting) reactionItems.add((item, m, reactionId));
         if (itemSchedule) {
           _itemRequest(
             item,
@@ -2386,6 +2448,76 @@ class HubRepository {
         _ideaLinkRequest(item, m, linkId);
       }
     }
+    _insightReactionRequests(reactionItems);
+  }
+
+  String _insightTitle(Object? runId, Object? key) {
+    final item = insights?.runId == runId
+        ? insights!.items.where((i) => i.key == key).firstOrNull
+        : null;
+    return item == null ? '前の週の気づき' : clip(item.text, 30);
+  }
+
+  /// 今週の気づきの反応の記録（90_system/insight-reactions）が作られた日時。届いていない・読めない記録はnull。
+  DateTime? _insightReactionCreatedAt(String reactionId) {
+    final raw = snapshot.files['90_system/insight-reactions/$reactionId.json'];
+    if (raw == null) return null;
+    try {
+      final j = jsonDecode(raw);
+      return j is Map && j['id'] == reactionId && j['created_at'] is String
+          ? DateTime.parse(j['created_at'] as String)
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 項目ごとの、反映を待っている反応（noneは反応を外す依頼）。
+  ///
+  /// 同じ項目への反応は、本人が押した日時が最後の依頼だけを見る（本体も同じ順で有効な反応を決める）。
+  /// 受付前の依頼と、受け付けた記録より後の一覧がまだ届いていない依頼を、反映待ちとして示す。
+  /// 一覧が既に同じ反応を示していれば、反映待ちにしない（内容が同じとき、本体は一覧を書き直さない）。
+  void _insightReactionRequests(List<(IntakeStatus, Map, String?)> items) {
+    final current = insights;
+    if (current == null || current.runId == null) return;
+    final latest = <String, (IntakeStatus, Map, String?)>{};
+    for (final entry in items) {
+      final (item, m, _) = entry;
+      if (m['run_id'] != current.runId ||
+          !['waiting', 'accepted'].contains(item.state)) {
+        continue;
+      }
+      final key = m['item_key'] as String, before = latest[key]?.$1;
+      if (before == null ||
+          (item.at ?? DateTime(0)).compareTo(before.at ?? DateTime(0)) > 0 ||
+          (item.at == before.at && item.id.compareTo(before.id) > 0)) {
+        latest[key] = entry;
+      }
+    }
+    for (final MapEntry(:key, value: (item, m, reactionId)) in latest.entries) {
+      final wanted = m['reaction'] == 'none' ? null : m['reaction'] as String;
+      final shown = current.items.where((i) => i.key == key).firstOrNull;
+      if (shown == null || shown.reaction == wanted) continue;
+      if (item.state == 'accepted') {
+        final created = reactionId == null
+            ? null
+            : _insightReactionCreatedAt(reactionId);
+        // 記録より後に作られた一覧が届いていれば、その後の別の反応（CLIや別の端末）を含めて一覧に従う。
+        if (created != null && !current.generatedAt.isBefore(created)) {
+          continue;
+        }
+        item.detail = 'Mini受領済み。今週の気づきの一覧の同期を待っています。';
+      }
+      _pendingInsightReactions[key] = (requestId: item.id, reaction: wanted);
+    }
+  }
+
+  /// 今週の気づきの項目に示す反応。反映を待っている依頼があればその反応（pendingがtrue）、なければ本体の記録。
+  ({String? reaction, bool pending}) insightReactionOf(InsightItem item) {
+    final waiting = _pendingInsightReactions[item.key];
+    return waiting == null
+        ? (reaction: item.reaction, pending: false)
+        : (reaction: waiting.reaction, pending: true);
   }
 
   String _ideaTitle(Object? id) =>
@@ -2430,6 +2562,9 @@ class HubRepository {
     }
     if (reason is Map && reason['code'] == 'conflict-target-changed') {
       return '確認した後にNOWが変わっていました。再読込して差分を確認し直してください。';
+    }
+    if (reason is Map && reason['code'] == 'insight-missing') {
+      return '今週の気づきが見つかりません（次の週の気づきに入れ替わった可能性があります）。再読込して確かめてください。';
     }
     if (reason is Map && reason['code'] == 'idea-missing') {
       return 'アイデアが見つからないか、分類が取り消されていました。再読込して一覧を確認してください。';

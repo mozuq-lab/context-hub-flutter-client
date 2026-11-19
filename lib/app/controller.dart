@@ -732,11 +732,15 @@ class HubController extends ChangeNotifier {
   late final TemplateStore templates = TemplateStore(access);
 
   /// 現在のVaultでの書きかけのキー。Vaultが未選択ならnull。
-  String? draftKey({String? gitDraftId}) {
+  String? draftKey({String? gitDraftId, String? answerTo}) {
     final target = location;
     return target == null
         ? null
-        : DraftStore.keyFor(target.identity, gitDraftId: gitDraftId);
+        : DraftStore.keyFor(
+            target.identity,
+            gitDraftId: gitDraftId,
+            answerTo: answerTo,
+          );
   }
 
   /// 書きかけに残した操作IDの保存状態。journalがなければnull、読めなければ再送を防ぐため'uncertain'。
@@ -1449,6 +1453,26 @@ class HubController extends ChangeNotifier {
           service.saveIdeaLink(operation, a, hashA, b, hashB, action),
     );
   }
+
+  /// 今週の気づきの項目へ反応（[insightReactions]）を付ける依頼を保存する。noneは反応を外す。
+  /// 一覧が別の週の気づきに入れ替わっていれば、保存せずに止める。
+  Future<CaptureResult> requestInsightReaction(
+    String runId,
+    String itemKey,
+    String reaction,
+  ) => _confirmedRequest(
+    (parsed) {
+      final current = parsed.insights;
+      if (!insightReactions.contains(reaction) ||
+          current?.runId != runId ||
+          !current!.items.any((i) => i.key == itemKey)) {
+        throw StateError('今週の気づきが更新されています。表示を確認してから操作してください。');
+      }
+      return 'insight-reaction/$runId/$itemKey/$reaction';
+    },
+    (service, parsed, operation) =>
+        service.saveInsightReaction(operation, runId, itemKey, reaction),
+  );
 
   /// 作業記録の下書きを見送る依頼を保存する。
   Future<CaptureResult> requestGitDraftDismiss(

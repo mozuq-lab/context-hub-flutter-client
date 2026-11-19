@@ -668,6 +668,8 @@ class UnassignedMemo {
 /// 読み直した結果のうち、最後に成功した回のもの。AI生成・未検証で、表示だけに使う。
 class Insights {
   const Insights({
+    required this.runId,
+    required this.generatedAt,
     required this.intervalDays,
     required this.createdAt,
     required this.mode,
@@ -676,6 +678,12 @@ class Insights {
     required this.failure,
     required this.recordProblems,
   });
+
+  /// 最後に成功した実行のID（SYN-…）。反応と答えを結び付けるときに使う。まだ成功していなければnull。
+  final String? runId;
+
+  /// 本体がこの一覧を書いた日時。反応の依頼が一覧に反映されたかの判定に使う。
+  final DateTime generatedAt;
 
   /// 本体が自動で実行する間隔（日）。これより古い結果には、何日前のものかを添える。
   final int intervalDays;
@@ -718,6 +726,8 @@ class InsightItem {
     required this.text,
     required this.firstStep,
     required this.sources,
+    this.reaction,
+    this.answers = const [],
   });
 
   /// 項目のキー（本体が決める）。
@@ -734,6 +744,49 @@ class InsightItem {
 
   /// 根拠のメモ。
   final List<InsightSource> sources;
+
+  /// 本体に記録された本人の反応（[insightReactionLabels]のキー）。反応がなければnull。
+  final String? reaction;
+
+  /// この項目への答えのメモ（古い順）。
+  final List<InsightAnswer> answers;
+}
+
+/// 今週の気づきの項目への答えのメモ。
+class InsightAnswer {
+  const InsightAnswer({required this.inputId, required this.at});
+  final String inputId;
+  final DateTime at;
+}
+
+/// 今週の気づきへの反応（本体の受付操作 insight-reaction）。noneは前の反応を外す依頼。
+const insightReactions = ['useful', 'off-target', 'none'];
+const insightReactionLabels = {'useful': '役に立った', 'off-target': '的外れ'};
+
+/// 「答える」を出す欄。問いと、止まっている意図（「まだ調べますか」のように問いの形で書かれる）。
+const insightAnswerSections = {'questions', 'stalled'};
+
+/// 今週の気づきの項目に答えるときの対象。答えはふつうのメモとして保存し、どの気づきへの答えかをmetaで添える。
+class InsightAnswerTarget {
+  const InsightAnswerTarget({
+    required this.runId,
+    required this.itemKey,
+    required this.question,
+  });
+  final String runId, itemKey;
+
+  /// 答える問い（AIが書いた本文）。メモだけを読んでも何への答えか分かるよう、metaに残す。
+  final String question;
+
+  /// 本体が答えとして結び付けるmeta（本体のinsight-feedback.tsと同じキー）。
+  Map<String, String> get meta => {
+    'capture_mode': 'insight-answer',
+    'insight_run': runId,
+    'insight_key': itemKey,
+    'insight_question': question.length > 2000
+        ? question.substring(0, 2000)
+        : question,
+  };
 }
 
 /// 気づきの根拠のメモ。
