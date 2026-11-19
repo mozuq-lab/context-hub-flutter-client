@@ -2348,7 +2348,8 @@ class _HubViewState extends State<HubView> {
   /// 今週の気づきの1件。本文はAIが書いたもので、そのまま文字として出す（Markdownとして解釈しない）。
   /// 反応（役に立った・的外れ）を付けられ、問いと止まっている意図には答えられる。
   Widget insightEntry(InsightItem item) {
-    final runId = repo.insights?.runId;
+    // 反応と答えに対応していない本体には、依頼を出さない。
+    final runId = repo.insights?.feedback == true ? repo.insights?.runId : null;
     final (:reaction, :pending) = repo.insightReactionOf(item);
     return Padding(
       key: Key('home-insight-${item.key}'),
@@ -3761,7 +3762,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
       }
       if (!mounted || text.text != (draft?.text ?? '')) return;
       text.text = stored.text;
-      kind = stored.kind;
+      kind = widget.answer != null ? 'memo' : stored.kind;
       project = draft != null
           ? draft.projectId
           : stored.project != null && projects.containsKey(stored.project)
@@ -4129,25 +4130,31 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             alignLabelWithHint: true,
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        DropdownButtonFormField<String>(
-                          key: ValueKey('memo-kind-$_formGeneration'),
-                          initialValue: kind,
-                          decoration: const InputDecoration(labelText: '種類'),
-                          items: const [
-                            DropdownMenuItem(value: 'memo', child: Text('メモ')),
-                            DropdownMenuItem(
-                              value: 'work-summary',
-                              child: Text('AIの作業要約・未検証'),
-                            ),
-                          ],
-                          onChanged: locked
-                              ? null
-                              : (v) {
-                                  setState(() => kind = v!);
-                                  _schedulePersist();
-                                },
-                        ),
+                        // 問いへの答えは本人のメモとして残すので、種類を選ばせない。
+                        if (widget.answer == null) ...[
+                          const SizedBox(height: 16),
+                          DropdownButtonFormField<String>(
+                            key: ValueKey('memo-kind-$_formGeneration'),
+                            initialValue: kind,
+                            decoration: const InputDecoration(labelText: '種類'),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'memo',
+                                child: Text('メモ'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'work-summary',
+                                child: Text('AIの作業要約・未検証'),
+                              ),
+                            ],
+                            onChanged: locked
+                                ? null
+                                : (v) {
+                                    setState(() => kind = v!);
+                                    _schedulePersist();
+                                  },
+                          ),
+                        ],
                         const SizedBox(height: 16),
                         DropdownButtonFormField<String>(
                           key: ValueKey('memo-project-$_formGeneration'),

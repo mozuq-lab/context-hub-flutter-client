@@ -43,7 +43,8 @@ try{
  await correctInput(config,ids[0],{source:'cli',occurredAt:'2026-11-15T10:00:00+09:00',receivedAt:'2026-11-15T10:00:00+09:00',text:'土はもう調べた'});
  // 本人がつながりの項目に「役に立った」を付け、最初の問いに答える（答えはmeta付きのメモ）。
  const run=(await readSynthesisRuns(vault)).runs[0],connection=run.items.find(i=>i.section==='connections'),question=run.items.find(i=>i.section==='questions');
- await setInsightReaction(config,{runId:run.id,itemKey:connection.key,reaction:'useful',source:'fixture',decidedAt:'2026-11-15T10:20:00+09:00'});
+ // 記録する日時も固定し、一覧（clock）より前に記録された反応にする。
+ await setInsightReaction(config,{runId:run.id,itemKey:connection.key,reaction:'useful',source:'fixture',decidedAt:'2026-11-15T10:20:00+09:00'},{now:new Date('2026-11-15T01:20:00Z')});
  const answered=(await capture(config,{source:'cli',occurredAt:'2026-11-15T10:30:00+09:00',receivedAt:'2026-11-15T10:30:00+09:00',text:'字幕の付け方を試したい',
   meta:{capture_mode:'insight-answer',insight_run:run.id,insight_key:question.key,insight_question:question.text}})).inputId;
  await organize(config,new MockLlm([result()]));

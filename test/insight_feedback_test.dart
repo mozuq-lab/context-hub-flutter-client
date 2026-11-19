@@ -192,7 +192,8 @@ void main() {
       final status = repo.intake.single;
       expect(status.state, 'rejected');
       expect(status.detail, contains('今週の気づきが見つかりません'));
-      expect(status.title, contains('前の週の気づき'));
+      // 今の週の気づきのうち、この端末に出ていない項目への反応と分かるようにする。
+      expect(status.title, contains('この端末に出ていない項目'));
     });
   });
 
@@ -353,6 +354,8 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('template-menu')), findsNothing);
+      // 答えは本人のメモとして残す（AIの作業要約にはしない）。
+      expect(find.text('種類'), findsNothing);
       await t.enterText(find.byKey(const Key('memo-text')), 'まず3本の動画で試す');
       await t.tap(find.byKey(const Key('save-memo')));
       await t.pumpAndSettle();
@@ -387,6 +390,95 @@ void main() {
       expect((await c.drafts.read(key))?.text, '書きかけの答え');
       expect(await c.drafts.read(c.draftKey()!), isNull);
       expect(t.takeException(), isNull);
+    });
+
+    testWidgets('反応と答えに対応していない本体の一覧では、反応と「答える」を出さない', (t) async {
+      final a = MemoryUIAccess(), files = insightsFiles();
+      final j =
+          jsonDecode(files[HubRepository.insightsPath]!)
+              as Map<String, dynamic>;
+      for (final item in ((j['latest'] as Map)['items'] as List).cast<Map>()) {
+        item.remove('reaction');
+        item.remove('answers');
+      }
+      files[HubRepository.insightsPath] = jsonEncode(j);
+      final c = await sample(t, a, files);
+      final items = c.repository!.insights!.items;
+      expect(items, hasLength(expected['total']));
+      expect(c.repository!.insights!.feedback, isFalse);
+      await t.tap(find.byKey(const Key('home-insights-more')));
+      await t.pumpAndSettle();
+      for (final item in items) {
+        expect(find.byKey(Key('home-insight-${item.key}')), findsOneWidget);
+        expect(
+          find.byKey(Key('home-insight-useful-${item.key}')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(Key('home-insight-answer-${item.key}')),
+          findsNothing,
+        );
+      }
+      expect(t.takeException(), isNull);
+    });
+
+    test('受け付けた反応より後の判断が本体で有効なら、反映待ちのままにしない', () {
+      final files = insightsFiles(),
+          reaction = expected['reaction'] as Map<String, dynamic>;
+      final runId = HubRepository(VaultSnapshot(files)).insights!.runId!;
+      // ほかの端末の反応（役に立った。押した日時が後）が本体で有効なまま、この端末の古い依頼（的外れ）を後から受け付けた。
+      const requestId = 'REQ-95111111222243338444555555555555',
+          reactionId = 'IRX-01M7Z00000000000000000000A';
+      final raw = encodePacket({
+        'schema_version': 1,
+        'request_id': requestId,
+        'source': 'flutter-client/95111111-2222-4333-8444-555555555555',
+        'occurred_at': '2026-11-15T01:00:00.000Z',
+        'operation': 'insight-reaction',
+        'run_id': runId,
+        'item_key': reaction['key'],
+        'reaction': 'off-target',
+        'confirmed': true,
+      }, '');
+      files['Input/$requestId.md'] = raw;
+      files['90_system/intake/$requestId.json'] = jsonEncode({
+        'schema_version': 1,
+        'request_id': requestId,
+        'request_hash': digest(raw),
+        'path': 'Input/$requestId.md',
+        'operation': 'insight-reaction',
+        'status': 'accepted',
+        'received_at': '2026-11-20T00:00:00.000Z',
+        'result': {
+          'reactionId': reactionId,
+          'runId': runId,
+          'itemKey': reaction['key'],
+          'reaction': 'off-target',
+          'deduped': false,
+        },
+      });
+      files['90_system/insight-reactions/$reactionId.json'] = jsonEncode({
+        'schema_version': 1,
+        'id': reactionId,
+        'run_id': runId,
+        'item_key': reaction['key'],
+        'reaction': 'off-target',
+        'decided_at': '2026-11-15T01:00:00.000Z',
+        'source': 'flutter-client/95111111-2222-4333-8444-555555555555',
+        'source_event_id': requestId,
+        'created_at': '2026-11-20T00:00:00.000Z',
+      });
+      final repo = HubRepository(VaultSnapshot(files));
+      expect(repo.warnings, isEmpty);
+      final item = repo.insights!.items.singleWhere(
+        (i) => i.key == reaction['key'],
+      );
+      expect(item.reaction, 'useful');
+      expect(repo.insightReactionOf(item), (
+        reaction: 'useful',
+        pending: false,
+      ));
+      expect(repo.intake.single.state, 'accepted');
     });
   });
 }

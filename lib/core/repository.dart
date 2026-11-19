@@ -824,6 +824,7 @@ class HubRepository {
       if (j['enabled'] == false) return;
       DateTime? createdAt;
       String? mode, runId;
+      var feedback = false;
       final items = <InsightItem>[];
       var waiting = 0;
       if (latest is Map) {
@@ -839,6 +840,10 @@ class HubRepository {
         }
         mode = kind;
         runId = id;
+        feedback = list.every(
+          (i) =>
+              i is Map && i.containsKey('reaction') && i.containsKey('answers'),
+        );
         final seen = <String>{};
         for (final item in list) {
           if (item is! Map) throw const FormatException();
@@ -935,6 +940,7 @@ class HubRepository {
       insights = Insights(
         runId: runId,
         generatedAt: timestamp(j['generated_at'])!,
+        feedback: feedback,
         intervalDays: interval,
         createdAt: createdAt,
         mode: mode,
@@ -2452,24 +2458,44 @@ class HubRepository {
   }
 
   String _insightTitle(Object? runId, Object? key) {
-    final item = insights?.runId == runId
-        ? insights!.items.where((i) => i.key == key).firstOrNull
-        : null;
-    return item == null ? '前の週の気づき' : clip(item.text, 30);
+    if (insights?.runId != runId) return '前の週の気づき';
+    final item = insights!.items.where((i) => i.key == key).firstOrNull;
+    return item == null ? '今週の気づき（この端末に出ていない項目）' : clip(item.text, 30);
   }
 
-  /// 今週の気づきの反応の記録（90_system/insight-reactions）が作られた日時。届いていない・読めない記録はnull。
-  DateTime? _insightReactionCreatedAt(String reactionId) {
-    final raw = snapshot.files['90_system/insight-reactions/$reactionId.json'];
-    if (raw == null) return null;
-    try {
-      final j = jsonDecode(raw);
-      return j is Map && j['id'] == reactionId && j['created_at'] is String
-          ? DateTime.parse(j['created_at'] as String)
-          : null;
-    } catch (_) {
-      return null;
+  /// 今週の気づきへの反応の記録（90_system/insight-reactions）。読めない記録は飛ばす（本体のdoctorが示す）。
+  Map<String, ({String ref, DateTime decidedAt, DateTime createdAt})>
+  _insightReactionRecords() {
+    final records =
+        <String, ({String ref, DateTime decidedAt, DateTime createdAt})>{};
+    final name = RegExp(
+      r'^90_system/insight-reactions/(IRX-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in snapshot.files.entries) {
+      final id = name.firstMatch(e.key)?.group(1);
+      if (id == null) continue;
+      try {
+        final j = jsonDecode(e.value);
+        final decided = j is Map ? timestamp(j['decided_at']) : null,
+            created = j is Map ? timestamp(j['created_at']) : null;
+        if (j is! Map ||
+            j['id'] != id ||
+            j['run_id'] is! String ||
+            j['item_key'] is! String ||
+            decided == null ||
+            created == null) {
+          continue;
+        }
+        records[id] = (
+          ref: '${j['run_id']}|${j['item_key']}',
+          decidedAt: decided,
+          createdAt: created,
+        );
+      } catch (_) {
+        continue;
+      }
     }
+    return records;
   }
 
   /// 項目ごとの、反映を待っている反応（noneは反応を外す依頼）。
@@ -2480,6 +2506,7 @@ class HubRepository {
   void _insightReactionRequests(List<(IntakeStatus, Map, String?)> items) {
     final current = insights;
     if (current == null || current.runId == null) return;
+    final records = _insightReactionRecords();
     final latest = <String, (IntakeStatus, Map, String?)>{};
     for (final entry in items) {
       final (item, m, _) = entry;
@@ -2499,12 +2526,23 @@ class HubRepository {
       final shown = current.items.where((i) => i.key == key).firstOrNull;
       if (shown == null || shown.reaction == wanted) continue;
       if (item.state == 'accepted') {
-        final created = reactionId == null
-            ? null
-            : _insightReactionCreatedAt(reactionId);
-        // 記録より後に作られた一覧が届いていれば、その後の別の反応（CLIや別の端末）を含めて一覧に従う。
-        if (created != null && !current.generatedAt.isBefore(created)) {
-          continue;
+        final record = reactionId == null ? null : records[reactionId];
+        if (record != null) {
+          // 本体と同じ順（押した日時、記録した日時、ID）で、この項目の最後の記録を求める。
+          // この依頼の記録が最後でなければ、後の判断（別の端末やCLI）が有効なので一覧に従う。
+          final newest = records.entries
+              .where((r) => r.value.ref == record.ref)
+              .reduce((a, b) {
+                final c = a.value.decidedAt.compareTo(b.value.decidedAt) != 0
+                    ? a.value.decidedAt.compareTo(b.value.decidedAt)
+                    : a.value.createdAt.compareTo(b.value.createdAt) != 0
+                    ? a.value.createdAt.compareTo(b.value.createdAt)
+                    : a.key.compareTo(b.key);
+                return c > 0 ? a : b;
+              });
+          if (newest.key != reactionId) continue;
+          // 記録より後に作られた一覧が届いていれば、一覧に従う。
+          if (!current.generatedAt.isBefore(record.createdAt)) continue;
         }
         item.detail = 'Mini受領済み。今週の気づきの一覧の同期を待っています。';
       }

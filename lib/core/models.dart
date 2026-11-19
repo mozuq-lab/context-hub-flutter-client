@@ -670,6 +670,7 @@ class Insights {
   const Insights({
     required this.runId,
     required this.generatedAt,
+    this.feedback = false,
     required this.intervalDays,
     required this.createdAt,
     required this.mode,
@@ -684,6 +685,10 @@ class Insights {
 
   /// 本体がこの一覧を書いた日時。反応の依頼が一覧に反映されたかの判定に使う。
   final DateTime generatedAt;
+
+  /// 本体が反応と答えに対応しているか（対応した本体は、すべての項目に`reaction`と`answers`を書く）。
+  /// 対応前の本体には反応の依頼が届かず、答えも項目に結び付かないので、反応と「答える」を出さない。
+  final bool feedback;
 
   /// 本体が自動で実行する間隔（日）。これより古い結果には、何日前のものかを添える。
   final int intervalDays;

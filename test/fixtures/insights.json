@@ -1,54 +1,54 @@
 {
   "schema_version": 1,
   "files": {
-    "00_inbox/2026-10-20_IN-01M7T2EGEVTCBN8TH86WQTYW86.md": "---\nschema_version: 1\nid: IN-01M7T2EGEVTCBN8TH86WQTYW86\nkind: memo\nsource: cli\nsource_event_id: 01M7T2EGEWBYC22F97GJRZ1V9M\noccurred_at: 2026-10-20T09:00:00+09:00\nreceived_at: 2026-10-20T09:00:00+09:00\norigin: user-note\n---\n菜園の土を調べたい",
-    "00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md": "---\nschema_version: 1\nid: IN-01M7T2EGFHVWD9EJMXTN1B3N9Q\nkind: memo\nsource: cli\nsource_event_id: 01M7T2EGFHSJK0A1NJCBMNMD4T\noccurred_at: 2026-11-03T09:00:00+09:00\nreceived_at: 2026-11-03T09:00:00+09:00\norigin: user-note\n---\n資格の講習に関心がある",
-    "00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md": "---\nschema_version: 1\nid: IN-01M7T2EGG0XVSH8W5775Z3QFDW\nkind: memo\nsource: cli\nsource_event_id: 01M7T2EGG0WX4TTKG9SNHGG6WM\noccurred_at: 2026-11-10T09:00:00+09:00\nreceived_at: 2026-11-10T09:00:00+09:00\norigin: user-note\n---\n資格の講習を受ける必要がある",
-    "00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md": "---\nschema_version: 1\nid: IN-01M7T2EGGCFRK9YZK0SNA11SSA\nkind: memo\nsource: cli\nsource_event_id: 01M7T2EGGDHRWB8DS24VM7VK1K\noccurred_at: 2026-11-12T09:00:00+09:00\nreceived_at: 2026-11-12T09:00:00+09:00\norigin: user-note\n---\n動画の作り方を見直した",
-    "00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md": "---\nschema_version: 1\nid: IN-01M7T2EGGRGA779EGTB6CQQ1K3\nkind: memo\nsource: cli\nsource_event_id: 01M7T2EGGRA2JJ2E1KVDNNPFY8\noccurred_at: 2026-11-13T09:00:00+09:00\nreceived_at: 2026-11-13T09:00:00+09:00\norigin: user-note\n---\n読んだ本の感想を1か所に集めたい",
-    "00_inbox/2026-11-15_IN-01M7T2EGZ3N3ST5NHQZGFB583P.md": "---\nschema_version: 1\nid: IN-01M7T2EGZ3N3ST5NHQZGFB583P\nkind: correction\ncorrects_input_id: IN-01M7T2EGEVTCBN8TH86WQTYW86\nsource: cli\nsource_event_id: 01M7T2EGZ36FVQRC173X9S0ERK\noccurred_at: 2026-11-15T10:00:00+09:00\nreceived_at: 2026-11-15T10:00:00+09:00\norigin: user-note\n---\n土はもう調べた",
-    "00_inbox/2026-11-15_IN-01M7T2EH0QJ369VAFC6JHWFXFB.md": "---\nschema_version: 1\nid: IN-01M7T2EH0QJ369VAFC6JHWFXFB\nkind: memo\nsource: cli\nsource_event_id: 01M7T2EH0Q46T4NYEM3CX32AW8\noccurred_at: 2026-11-15T10:30:00+09:00\nreceived_at: 2026-11-15T10:30:00+09:00\nmeta:\n  capture_mode: insight-answer\n  insight_run: SYN-01M7E81W00DBPDZXGZWSA6Z7BB\n  insight_key: aa341e6ddcacbcad09e6c1ffd5f1d1ea21f5ae86f42afeca221cb93112b15b6c\n  insight_question: 見直した結果、次に試したいことはありますか\norigin: user-note\n---\n字幕の付け方を試したい",
-    "10_projects/garden/NOW.md": "---\nschema_version: 1\nproject: garden\ngenerated_by:\n  model: deterministic-writer\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:12:56.524Z\nlast_evidence_at: null\ninput_ids: []\nverified: false\ngenerated_hash: sha256:4ebff9132612d05dd175bd44fe7ec08f084ec803b9e1f5e77aeb4fc6e5c41b45\n---\n（手動領域: この領域は再生成しても保持されます）\n\n<!-- ctx:auto:start -->\n# 現在地\n- 不明（根拠となる入力がありません）\n\n# 次の一手\n- 不明（根拠となる入力がありません）\n\n## 提案\n- 提案はありません\n\n# 未解決\n- 不明（未解決事項の確認が必要です）\n<!-- ctx:auto:end -->\n",
+    "00_inbox/2026-10-20_IN-01M7T3PYWB1STSJXPK6PB3Q9GM.md": "---\nschema_version: 1\nid: IN-01M7T3PYWB1STSJXPK6PB3Q9GM\nkind: memo\nsource: cli\nsource_event_id: 01M7T3PYWCGRBS5AX01ZAMZ5JT\noccurred_at: 2026-10-20T09:00:00+09:00\nreceived_at: 2026-10-20T09:00:00+09:00\norigin: user-note\n---\n菜園の土を調べたい",
+    "00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md": "---\nschema_version: 1\nid: IN-01M7T3PYX29AMPXQBN8NBH7F67\nkind: memo\nsource: cli\nsource_event_id: 01M7T3PYX26R30E4X5PQFBY0E4\noccurred_at: 2026-11-03T09:00:00+09:00\nreceived_at: 2026-11-03T09:00:00+09:00\norigin: user-note\n---\n資格の講習に関心がある",
+    "00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md": "---\nschema_version: 1\nid: IN-01M7T3PYXJYGKPZFDTPMBH9T0G\nkind: memo\nsource: cli\nsource_event_id: 01M7T3PYXJT87KXR9WST7QG4T2\noccurred_at: 2026-11-10T09:00:00+09:00\nreceived_at: 2026-11-10T09:00:00+09:00\norigin: user-note\n---\n資格の講習を受ける必要がある",
+    "00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md": "---\nschema_version: 1\nid: IN-01M7T3PYXYAZ00DJV40S508AN9\nkind: memo\nsource: cli\nsource_event_id: 01M7T3PYXYYWQ4TSD90D0W6PFE\noccurred_at: 2026-11-12T09:00:00+09:00\nreceived_at: 2026-11-12T09:00:00+09:00\norigin: user-note\n---\n動画の作り方を見直した",
+    "00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md": "---\nschema_version: 1\nid: IN-01M7T3PYYG162QRV1WJGXA04WN\nkind: memo\nsource: cli\nsource_event_id: 01M7T3PYYHWXZQ0W1339HCJK7F\noccurred_at: 2026-11-13T09:00:00+09:00\nreceived_at: 2026-11-13T09:00:00+09:00\norigin: user-note\n---\n読んだ本の感想を1か所に集めたい",
+    "00_inbox/2026-11-15_IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ.md": "---\nschema_version: 1\nid: IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ\nkind: correction\ncorrects_input_id: IN-01M7T3PYWB1STSJXPK6PB3Q9GM\nsource: cli\nsource_event_id: 01M7T3PZCYW1NEZKPABCBZE35X\noccurred_at: 2026-11-15T10:00:00+09:00\nreceived_at: 2026-11-15T10:00:00+09:00\norigin: user-note\n---\n土はもう調べた",
+    "00_inbox/2026-11-15_IN-01M7T3PZE5S0CFP1JVG533B5HC.md": "---\nschema_version: 1\nid: IN-01M7T3PZE5S0CFP1JVG533B5HC\nkind: memo\nsource: cli\nsource_event_id: 01M7T3PZE5WRP8KH6M33M7DXBM\noccurred_at: 2026-11-15T10:30:00+09:00\nreceived_at: 2026-11-15T10:30:00+09:00\nmeta:\n  capture_mode: insight-answer\n  insight_run: SYN-01M7E81W004PDEBSK3G1JGW85D\n  insight_key: 3ca6c6c56565c7d28518a290ab9c59d304610906f8f98cece8278c25347f9f6e\n  insight_question: 見直した結果、次に試したいことはありますか\norigin: user-note\n---\n字幕の付け方を試したい",
+    "10_projects/garden/NOW.md": "---\nschema_version: 1\nproject: garden\ngenerated_by:\n  model: deterministic-writer\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:35:02.013Z\nlast_evidence_at: null\ninput_ids: []\nverified: false\ngenerated_hash: sha256:4ebff9132612d05dd175bd44fe7ec08f084ec803b9e1f5e77aeb4fc6e5c41b45\n---\n（手動領域: この領域は再生成しても保持されます）\n\n<!-- ctx:auto:start -->\n# 現在地\n- 不明（根拠となる入力がありません）\n\n# 次の一手\n- 不明（根拠となる入力がありません）\n\n## 提案\n- 提案はありません\n\n# 未解決\n- 不明（未解決事項の確認が必要です）\n<!-- ctx:auto:end -->\n",
     "10_projects/garden/POLICY.md": "# プロジェクト gardenの有効な方針\n\n本人が採用したdecision/preferenceのみ。端末に揃った同期版です。正本は各知識と承認記録です。\n\n有効な方針はありません。\n",
     "10_projects/garden/project.md": "---\nid: garden\ntitle: 家庭菜園\naliases: []\nkeywords: []\nstatus: active\n---\n# 家庭菜園\n\n人が保守するプロジェクト定義です。\n",
-    "20_ideas/IDEA-01M7T2EGEVTCBN8TH86WQTYW86.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:12:56.524Z\ninput_ids:\n  - IN-01M7T2EGEVTCBN8TH86WQTYW86\n  - IN-01M7T2EGZ3N3ST5NHQZGFB583P\nsource: cli\noccurred_at: 2026-10-20T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T2EGEVTCBN8TH86WQTYW86\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:03ced5d7981c0384fbfcc8270d3ad3921d7ae5669ff52fb58071e3a1ab0f470f\n---\n# アイデア（AI生成・未検証）\n\nAIの要約\n\n入力: [IN-01M7T2EGZ3N3ST5NHQZGFB583P](../00_inbox/2026-11-15_IN-01M7T2EGZ3N3ST5NHQZGFB583P.md)\n出典: cli\n発生日時: 2026-11-15 10:00 Asia/Tokyo\n受信日時: 2026-11-15 10:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
-    "20_ideas/IDEA-01M7T2EGFHVWD9EJMXTN1B3N9Q.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:12:56.131Z\ninput_ids:\n  - IN-01M7T2EGFHVWD9EJMXTN1B3N9Q\nsource: cli\noccurred_at: 2026-11-03T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T2EGFHVWD9EJMXTN1B3N9Q\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:0a93467f86895c5fddb43836558c868fd3d1536e76ba03efea02682dd9fee44e\n---\n# アイデア（AI生成・未検証）\n\n資格の講習に関心がある\n\n入力: [IN-01M7T2EGFHVWD9EJMXTN1B3N9Q](../00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md)\n出典: cli\n発生日時: 2026-11-03 09:00 Asia/Tokyo\n受信日時: 2026-11-03 09:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
-    "20_ideas/IDEA-01M7T2EGGCFRK9YZK0SNA11SSA.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:12:56.235Z\ninput_ids:\n  - IN-01M7T2EGGCFRK9YZK0SNA11SSA\nsource: cli\noccurred_at: 2026-11-12T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T2EGGCFRK9YZK0SNA11SSA\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:44518fe445eefbebb961a536bfccd55f75aa915ac42a5289c201c3ddf30d54dd\n---\n# アイデア（AI生成・未検証）\n\n動画の作り方を見直した\n\n入力: [IN-01M7T2EGGCFRK9YZK0SNA11SSA](../00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md)\n出典: cli\n発生日時: 2026-11-12 09:00 Asia/Tokyo\n受信日時: 2026-11-12 09:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
-    "20_ideas/IDEA-01M7T2EGGRGA779EGTB6CQQ1K3.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:12:56.290Z\ninput_ids:\n  - IN-01M7T2EGGRGA779EGTB6CQQ1K3\nsource: cli\noccurred_at: 2026-11-13T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T2EGGRGA779EGTB6CQQ1K3\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:a5582afbe8f19dc802a425e88b53253a643b60016ba908c95389dd4f4e87d371\n---\n# アイデア（AI生成・未検証）\n\n読んだ本の感想を1か所に集めたい\n\n入力: [IN-01M7T2EGGRGA779EGTB6CQQ1K3](../00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md)\n出典: cli\n発生日時: 2026-11-13 09:00 Asia/Tokyo\n受信日時: 2026-11-13 09:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
-    "20_ideas/IDEA-01M7T2EH0QJ369VAFC6JHWFXFB.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:12:56.613Z\ninput_ids:\n  - IN-01M7T2EH0QJ369VAFC6JHWFXFB\nsource: cli\noccurred_at: 2026-11-15T10:30:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T2EH0QJ369VAFC6JHWFXFB\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:0eaebba551cc14f34220b610538ccd63bfce4aa62c0627c3c842fa1bee01d193\n---\n# アイデア（AI生成・未検証）\n\n字幕の付け方を試したい\n\n入力: [IN-01M7T2EH0QJ369VAFC6JHWFXFB](../00_inbox/2026-11-15_IN-01M7T2EH0QJ369VAFC6JHWFXFB.md)\n出典: cli\n発生日時: 2026-11-15 10:30 Asia/Tokyo\n受信日時: 2026-11-15 10:30 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
-    "90_system/idea-index.json": "{\n  \"schema_version\": 1,\n  \"generated_at\": \"2026-11-15T03:00:00.000Z\",\n  \"threshold\": 0.4,\n  \"candidates\": [],\n  \"groups\": [],\n  \"total_candidates\": 0,\n  \"basis\": \"024e5b78e6091303856202b764872e30898f7fa403677c7c86655b715a143208\",\n  \"summaries\": {}\n}\n",
-    "90_system/insight-reactions/IRX-01M7T2EH0HTH05MFWRJ5D54BEN.json": "{\n  \"schema_version\": 1,\n  \"id\": \"IRX-01M7T2EH0HTH05MFWRJ5D54BEN\",\n  \"run_id\": \"SYN-01M7E81W00DBPDZXGZWSA6Z7BB\",\n  \"item_key\": \"a8bd2bdeb6e532c48171545b7e9692fb61eaa1baea832e0381380dcb88198009\",\n  \"reaction\": \"useful\",\n  \"decided_at\": \"2026-11-15T01:20:00.000Z\",\n  \"source\": \"fixture\",\n  \"created_at\": \"2026-11-19T14:12:56.465Z\"\n}\n",
-    "90_system/insights.json": "{\n  \"schema_version\": 1,\n  \"generated_at\": \"2026-11-15T03:00:00.000Z\",\n  \"enabled\": true,\n  \"interval_days\": 7,\n  \"latest\": {\n    \"id\": \"SYN-01M7E81W00DBPDZXGZWSA6Z7BB\",\n    \"created_at\": \"2026-11-15T00:00:00.000Z\",\n    \"mode\": \"first\",\n    \"period\": {\n      \"since\": null,\n      \"until\": \"2026-11-15T00:00:00.000Z\"\n    },\n    \"counts\": {\n      \"new_memos\": 0,\n      \"focus\": 5,\n      \"context\": 0,\n      \"omitted\": 0\n    },\n    \"items\": [\n      {\n        \"key\": \"a8bd2bdeb6e532c48171545b7e9692fb61eaa1baea832e0381380dcb88198009\",\n        \"section\": \"connections\",\n        \"text\": \"11/03の関心が、11/10には受ける必要へ進んでいるように見えます\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T2EGFHVWD9EJMXTN1B3N9Q\",\n            \"path\": \"00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md\",\n            \"occurred_at\": \"2026-11-03T09:00:00+09:00\",\n            \"corrected\": false\n          },\n          {\n            \"input_id\": \"IN-01M7T2EGG0XVSH8W5775Z3QFDW\",\n            \"path\": \"00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md\",\n            \"occurred_at\": \"2026-11-10T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": \"useful\",\n        \"answers\": []\n      },\n      {\n        \"key\": \"409118663858cd7df10c5e2b5248156b55735a77d9de00bbbde6545ab5e9f223\",\n        \"section\": \"shifts\",\n        \"text\": \"11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T2EGGCFRK9YZK0SNA11SSA\",\n            \"path\": \"00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md\",\n            \"occurred_at\": \"2026-11-12T09:00:00+09:00\",\n            \"corrected\": false\n          },\n          {\n            \"input_id\": \"IN-01M7T2EGGRGA779EGTB6CQQ1K3\",\n            \"path\": \"00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md\",\n            \"occurred_at\": \"2026-11-13T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      },\n      {\n        \"key\": \"23036477a250654c5ea6525ce873c502a400f71d931164950b669c1fc2ba7e4c\",\n        \"section\": \"stalled\",\n        \"text\": \"10/20の「調べたい」から続きが見当たりません。まだ調べますか\",\n        \"first_step\": \"土の種類を3つ書き出す\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T2EGEVTCBN8TH86WQTYW86\",\n            \"path\": \"00_inbox/2026-10-20_IN-01M7T2EGEVTCBN8TH86WQTYW86.md\",\n            \"occurred_at\": \"2026-10-20T09:00:00+09:00\",\n            \"corrected\": true\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      },\n      {\n        \"key\": \"0981f6a029244644082edb7b5109c3410fb3edd6d650ae91f90bab86fbc84f37\",\n        \"section\": \"actions\",\n        \"text\": \"講習の日程と申込期限を確かめますか\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T2EGG0XVSH8W5775Z3QFDW\",\n            \"path\": \"00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md\",\n            \"occurred_at\": \"2026-11-10T09:00:00+09:00\",\n            \"corrected\": false\n          },\n          {\n            \"input_id\": \"IN-01M7T2EGFHVWD9EJMXTN1B3N9Q\",\n            \"path\": \"00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md\",\n            \"occurred_at\": \"2026-11-03T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      },\n      {\n        \"key\": \"aa341e6ddcacbcad09e6c1ffd5f1d1ea21f5ae86f42afeca221cb93112b15b6c\",\n        \"section\": \"questions\",\n        \"text\": \"見直した結果、次に試したいことはありますか\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T2EGGCFRK9YZK0SNA11SSA\",\n            \"path\": \"00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md\",\n            \"occurred_at\": \"2026-11-12T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": [\n          {\n            \"input_id\": \"IN-01M7T2EH0QJ369VAFC6JHWFXFB\",\n            \"path\": \"00_inbox/2026-11-15_IN-01M7T2EH0QJ369VAFC6JHWFXFB.md\",\n            \"occurred_at\": \"2026-11-15T10:30:00+09:00\"\n          }\n        ]\n      },\n      {\n        \"key\": \"90bd4adf4c4d07c889a69a8d8d5aef15800c79aaf65a5e9c569775deb514e080\",\n        \"section\": \"questions\",\n        \"text\": \"感想は、どの本から集め始めますか\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T2EGGRGA779EGTB6CQQ1K3\",\n            \"path\": \"00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md\",\n            \"occurred_at\": \"2026-11-13T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      }\n    ]\n  },\n  \"last_attempt\": {\n    \"id\": \"SYN-01M7E81W00DBPDZXGZWSA6Z7BB\",\n    \"created_at\": \"2026-11-15T00:00:00.000Z\",\n    \"status\": \"ok\",\n    \"error\": null,\n    \"warnings\": [],\n    \"elapsed_ms\": 3\n  },\n  \"next_due_at\": \"2026-11-22T00:00:00.000Z\",\n  \"record_problems\": 0\n}\n",
+    "20_ideas/IDEA-01M7T3PYWB1STSJXPK6PB3Q9GM.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:35:02.013Z\ninput_ids:\n  - IN-01M7T3PYWB1STSJXPK6PB3Q9GM\n  - IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ\nsource: cli\noccurred_at: 2026-10-20T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T3PYWB1STSJXPK6PB3Q9GM\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:ced8b4157a6c801540e913e2c5a9aa06c2468b7bc70146699baedcf8db81750d\n---\n# アイデア（AI生成・未検証）\n\nAIの要約\n\n入力: [IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ](../00_inbox/2026-11-15_IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ.md)\n出典: cli\n発生日時: 2026-11-15 10:00 Asia/Tokyo\n受信日時: 2026-11-15 10:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
+    "20_ideas/IDEA-01M7T3PYX29AMPXQBN8NBH7F67.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:35:01.647Z\ninput_ids:\n  - IN-01M7T3PYX29AMPXQBN8NBH7F67\nsource: cli\noccurred_at: 2026-11-03T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T3PYX29AMPXQBN8NBH7F67\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:6e5ac0cfa296ea8d85d3a62fc916d7a7a8508437d9a1845e32573d4314954ccd\n---\n# アイデア（AI生成・未検証）\n\n資格の講習に関心がある\n\n入力: [IN-01M7T3PYX29AMPXQBN8NBH7F67](../00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md)\n出典: cli\n発生日時: 2026-11-03 09:00 Asia/Tokyo\n受信日時: 2026-11-03 09:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
+    "20_ideas/IDEA-01M7T3PYXYAZ00DJV40S508AN9.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:35:01.755Z\ninput_ids:\n  - IN-01M7T3PYXYAZ00DJV40S508AN9\nsource: cli\noccurred_at: 2026-11-12T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T3PYXYAZ00DJV40S508AN9\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:7f81be301b56682f89bf02a6ea92902c699444c1574dd433447ac18c396657b6\n---\n# アイデア（AI生成・未検証）\n\n動画の作り方を見直した\n\n入力: [IN-01M7T3PYXYAZ00DJV40S508AN9](../00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md)\n出典: cli\n発生日時: 2026-11-12 09:00 Asia/Tokyo\n受信日時: 2026-11-12 09:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
+    "20_ideas/IDEA-01M7T3PYYG162QRV1WJGXA04WN.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:35:01.801Z\ninput_ids:\n  - IN-01M7T3PYYG162QRV1WJGXA04WN\nsource: cli\noccurred_at: 2026-11-13T09:00:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T3PYYG162QRV1WJGXA04WN\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:6bfc591d6380a9c4ad7af768cdbfdbe9b916ac1c5945dbe245b77cc6686651a7\n---\n# アイデア（AI生成・未検証）\n\n読んだ本の感想を1か所に集めたい\n\n入力: [IN-01M7T3PYYG162QRV1WJGXA04WN](../00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md)\n出典: cli\n発生日時: 2026-11-13 09:00 Asia/Tokyo\n受信日時: 2026-11-13 09:00 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
+    "20_ideas/IDEA-01M7T3PZE5S0CFP1JVG533B5HC.md": "---\nschema_version: 1\ngenerated_by:\n  model: mock\n  prompt_version: 1\ngenerated_at: 2026-11-19T14:35:02.088Z\ninput_ids:\n  - IN-01M7T3PZE5S0CFP1JVG533B5HC\nsource: cli\noccurred_at: 2026-11-15T10:30:00+09:00\norigin: user-note\nverified: false\nid: IDEA-01M7T3PZE5S0CFP1JVG533B5HC\ncategory: idea\nproject_candidates: []\ngenerated_hash: sha256:92f740754065718aae4e4b8fdfc7790da11ced4f5a0de10d0ae9e49fcab097b1\n---\n# アイデア（AI生成・未検証）\n\n字幕の付け方を試したい\n\n入力: [IN-01M7T3PZE5S0CFP1JVG533B5HC](../00_inbox/2026-11-15_IN-01M7T3PZE5S0CFP1JVG533B5HC.md)\n出典: cli\n発生日時: 2026-11-15 10:30 Asia/Tokyo\n受信日時: 2026-11-15 10:30 Asia/Tokyo\n性質: user-note（未検証）\n\n帰属候補: なし\n",
+    "90_system/idea-index.json": "{\n  \"schema_version\": 1,\n  \"generated_at\": \"2026-11-15T03:00:00.000Z\",\n  \"threshold\": 0.4,\n  \"candidates\": [],\n  \"groups\": [],\n  \"total_candidates\": 0,\n  \"basis\": \"32fdf45e630452dfe6c5ea84692d5b2257d6aad9e1d68a17562ed4c56208a547\",\n  \"summaries\": {}\n}\n",
+    "90_system/insight-reactions/IRX-01M7ECMBG0EYV9SC12PW8W2Y6Q.json": "{\n  \"schema_version\": 1,\n  \"id\": \"IRX-01M7ECMBG0EYV9SC12PW8W2Y6Q\",\n  \"run_id\": \"SYN-01M7E81W004PDEBSK3G1JGW85D\",\n  \"item_key\": \"9aab4d7ffdbaa70d6d61f80158b40d3e50340f12fbe542669b7b919bd3d63316\",\n  \"reaction\": \"useful\",\n  \"decided_at\": \"2026-11-15T01:20:00.000Z\",\n  \"source\": \"fixture\",\n  \"created_at\": \"2026-11-15T01:20:00.000Z\"\n}\n",
+    "90_system/insights.json": "{\n  \"schema_version\": 1,\n  \"generated_at\": \"2026-11-15T03:00:00.000Z\",\n  \"enabled\": true,\n  \"interval_days\": 7,\n  \"latest\": {\n    \"id\": \"SYN-01M7E81W004PDEBSK3G1JGW85D\",\n    \"created_at\": \"2026-11-15T00:00:00.000Z\",\n    \"mode\": \"first\",\n    \"period\": {\n      \"since\": null,\n      \"until\": \"2026-11-15T00:00:00.000Z\"\n    },\n    \"counts\": {\n      \"new_memos\": 0,\n      \"focus\": 5,\n      \"context\": 0,\n      \"omitted\": 0\n    },\n    \"items\": [\n      {\n        \"key\": \"9aab4d7ffdbaa70d6d61f80158b40d3e50340f12fbe542669b7b919bd3d63316\",\n        \"section\": \"connections\",\n        \"text\": \"11/03の関心が、11/10には受ける必要へ進んでいるように見えます\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T3PYX29AMPXQBN8NBH7F67\",\n            \"path\": \"00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md\",\n            \"occurred_at\": \"2026-11-03T09:00:00+09:00\",\n            \"corrected\": false\n          },\n          {\n            \"input_id\": \"IN-01M7T3PYXJYGKPZFDTPMBH9T0G\",\n            \"path\": \"00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md\",\n            \"occurred_at\": \"2026-11-10T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": \"useful\",\n        \"answers\": []\n      },\n      {\n        \"key\": \"b4fd868dd022b6817bf0d6225cb40c34fd0cd3247d334a4e263a50f5ba93fbff\",\n        \"section\": \"shifts\",\n        \"text\": \"11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T3PYXYAZ00DJV40S508AN9\",\n            \"path\": \"00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md\",\n            \"occurred_at\": \"2026-11-12T09:00:00+09:00\",\n            \"corrected\": false\n          },\n          {\n            \"input_id\": \"IN-01M7T3PYYG162QRV1WJGXA04WN\",\n            \"path\": \"00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md\",\n            \"occurred_at\": \"2026-11-13T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      },\n      {\n        \"key\": \"060533e0bcf43d4bec84047d3afd61d8ac4649b09f9303ea61a0e9f24367bed3\",\n        \"section\": \"stalled\",\n        \"text\": \"10/20の「調べたい」から続きが見当たりません。まだ調べますか\",\n        \"first_step\": \"土の種類を3つ書き出す\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T3PYWB1STSJXPK6PB3Q9GM\",\n            \"path\": \"00_inbox/2026-10-20_IN-01M7T3PYWB1STSJXPK6PB3Q9GM.md\",\n            \"occurred_at\": \"2026-10-20T09:00:00+09:00\",\n            \"corrected\": true\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      },\n      {\n        \"key\": \"1ff19c5d40520d95c72f497a72b844362fb030808184af5fcfdb54c32eef65cb\",\n        \"section\": \"actions\",\n        \"text\": \"講習の日程と申込期限を確かめますか\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T3PYXJYGKPZFDTPMBH9T0G\",\n            \"path\": \"00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md\",\n            \"occurred_at\": \"2026-11-10T09:00:00+09:00\",\n            \"corrected\": false\n          },\n          {\n            \"input_id\": \"IN-01M7T3PYX29AMPXQBN8NBH7F67\",\n            \"path\": \"00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md\",\n            \"occurred_at\": \"2026-11-03T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      },\n      {\n        \"key\": \"3ca6c6c56565c7d28518a290ab9c59d304610906f8f98cece8278c25347f9f6e\",\n        \"section\": \"questions\",\n        \"text\": \"見直した結果、次に試したいことはありますか\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T3PYXYAZ00DJV40S508AN9\",\n            \"path\": \"00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md\",\n            \"occurred_at\": \"2026-11-12T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": [\n          {\n            \"input_id\": \"IN-01M7T3PZE5S0CFP1JVG533B5HC\",\n            \"path\": \"00_inbox/2026-11-15_IN-01M7T3PZE5S0CFP1JVG533B5HC.md\",\n            \"occurred_at\": \"2026-11-15T10:30:00+09:00\"\n          }\n        ]\n      },\n      {\n        \"key\": \"371a2c11038cc6d7abe982b3dcd53a1e292e63039e5b6fcd5f6fafde69e44f62\",\n        \"section\": \"questions\",\n        \"text\": \"感想は、どの本から集め始めますか\",\n        \"sources\": [\n          {\n            \"input_id\": \"IN-01M7T3PYYG162QRV1WJGXA04WN\",\n            \"path\": \"00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md\",\n            \"occurred_at\": \"2026-11-13T09:00:00+09:00\",\n            \"corrected\": false\n          }\n        ],\n        \"reaction\": null,\n        \"answers\": []\n      }\n    ]\n  },\n  \"last_attempt\": {\n    \"id\": \"SYN-01M7E81W004PDEBSK3G1JGW85D\",\n    \"created_at\": \"2026-11-15T00:00:00.000Z\",\n    \"status\": \"ok\",\n    \"error\": null,\n    \"warnings\": [],\n    \"elapsed_ms\": 3\n  },\n  \"next_due_at\": \"2026-11-22T00:00:00.000Z\",\n  \"record_problems\": 0\n}\n",
     "90_system/now-generated/garden.json": "{\"schema_version\":1,\"project\":\"garden\",\"generated_hash\":\"sha256:4ebff9132612d05dd175bd44fe7ec08f084ec803b9e1f5e77aeb4fc6e5c41b45\",\"auto\":\"\\n# 現在地\\n- 不明（根拠となる入力がありません）\\n\\n# 次の一手\\n- 不明（根拠となる入力がありません）\\n\\n## 提案\\n- 提案はありません\\n\\n# 未解決\\n- 不明（未解決事項の確認が必要です）\\n\"}\n",
-    "90_system/now-items/garden.json": "{\n  \"schema_version\": 1,\n  \"project\": \"garden\",\n  \"generated_at\": \"2026-11-19T14:12:56.524Z\",\n  \"items\": []\n}\n",
-    "90_system/policies/index.json": "{\"schema_version\":1,\"revision\":\"0e942999791398d025fb568effa2f593e1eb4f8901239f5c51e312b9ae98220b\",\"generatedAt\":\"2026-11-19T14:12:56.767Z\",\"global\":[],\"projects\":{\"garden\":[]},\"inactiveIds\":[],\"dependencies\":{\"10_projects/garden/project.md\":\"3273732725269f4c7f1c13ad3e4027392b8a54ea55e83b21f09927140667b04f\"},\"inventory\":[\"10_projects/garden/project.md\"],\"projections\":{\"POLICY.md\":\"224f08226f6bc1364e36737d515eec7c143e14de793ad86d4e5b506e2b8b446b\",\"10_projects/garden/POLICY.md\":\"e76450cc7c0dd4c69fda3651de813edf3130b5d27dd3803cffd128057bc99b02\"}}\n",
+    "90_system/now-items/garden.json": "{\n  \"schema_version\": 1,\n  \"project\": \"garden\",\n  \"generated_at\": \"2026-11-19T14:35:02.013Z\",\n  \"items\": []\n}\n",
+    "90_system/policies/index.json": "{\"schema_version\":1,\"revision\":\"0e942999791398d025fb568effa2f593e1eb4f8901239f5c51e312b9ae98220b\",\"generatedAt\":\"2026-11-19T14:35:02.243Z\",\"global\":[],\"projects\":{\"garden\":[]},\"inactiveIds\":[],\"dependencies\":{\"10_projects/garden/project.md\":\"3273732725269f4c7f1c13ad3e4027392b8a54ea55e83b21f09927140667b04f\"},\"inventory\":[\"10_projects/garden/project.md\"],\"projections\":{\"POLICY.md\":\"224f08226f6bc1364e36737d515eec7c143e14de793ad86d4e5b506e2b8b446b\",\"10_projects/garden/POLICY.md\":\"e76450cc7c0dd4c69fda3651de813edf3130b5d27dd3803cffd128057bc99b02\"}}\n",
     "90_system/privacy/patterns.json": "{\n  \"schema_version\": 1,\n  \"redact_secrets\": true,\n  \"patterns\": []\n}\n",
-    "90_system/receipts/IN-01M7T2EGEVTCBN8TH86WQTYW86.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGEVTCBN8TH86WQTYW86\",\n  \"input_hash\": \"60cc4a53e12b8ba9bb4a9db3a4320eb373d88cdf3885c80d6180192a43872bfe\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.021Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"菜園の土を調べたい\",\n    \"project_candidates\": [\n      {\n        \"id\": \"garden\",\n        \"confidence\": 0.9\n      }\n    ],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T2EGEVTCBN8TH86WQTYW86.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGFHVWD9EJMXTN1B3N9Q\",\n  \"input_hash\": \"118474ca6c1030194cfd84052f47a54c6c7a3f44af7d0bd842897cd96e932a64\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.131Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"資格の講習に関心がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T2EGFHVWD9EJMXTN1B3N9Q.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/IN-01M7T2EGG0XVSH8W5775Z3QFDW.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGG0XVSH8W5775Z3QFDW\",\n  \"input_hash\": \"262cbed90c065468e27432a30a8c3ac1e6aaae9362e9d909c30393e781904385\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.188Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"task\",\n    \"summary\": \"資格の講習を受ける必要がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/IN-01M7T2EGGCFRK9YZK0SNA11SSA.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGGCFRK9YZK0SNA11SSA\",\n  \"input_hash\": \"8bbea5a8688bce4607b37e755dc8c60950bd74fcc08f0b6d89a5ae5471d41613\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.235Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"動画の作り方を見直した\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T2EGGCFRK9YZK0SNA11SSA.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/IN-01M7T2EGGRGA779EGTB6CQQ1K3.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGGRGA779EGTB6CQQ1K3\",\n  \"input_hash\": \"327be76bd2a47cef2f224d4af8011f3e81dd53a9c5f6027c0ff6583c63ea8681\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.290Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"読んだ本の感想を1か所に集めたい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T2EGGRGA779EGTB6CQQ1K3.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/IN-01M7T2EGZ3N3ST5NHQZGFB583P.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGZ3N3ST5NHQZGFB583P\",\n  \"input_hash\": \"1fa60d0dc9f990bf7ba8870aa0cb6bfec89bae74c1783ad1d223487382197c47\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.524Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"AIの要約\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T2EGEVTCBN8TH86WQTYW86.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\",\n  \"root_input_id\": \"IN-01M7T2EGEVTCBN8TH86WQTYW86\",\n  \"evidence_ids\": [\n    \"IN-01M7T2EGEVTCBN8TH86WQTYW86\",\n    \"IN-01M7T2EGZ3N3ST5NHQZGFB583P\"\n  ],\n  \"evidence_hash\": \"a9cb9711d63965919c125a2e773a74cfdab09240cd8756e1a94c8a6d38ad20a1\"\n}\n",
-    "90_system/receipts/IN-01M7T2EH0QJ369VAFC6JHWFXFB.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EH0QJ369VAFC6JHWFXFB\",\n  \"input_hash\": \"105b6a00c37b6f5c775f77021fade550b7110088b702c55300e09ff1faca03c2\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.613Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"字幕の付け方を試したい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T2EH0QJ369VAFC6JHWFXFB.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/0b5b2677beecbc25f7400a37f5ea6435b5e800006a23c160e45595588ae3b846": "IN-01M7T2EGZ3N3ST5NHQZGFB583P\n",
-    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/2f96106021216f46a1e61902964f1a14fb18f1e21b4800636015c6d84f5e3563": "IN-01M7T2EH0QJ369VAFC6JHWFXFB\n",
-    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/3c9da9bf62708c380d95582f37925ff1bac185ddf78ad61da8c97233e34d091f": "IN-01M7T2EGEVTCBN8TH86WQTYW86\n",
-    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/42c3568df05c11efb9074b86d30fab0c94fedbbd25913aa30190b72323529d91": "IN-01M7T2EGG0XVSH8W5775Z3QFDW\n",
-    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/800d3d57ad1bd82e32b5ae710a8b865c85422b58cdfc6c31013540b790b5f5b2": "IN-01M7T2EGGRGA779EGTB6CQQ1K3\n",
-    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/b3020263193eb8bfddc97651b93e062ec307aaca11ee4c55b57a9a0c89923cdd": "IN-01M7T2EGGCFRK9YZK0SNA11SSA\n",
-    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/bb093b1e4c582131bdb0ac4645c4a80faa906607f886743ae62e4ff002cb2ff4": "IN-01M7T2EGFHVWD9EJMXTN1B3N9Q\n",
-    "90_system/receipts/pending/IN-01M7T2EGEVTCBN8TH86WQTYW86.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGEVTCBN8TH86WQTYW86\",\n  \"input_hash\": \"60cc4a53e12b8ba9bb4a9db3a4320eb373d88cdf3885c80d6180192a43872bfe\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.021Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"菜園の土を調べたい\",\n    \"project_candidates\": [\n      {\n        \"id\": \"garden\",\n        \"confidence\": 0.9\n      }\n    ],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/pending/IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGFHVWD9EJMXTN1B3N9Q\",\n  \"input_hash\": \"118474ca6c1030194cfd84052f47a54c6c7a3f44af7d0bd842897cd96e932a64\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.131Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"資格の講習に関心がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/pending/IN-01M7T2EGG0XVSH8W5775Z3QFDW.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGG0XVSH8W5775Z3QFDW\",\n  \"input_hash\": \"262cbed90c065468e27432a30a8c3ac1e6aaae9362e9d909c30393e781904385\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.188Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"task\",\n    \"summary\": \"資格の講習を受ける必要がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/pending/IN-01M7T2EGGCFRK9YZK0SNA11SSA.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGGCFRK9YZK0SNA11SSA\",\n  \"input_hash\": \"8bbea5a8688bce4607b37e755dc8c60950bd74fcc08f0b6d89a5ae5471d41613\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.235Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"動画の作り方を見直した\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/pending/IN-01M7T2EGGRGA779EGTB6CQQ1K3.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGGRGA779EGTB6CQQ1K3\",\n  \"input_hash\": \"327be76bd2a47cef2f224d4af8011f3e81dd53a9c5f6027c0ff6583c63ea8681\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.290Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"読んだ本の感想を1か所に集めたい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/receipts/pending/IN-01M7T2EGZ3N3ST5NHQZGFB583P.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EGZ3N3ST5NHQZGFB583P\",\n  \"input_hash\": \"1fa60d0dc9f990bf7ba8870aa0cb6bfec89bae74c1783ad1d223487382197c47\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.524Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"AIの要約\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\",\n  \"root_input_id\": \"IN-01M7T2EGEVTCBN8TH86WQTYW86\",\n  \"evidence_ids\": [\n    \"IN-01M7T2EGEVTCBN8TH86WQTYW86\",\n    \"IN-01M7T2EGZ3N3ST5NHQZGFB583P\"\n  ],\n  \"evidence_hash\": \"a9cb9711d63965919c125a2e773a74cfdab09240cd8756e1a94c8a6d38ad20a1\"\n}\n",
-    "90_system/receipts/pending/IN-01M7T2EH0QJ369VAFC6JHWFXFB.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T2EH0QJ369VAFC6JHWFXFB\",\n  \"input_hash\": \"105b6a00c37b6f5c775f77021fade550b7110088b702c55300e09ff1faca03c2\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:12:56.613Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"字幕の付け方を試したい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
-    "90_system/review/index.json": "{\"schema_version\":1,\"generated_at\":\"2026-11-19T14:12:56.772Z\",\"projects\":[{\"id\":\"garden\",\"title\":\"家庭菜園\",\"path\":\"10_projects/garden/project.md\",\"hash\":\"3273732725269f4c7f1c13ad3e4027392b8a54ea55e83b21f09927140667b04f\"}],\"items\":[]}\n",
-    "90_system/unassigned-actions.json": "{\n  \"schema_version\": 1,\n  \"generated_at\": \"2026-11-15T03:00:00.000Z\",\n  \"total_memos\": 1,\n  \"memos\": [\n    {\n      \"input_id\": \"IN-01M7T2EGG0XVSH8W5775Z3QFDW\",\n      \"path\": \"00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md\",\n      \"occurred_at\": \"2026-11-10T09:00:00+09:00\",\n      \"text\": \"資格の講習を受ける必要がある\",\n      \"own_words\": true,\n      \"task\": true,\n      \"suggestions\": []\n    }\n  ]\n}\n",
-    "HOME.md": "---\nschema_version: 1\ngenerated_by:\n  model: deterministic-writer\n  prompt_version: 1\ngenerated_at: 2026-11-15T03:00:00.000Z\nverified: false\ngenerated_hash: sha256:5ef6873d7a2d8076f19ee10cf16bcced4442becc18ac28dd7269c4340d6db7c9\n---\n# ContextHub\n\n生成時点: 2026-11-15T03:00:00.000Z\n同期された時点の表示です。端末保存・Mac mini受領・整理完了はそれぞれ別の状態です。\n直近7日のふりかえり: [REVIEW.md](REVIEW.md)\n\n## 今週の気づき（AI生成・未検証）\n2026-11-15に、たまったメモをAIがまとめて読み直した結果です（全文で渡したメモ5件）。AIの推定であり、事実や本人の決定ではありません。「根拠」のメモを確かめてから使ってください。\n\n### つながり\n- 11/03の関心が、11/10には受ける必要へ進んでいるように見えます — 根拠: [2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md)、[2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md)\n\n### 考えの変化\n- 11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md)、[2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md)\n\n### 止まっている意図\n- 10/20の「調べたい」から続きが見当たりません。まだ調べますか（最初の一歩: 土の種類を3つ書き出す） — 根拠: [2026-10-20のメモ](00_inbox/2026-10-20_IN-01M7T2EGEVTCBN8TH86WQTYW86.md)（訂正あり）\n\n### 次の一手の提案\n- 講習の日程と申込期限を確かめますか — 根拠: [2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md)、[2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md)\n\n### 問い\n- 見直した結果、次に試したいことはありますか — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md)\n- 感想は、どの本から集め始めますか — 根拠: [2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md)\n\n## 次の一手（進行中のプロジェクト）\n進行中のプロジェクトに次の一手はありません。\n\n## プロジェクト未定の次の一手（メモ1件）\nどのプロジェクトにも結び付いていないメモから、AIが「タスク」と分類したものと、AIが挙げた次の一手の提案を集めた一覧です。短いメモは本人の言葉のまま、長いメモは「AI要約:」を付けた一行要約で示します。分類・要約・提案はAI生成・未検証で、完了の報告や期日の対象にはなりません。プロジェクトを追加したり、名前・別名・キーワードを直したりして、メモがプロジェクトに結び付くと、そのプロジェクトのNOWへ移ります。\n- 2026-11-10 資格の講習を受ける必要がある — [IN-01M7T2EGG0XVSH8W5775Z3QFDW](00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md) / タスク候補\n\n## プロジェクト一覧\n- [家庭菜園](10_projects/garden/NOW.md) — garden / 進行中\n\n## 確認待ち（0件）\n該当する候補はありません。\n\n候補を開いて内容・理由・出典を確認し、QuickAddの承認／却下を実行してください。保留は閉じるだけです。AI候補は未承認です。\n\n## 要確認（0件）\n該当する候補はありません。\n\n## 有効方針\n[共通方針](POLICY.md)。各プロジェクトのPOLICY.mdに対象方針を掲載します。参考知識は必要時に検索します。\n\n## 判断履歴\n該当する候補はありません。\n\n## 受領と整理状況\n受付ファイル 0件（受付待ち・内容変更 0件） / 入力 6件（整理待ち 0件・整理失敗 0件）。受領済み・整理済みは新しい5件ずつを並べます。全件はアプリの「受付状況」で確認できます。\n- [IN-01M7T2EGFHVWD9EJMXTN1B3N9Q](00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md): 整理済み\n- [IN-01M7T2EGG0XVSH8W5775Z3QFDW](00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md): 整理済み\n- [IN-01M7T2EGGCFRK9YZK0SNA11SSA](00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md): 整理済み\n- [IN-01M7T2EGGRGA779EGTB6CQQ1K3](00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md): 整理済み\n- [IN-01M7T2EH0QJ369VAFC6JHWFXFB](00_inbox/2026-11-15_IN-01M7T2EH0QJ369VAFC6JHWFXFB.md): 整理済み\n- ほかに整理済み1件（古い順に省略しています）\n\n## 失敗と競合\n記録された失敗・競合はありません。\n\n正式知識は根拠が訂正されても自動変更しません。根拠の訂正履歴と承認内容を確認してください。\n",
+    "90_system/receipts/IN-01M7T3PYWB1STSJXPK6PB3Q9GM.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYWB1STSJXPK6PB3Q9GM\",\n  \"input_hash\": \"7b58cd1f2b8497e0ce2a9dad1a32dd05fad4a2c9e3931f658b39d8c4a8da9f8a\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.543Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"菜園の土を調べたい\",\n    \"project_candidates\": [\n      {\n        \"id\": \"garden\",\n        \"confidence\": 0.9\n      }\n    ],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T3PYWB1STSJXPK6PB3Q9GM.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/IN-01M7T3PYX29AMPXQBN8NBH7F67.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYX29AMPXQBN8NBH7F67\",\n  \"input_hash\": \"d7e03ffd3989f082c5139d5facf99e5049a3c9b1068362ebc91e0a20fe989671\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.647Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"資格の講習に関心がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T3PYX29AMPXQBN8NBH7F67.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/IN-01M7T3PYXJYGKPZFDTPMBH9T0G.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYXJYGKPZFDTPMBH9T0G\",\n  \"input_hash\": \"fe40b1109e38273e08da8fa380d334f938a8467ccc2e41ddf49d51b5c94fa9da\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.709Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"task\",\n    \"summary\": \"資格の講習を受ける必要がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/IN-01M7T3PYXYAZ00DJV40S508AN9.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYXYAZ00DJV40S508AN9\",\n  \"input_hash\": \"6ade5cf6b01ea09e6ca75b65f5e26b215d1104e779d8ec8e6459a50f48299881\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.755Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"動画の作り方を見直した\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T3PYXYAZ00DJV40S508AN9.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/IN-01M7T3PYYG162QRV1WJGXA04WN.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYYG162QRV1WJGXA04WN\",\n  \"input_hash\": \"9148730cb02605e94a648ad13d27985f75d6f6e98540e1a2cebb0041b7491b37\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.801Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"読んだ本の感想を1か所に集めたい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T3PYYG162QRV1WJGXA04WN.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ\",\n  \"input_hash\": \"1071c769306acc69b823e1be699200c630c95c3dbbe7378d20c1f94cad00ca94\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:02.013Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"AIの要約\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T3PYWB1STSJXPK6PB3Q9GM.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\",\n  \"root_input_id\": \"IN-01M7T3PYWB1STSJXPK6PB3Q9GM\",\n  \"evidence_ids\": [\n    \"IN-01M7T3PYWB1STSJXPK6PB3Q9GM\",\n    \"IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ\"\n  ],\n  \"evidence_hash\": \"2052ee7f54851bf799067d9ef7fc8a7e465f3d1c5e9214cae85308bf30fd7f4a\"\n}\n",
+    "90_system/receipts/IN-01M7T3PZE5S0CFP1JVG533B5HC.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PZE5S0CFP1JVG533B5HC\",\n  \"input_hash\": \"40dc60187a13d360542b6ced07d6dd19d58b3508772c4fb6e56db50e43f70a1b\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:02.088Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"字幕の付け方を試したい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [\n    \"20_ideas/IDEA-01M7T3PZE5S0CFP1JVG533B5HC.md\"\n  ],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/205c85bad0d8cead0a70024e57d2c7f48653bd2a5379798d573faddd502a379e": "IN-01M7T3PZE5S0CFP1JVG533B5HC\n",
+    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/55c3b27f95019b60b1bd8000f5b28456c1853f34bff70c367bc10fbb9c999b10": "IN-01M7T3PYXYAZ00DJV40S508AN9\n",
+    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/64f63e0e49c6e2b22721470185e085b44e7b13c0ad80c43de3738e341b654074": "IN-01M7T3PYYG162QRV1WJGXA04WN\n",
+    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/6e4289f8fa1a247252fc0780dbb069af0370f6f69fe415b2465f4d88f37f4da6": "IN-01M7T3PYXJYGKPZFDTPMBH9T0G\n",
+    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/d17a8a846d5a8715023051a863c0f376a4e86a65362ce575f3ff7491de65e7f6": "IN-01M7T3PYX29AMPXQBN8NBH7F67\n",
+    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/d1eff6c876399281786cc200e7b2662b7c64524c47288355b735dd66f1b9d121": "IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ\n",
+    "90_system/receipts/events/99bb88401742848e032fd6f51709415fb6be169a72d2e5d7fc44289255160d3c/e0d6491a876a1774b0016e3d3d2c6a9211939d58aadafe0d1e7492423b1da282": "IN-01M7T3PYWB1STSJXPK6PB3Q9GM\n",
+    "90_system/receipts/pending/IN-01M7T3PYWB1STSJXPK6PB3Q9GM.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYWB1STSJXPK6PB3Q9GM\",\n  \"input_hash\": \"7b58cd1f2b8497e0ce2a9dad1a32dd05fad4a2c9e3931f658b39d8c4a8da9f8a\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.543Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"菜園の土を調べたい\",\n    \"project_candidates\": [\n      {\n        \"id\": \"garden\",\n        \"confidence\": 0.9\n      }\n    ],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/pending/IN-01M7T3PYX29AMPXQBN8NBH7F67.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYX29AMPXQBN8NBH7F67\",\n  \"input_hash\": \"d7e03ffd3989f082c5139d5facf99e5049a3c9b1068362ebc91e0a20fe989671\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.647Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"資格の講習に関心がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/pending/IN-01M7T3PYXJYGKPZFDTPMBH9T0G.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYXJYGKPZFDTPMBH9T0G\",\n  \"input_hash\": \"fe40b1109e38273e08da8fa380d334f938a8467ccc2e41ddf49d51b5c94fa9da\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.709Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"task\",\n    \"summary\": \"資格の講習を受ける必要がある\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/pending/IN-01M7T3PYXYAZ00DJV40S508AN9.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYXYAZ00DJV40S508AN9\",\n  \"input_hash\": \"6ade5cf6b01ea09e6ca75b65f5e26b215d1104e779d8ec8e6459a50f48299881\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.755Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"動画の作り方を見直した\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/pending/IN-01M7T3PYYG162QRV1WJGXA04WN.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PYYG162QRV1WJGXA04WN\",\n  \"input_hash\": \"9148730cb02605e94a648ad13d27985f75d6f6e98540e1a2cebb0041b7491b37\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:01.801Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"読んだ本の感想を1か所に集めたい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/receipts/pending/IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ\",\n  \"input_hash\": \"1071c769306acc69b823e1be699200c630c95c3dbbe7378d20c1f94cad00ca94\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:02.013Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"AIの要約\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\",\n  \"root_input_id\": \"IN-01M7T3PYWB1STSJXPK6PB3Q9GM\",\n  \"evidence_ids\": [\n    \"IN-01M7T3PYWB1STSJXPK6PB3Q9GM\",\n    \"IN-01M7T3PZCYPZKJ3HHA7BMJ4WWJ\"\n  ],\n  \"evidence_hash\": \"2052ee7f54851bf799067d9ef7fc8a7e465f3d1c5e9214cae85308bf30fd7f4a\"\n}\n",
+    "90_system/receipts/pending/IN-01M7T3PZE5S0CFP1JVG533B5HC.json": "{\n  \"schema_version\": 1,\n  \"input_id\": \"IN-01M7T3PZE5S0CFP1JVG533B5HC\",\n  \"input_hash\": \"40dc60187a13d360542b6ced07d6dd19d58b3508772c4fb6e56db50e43f70a1b\",\n  \"status\": \"organized\",\n  \"attempts\": 1,\n  \"organized_at\": \"2026-11-19T14:35:02.088Z\",\n  \"llm\": {\n    \"provider\": \"mock\",\n    \"model\": \"mock\",\n    \"prompt_version\": 1\n  },\n  \"result\": {\n    \"category\": \"idea\",\n    \"summary\": \"字幕の付け方を試したい\",\n    \"project_candidates\": [],\n    \"next_action_suggestions\": [],\n    \"extracted\": {\n      \"current\": [],\n      \"next\": [],\n      \"open\": []\n    },\n    \"knowledge_candidate\": null,\n    \"new_project_hint\": null\n  },\n  \"writes\": [],\n  \"error\": null,\n  \"project_registry_hash\": \"903cdf00e95f933063fbf313e91bbebc36ce1bf85f6039966da47aa224e8580e\"\n}\n",
+    "90_system/review/index.json": "{\"schema_version\":1,\"generated_at\":\"2026-11-19T14:35:02.250Z\",\"projects\":[{\"id\":\"garden\",\"title\":\"家庭菜園\",\"path\":\"10_projects/garden/project.md\",\"hash\":\"3273732725269f4c7f1c13ad3e4027392b8a54ea55e83b21f09927140667b04f\"}],\"items\":[]}\n",
+    "90_system/unassigned-actions.json": "{\n  \"schema_version\": 1,\n  \"generated_at\": \"2026-11-15T03:00:00.000Z\",\n  \"total_memos\": 1,\n  \"memos\": [\n    {\n      \"input_id\": \"IN-01M7T3PYXJYGKPZFDTPMBH9T0G\",\n      \"path\": \"00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md\",\n      \"occurred_at\": \"2026-11-10T09:00:00+09:00\",\n      \"text\": \"資格の講習を受ける必要がある\",\n      \"own_words\": true,\n      \"task\": true,\n      \"suggestions\": []\n    }\n  ]\n}\n",
+    "HOME.md": "---\nschema_version: 1\ngenerated_by:\n  model: deterministic-writer\n  prompt_version: 1\ngenerated_at: 2026-11-15T03:00:00.000Z\nverified: false\ngenerated_hash: sha256:1271929eeb881bc9e4a9862d2d22b97b8ce26555f0ee4f78869c34ed6d5fb96e\n---\n# ContextHub\n\n生成時点: 2026-11-15T03:00:00.000Z\n同期された時点の表示です。端末保存・Mac mini受領・整理完了はそれぞれ別の状態です。\n直近7日のふりかえり: [REVIEW.md](REVIEW.md)\n\n## 今週の気づき（AI生成・未検証）\n2026-11-15に、たまったメモをAIがまとめて読み直した結果です（全文で渡したメモ5件）。AIの推定であり、事実や本人の決定ではありません。「根拠」のメモを確かめてから使ってください。\n\n### つながり\n- 11/03の関心が、11/10には受ける必要へ進んでいるように見えます — 根拠: [2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md)、[2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md)\n\n### 考えの変化\n- 11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md)、[2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md)\n\n### 止まっている意図\n- 10/20の「調べたい」から続きが見当たりません。まだ調べますか（最初の一歩: 土の種類を3つ書き出す） — 根拠: [2026-10-20のメモ](00_inbox/2026-10-20_IN-01M7T3PYWB1STSJXPK6PB3Q9GM.md)（訂正あり）\n\n### 次の一手の提案\n- 講習の日程と申込期限を確かめますか — 根拠: [2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md)、[2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md)\n\n### 問い\n- 見直した結果、次に試したいことはありますか — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md)\n- 感想は、どの本から集め始めますか — 根拠: [2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md)\n\n## 次の一手（進行中のプロジェクト）\n進行中のプロジェクトに次の一手はありません。\n\n## プロジェクト未定の次の一手（メモ1件）\nどのプロジェクトにも結び付いていないメモから、AIが「タスク」と分類したものと、AIが挙げた次の一手の提案を集めた一覧です。短いメモは本人の言葉のまま、長いメモは「AI要約:」を付けた一行要約で示します。分類・要約・提案はAI生成・未検証で、完了の報告や期日の対象にはなりません。プロジェクトを追加したり、名前・別名・キーワードを直したりして、メモがプロジェクトに結び付くと、そのプロジェクトのNOWへ移ります。\n- 2026-11-10 資格の講習を受ける必要がある — [IN-01M7T3PYXJYGKPZFDTPMBH9T0G](00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md) / タスク候補\n\n## プロジェクト一覧\n- [家庭菜園](10_projects/garden/NOW.md) — garden / 進行中\n\n## 確認待ち（0件）\n該当する候補はありません。\n\n候補を開いて内容・理由・出典を確認し、QuickAddの承認／却下を実行してください。保留は閉じるだけです。AI候補は未承認です。\n\n## 要確認（0件）\n該当する候補はありません。\n\n## 有効方針\n[共通方針](POLICY.md)。各プロジェクトのPOLICY.mdに対象方針を掲載します。参考知識は必要時に検索します。\n\n## 判断履歴\n該当する候補はありません。\n\n## 受領と整理状況\n受付ファイル 0件（受付待ち・内容変更 0件） / 入力 6件（整理待ち 0件・整理失敗 0件）。受領済み・整理済みは新しい5件ずつを並べます。全件はアプリの「受付状況」で確認できます。\n- [IN-01M7T3PYX29AMPXQBN8NBH7F67](00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md): 整理済み\n- [IN-01M7T3PYXJYGKPZFDTPMBH9T0G](00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md): 整理済み\n- [IN-01M7T3PYXYAZ00DJV40S508AN9](00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md): 整理済み\n- [IN-01M7T3PYYG162QRV1WJGXA04WN](00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md): 整理済み\n- [IN-01M7T3PZE5S0CFP1JVG533B5HC](00_inbox/2026-11-15_IN-01M7T3PZE5S0CFP1JVG533B5HC.md): 整理済み\n- ほかに整理済み1件（古い順に省略しています）\n\n## 失敗と競合\n記録された失敗・競合はありません。\n\n正式知識は根拠が訂正されても自動変更しません。根拠の訂正履歴と承認内容を確認してください。\n",
     "POLICY.md": "# 共通の有効な方針\n\n本人が採用したdecision/preferenceのみ。端末に揃った同期版です。正本は各知識と承認記録です。\n\n有効な方針はありません。\n",
-    "REVIEW.md": "---\nschema_version: 1\ngenerated_by:\n  model: deterministic-writer\n  prompt_version: 1\ngenerated_at: 2026-11-15T03:00:00.000Z\nperiod_days: 7\nverified: false\ngenerated_hash: sha256:1d1d8ae89539ff0f1552ea3ddcac958305769eb32652cf85a17f126048458a13\n---\n# 直近7日のふりかえり\n\n期間: 2026-11-08 12:00 〜 2026-11-15 12:00 Asia/Tokyo\n受領・整理の記録から決定的に集計した一覧です。要約と抽出はAI生成・未検証です。判断の前にリンク先の原文と出典を確認してください。\n\n## 今週の気づき（AI生成・未検証）\n2026-11-15に、たまったメモをAIがまとめて読み直した結果です（全文で渡したメモ5件）。AIの推定であり、事実や本人の決定ではありません。「根拠」のメモを確かめてから使ってください。\n\n### つながり\n- 11/03の関心が、11/10には受ける必要へ進んでいるように見えます — 根拠: [2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md)、[2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md)\n\n### 考えの変化\n- 11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md)、[2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md)\n\n### 止まっている意図\n- 10/20の「調べたい」から続きが見当たりません。まだ調べますか（最初の一歩: 土の種類を3つ書き出す） — 根拠: [2026-10-20のメモ](00_inbox/2026-10-20_IN-01M7T2EGEVTCBN8TH86WQTYW86.md)（訂正あり）\n\n### 次の一手の提案\n- 講習の日程と申込期限を確かめますか — 根拠: [2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md)、[2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md)\n\n### 問い\n- 見直した結果、次に試したいことはありますか — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md)\n- 感想は、どの本から集め始めますか — 根拠: [2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md)\n\n## 今週の気づきへの反応\nアプリで付けた反応と、問いへの答えのメモの件数です（項目を出した直近4回まで、新しい順）。反応は最後に付けたものを数えます。\n\n- 2026-11-15の回: 6件のうち、役に立った1件・的外れ0件・答えた項目1件\n\n## 概要\n- この期間に届いた入力: 5件（整理済み 5 / 整理待ち 0 / 整理失敗 0）\n- プロジェクト未帰属（整理済みのうち）: 5件\n- 確認待ちの候補: 0件（うち期間より前から残っているもの 0件）\n- 失敗・競合の詳細は[HOME](HOME.md)を参照してください。\n\n## 動きのあったプロジェクト\nこの期間に新しい入力のあったプロジェクトはありません。\n\n## 動きのなかった進行中のプロジェクト\n- [家庭菜園](10_projects/garden/NOW.md) — 進行中 / 最終根拠なし\n\n## 確認待ちの候補\n確認待ちの候補はありません。\n"
+    "REVIEW.md": "---\nschema_version: 1\ngenerated_by:\n  model: deterministic-writer\n  prompt_version: 1\ngenerated_at: 2026-11-15T03:00:00.000Z\nperiod_days: 7\nverified: false\ngenerated_hash: sha256:1fb4fa5a3939f485476a922cf0fb5df7f9297cce1326f81e3d4216362fa00dcb\n---\n# 直近7日のふりかえり\n\n期間: 2026-11-08 12:00 〜 2026-11-15 12:00 Asia/Tokyo\n受領・整理の記録から決定的に集計した一覧です。要約と抽出はAI生成・未検証です。判断の前にリンク先の原文と出典を確認してください。\n\n## 今週の気づき（AI生成・未検証）\n2026-11-15に、たまったメモをAIがまとめて読み直した結果です（全文で渡したメモ5件）。AIの推定であり、事実や本人の決定ではありません。「根拠」のメモを確かめてから使ってください。\n\n### つながり\n- 11/03の関心が、11/10には受ける必要へ進んでいるように見えます — 根拠: [2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md)、[2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md)\n\n### 考えの変化\n- 11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md)、[2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md)\n\n### 止まっている意図\n- 10/20の「調べたい」から続きが見当たりません。まだ調べますか（最初の一歩: 土の種類を3つ書き出す） — 根拠: [2026-10-20のメモ](00_inbox/2026-10-20_IN-01M7T3PYWB1STSJXPK6PB3Q9GM.md)（訂正あり）\n\n### 次の一手の提案\n- 講習の日程と申込期限を確かめますか — 根拠: [2026-11-10のメモ](00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md)、[2026-11-03のメモ](00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md)\n\n### 問い\n- 見直した結果、次に試したいことはありますか — 根拠: [2026-11-12のメモ](00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md)\n- 感想は、どの本から集め始めますか — 根拠: [2026-11-13のメモ](00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md)\n\n## 今週の気づきへの反応\nアプリで付けた反応と、問いへの答えのメモの件数です（項目を出した直近4回まで、新しい順）。反応は最後に付けたものを数えます。\n\n- 2026-11-15 09:00の回: 6件のうち、役に立った1件・的外れ0件・答えた項目1件\n\n## 概要\n- この期間に届いた入力: 5件（整理済み 5 / 整理待ち 0 / 整理失敗 0）\n- プロジェクト未帰属（整理済みのうち）: 5件\n- 確認待ちの候補: 0件（うち期間より前から残っているもの 0件）\n- 失敗・競合の詳細は[HOME](HOME.md)を参照してください。\n\n## 動きのあったプロジェクト\nこの期間に新しい入力のあったプロジェクトはありません。\n\n## 動きのなかった進行中のプロジェクト\n- [家庭菜園](10_projects/garden/NOW.md) — 進行中 / 最終根拠なし\n\n## 確認待ちの候補\n確認待ちの候補はありません。\n"
   },
   "expected": {
     "total": 6,
@@ -79,14 +79,14 @@
       1,
       1
     ],
-    "corrected": "IN-01M7T2EGEVTCBN8TH86WQTYW86",
+    "corrected": "IN-01M7T3PYWB1STSJXPK6PB3Q9GM",
     "reaction": {
-      "key": "a8bd2bdeb6e532c48171545b7e9692fb61eaa1baea832e0381380dcb88198009",
+      "key": "9aab4d7ffdbaa70d6d61f80158b40d3e50340f12fbe542669b7b919bd3d63316",
       "value": "useful"
     },
     "answer": {
-      "key": "aa341e6ddcacbcad09e6c1ffd5f1d1ea21f5ae86f42afeca221cb93112b15b6c",
-      "input_id": "IN-01M7T2EH0QJ369VAFC6JHWFXFB"
+      "key": "3ca6c6c56565c7d28518a290ab9c59d304610906f8f98cece8278c25347f9f6e",
+      "input_id": "IN-01M7T3PZE5S0CFP1JVG533B5HC"
     },
     "states": {
       "running": {
@@ -95,7 +95,7 @@
         "enabled": true,
         "interval_days": 7,
         "latest": {
-          "id": "SYN-01M7E81W00DBPDZXGZWSA6Z7BB",
+          "id": "SYN-01M7E81W004PDEBSK3G1JGW85D",
           "created_at": "2026-11-15T00:00:00.000Z",
           "mode": "first",
           "period": {
@@ -110,19 +110,19 @@
           },
           "items": [
             {
-              "key": "a8bd2bdeb6e532c48171545b7e9692fb61eaa1baea832e0381380dcb88198009",
+              "key": "9aab4d7ffdbaa70d6d61f80158b40d3e50340f12fbe542669b7b919bd3d63316",
               "section": "connections",
               "text": "11/03の関心が、11/10には受ける必要へ進んでいるように見えます",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGFHVWD9EJMXTN1B3N9Q",
-                  "path": "00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md",
+                  "input_id": "IN-01M7T3PYX29AMPXQBN8NBH7F67",
+                  "path": "00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md",
                   "occurred_at": "2026-11-03T09:00:00+09:00",
                   "corrected": false
                 },
                 {
-                  "input_id": "IN-01M7T2EGG0XVSH8W5775Z3QFDW",
-                  "path": "00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md",
+                  "input_id": "IN-01M7T3PYXJYGKPZFDTPMBH9T0G",
+                  "path": "00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md",
                   "occurred_at": "2026-11-10T09:00:00+09:00",
                   "corrected": false
                 }
@@ -131,19 +131,19 @@
               "answers": []
             },
             {
-              "key": "409118663858cd7df10c5e2b5248156b55735a77d9de00bbbde6545ab5e9f223",
+              "key": "b4fd868dd022b6817bf0d6225cb40c34fd0cd3247d334a4e263a50f5ba93fbff",
               "section": "shifts",
               "text": "11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGGCFRK9YZK0SNA11SSA",
-                  "path": "00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md",
+                  "input_id": "IN-01M7T3PYXYAZ00DJV40S508AN9",
+                  "path": "00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md",
                   "occurred_at": "2026-11-12T09:00:00+09:00",
                   "corrected": false
                 },
                 {
-                  "input_id": "IN-01M7T2EGGRGA779EGTB6CQQ1K3",
-                  "path": "00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md",
+                  "input_id": "IN-01M7T3PYYG162QRV1WJGXA04WN",
+                  "path": "00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md",
                   "occurred_at": "2026-11-13T09:00:00+09:00",
                   "corrected": false
                 }
@@ -152,14 +152,14 @@
               "answers": []
             },
             {
-              "key": "23036477a250654c5ea6525ce873c502a400f71d931164950b669c1fc2ba7e4c",
+              "key": "060533e0bcf43d4bec84047d3afd61d8ac4649b09f9303ea61a0e9f24367bed3",
               "section": "stalled",
               "text": "10/20の「調べたい」から続きが見当たりません。まだ調べますか",
               "first_step": "土の種類を3つ書き出す",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGEVTCBN8TH86WQTYW86",
-                  "path": "00_inbox/2026-10-20_IN-01M7T2EGEVTCBN8TH86WQTYW86.md",
+                  "input_id": "IN-01M7T3PYWB1STSJXPK6PB3Q9GM",
+                  "path": "00_inbox/2026-10-20_IN-01M7T3PYWB1STSJXPK6PB3Q9GM.md",
                   "occurred_at": "2026-10-20T09:00:00+09:00",
                   "corrected": true
                 }
@@ -168,19 +168,19 @@
               "answers": []
             },
             {
-              "key": "0981f6a029244644082edb7b5109c3410fb3edd6d650ae91f90bab86fbc84f37",
+              "key": "1ff19c5d40520d95c72f497a72b844362fb030808184af5fcfdb54c32eef65cb",
               "section": "actions",
               "text": "講習の日程と申込期限を確かめますか",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGG0XVSH8W5775Z3QFDW",
-                  "path": "00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md",
+                  "input_id": "IN-01M7T3PYXJYGKPZFDTPMBH9T0G",
+                  "path": "00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md",
                   "occurred_at": "2026-11-10T09:00:00+09:00",
                   "corrected": false
                 },
                 {
-                  "input_id": "IN-01M7T2EGFHVWD9EJMXTN1B3N9Q",
-                  "path": "00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md",
+                  "input_id": "IN-01M7T3PYX29AMPXQBN8NBH7F67",
+                  "path": "00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md",
                   "occurred_at": "2026-11-03T09:00:00+09:00",
                   "corrected": false
                 }
@@ -189,13 +189,13 @@
               "answers": []
             },
             {
-              "key": "aa341e6ddcacbcad09e6c1ffd5f1d1ea21f5ae86f42afeca221cb93112b15b6c",
+              "key": "3ca6c6c56565c7d28518a290ab9c59d304610906f8f98cece8278c25347f9f6e",
               "section": "questions",
               "text": "見直した結果、次に試したいことはありますか",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGGCFRK9YZK0SNA11SSA",
-                  "path": "00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md",
+                  "input_id": "IN-01M7T3PYXYAZ00DJV40S508AN9",
+                  "path": "00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md",
                   "occurred_at": "2026-11-12T09:00:00+09:00",
                   "corrected": false
                 }
@@ -203,20 +203,20 @@
               "reaction": null,
               "answers": [
                 {
-                  "input_id": "IN-01M7T2EH0QJ369VAFC6JHWFXFB",
-                  "path": "00_inbox/2026-11-15_IN-01M7T2EH0QJ369VAFC6JHWFXFB.md",
+                  "input_id": "IN-01M7T3PZE5S0CFP1JVG533B5HC",
+                  "path": "00_inbox/2026-11-15_IN-01M7T3PZE5S0CFP1JVG533B5HC.md",
                   "occurred_at": "2026-11-15T10:30:00+09:00"
                 }
               ]
             },
             {
-              "key": "90bd4adf4c4d07c889a69a8d8d5aef15800c79aaf65a5e9c569775deb514e080",
+              "key": "371a2c11038cc6d7abe982b3dcd53a1e292e63039e5b6fcd5f6fafde69e44f62",
               "section": "questions",
               "text": "感想は、どの本から集め始めますか",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGGRGA779EGTB6CQQ1K3",
-                  "path": "00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md",
+                  "input_id": "IN-01M7T3PYYG162QRV1WJGXA04WN",
+                  "path": "00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md",
                   "occurred_at": "2026-11-13T09:00:00+09:00",
                   "corrected": false
                 }
@@ -227,7 +227,7 @@
           ]
         },
         "last_attempt": {
-          "id": "SYN-01M7GTEK00F9APKQC0QDD6ZJ4E",
+          "id": "SYN-01M7GTEK00KQANBT8H0QZGRXVS",
           "created_at": "2026-11-16T00:00:00.000Z",
           "status": "running",
           "error": null,
@@ -243,7 +243,7 @@
         "enabled": true,
         "interval_days": 7,
         "latest": {
-          "id": "SYN-01M7E81W00DBPDZXGZWSA6Z7BB",
+          "id": "SYN-01M7E81W004PDEBSK3G1JGW85D",
           "created_at": "2026-11-15T00:00:00.000Z",
           "mode": "first",
           "period": {
@@ -258,19 +258,19 @@
           },
           "items": [
             {
-              "key": "a8bd2bdeb6e532c48171545b7e9692fb61eaa1baea832e0381380dcb88198009",
+              "key": "9aab4d7ffdbaa70d6d61f80158b40d3e50340f12fbe542669b7b919bd3d63316",
               "section": "connections",
               "text": "11/03の関心が、11/10には受ける必要へ進んでいるように見えます",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGFHVWD9EJMXTN1B3N9Q",
-                  "path": "00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md",
+                  "input_id": "IN-01M7T3PYX29AMPXQBN8NBH7F67",
+                  "path": "00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md",
                   "occurred_at": "2026-11-03T09:00:00+09:00",
                   "corrected": false
                 },
                 {
-                  "input_id": "IN-01M7T2EGG0XVSH8W5775Z3QFDW",
-                  "path": "00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md",
+                  "input_id": "IN-01M7T3PYXJYGKPZFDTPMBH9T0G",
+                  "path": "00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md",
                   "occurred_at": "2026-11-10T09:00:00+09:00",
                   "corrected": false
                 }
@@ -279,19 +279,19 @@
               "answers": []
             },
             {
-              "key": "409118663858cd7df10c5e2b5248156b55735a77d9de00bbbde6545ab5e9f223",
+              "key": "b4fd868dd022b6817bf0d6225cb40c34fd0cd3247d334a4e263a50f5ba93fbff",
               "section": "shifts",
               "text": "11/12の見直しと11/13の「1か所に集めたい」は、作るより整える方へ関心が移っているように見えます",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGGCFRK9YZK0SNA11SSA",
-                  "path": "00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md",
+                  "input_id": "IN-01M7T3PYXYAZ00DJV40S508AN9",
+                  "path": "00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md",
                   "occurred_at": "2026-11-12T09:00:00+09:00",
                   "corrected": false
                 },
                 {
-                  "input_id": "IN-01M7T2EGGRGA779EGTB6CQQ1K3",
-                  "path": "00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md",
+                  "input_id": "IN-01M7T3PYYG162QRV1WJGXA04WN",
+                  "path": "00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md",
                   "occurred_at": "2026-11-13T09:00:00+09:00",
                   "corrected": false
                 }
@@ -300,14 +300,14 @@
               "answers": []
             },
             {
-              "key": "23036477a250654c5ea6525ce873c502a400f71d931164950b669c1fc2ba7e4c",
+              "key": "060533e0bcf43d4bec84047d3afd61d8ac4649b09f9303ea61a0e9f24367bed3",
               "section": "stalled",
               "text": "10/20の「調べたい」から続きが見当たりません。まだ調べますか",
               "first_step": "土の種類を3つ書き出す",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGEVTCBN8TH86WQTYW86",
-                  "path": "00_inbox/2026-10-20_IN-01M7T2EGEVTCBN8TH86WQTYW86.md",
+                  "input_id": "IN-01M7T3PYWB1STSJXPK6PB3Q9GM",
+                  "path": "00_inbox/2026-10-20_IN-01M7T3PYWB1STSJXPK6PB3Q9GM.md",
                   "occurred_at": "2026-10-20T09:00:00+09:00",
                   "corrected": true
                 }
@@ -316,19 +316,19 @@
               "answers": []
             },
             {
-              "key": "0981f6a029244644082edb7b5109c3410fb3edd6d650ae91f90bab86fbc84f37",
+              "key": "1ff19c5d40520d95c72f497a72b844362fb030808184af5fcfdb54c32eef65cb",
               "section": "actions",
               "text": "講習の日程と申込期限を確かめますか",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGG0XVSH8W5775Z3QFDW",
-                  "path": "00_inbox/2026-11-10_IN-01M7T2EGG0XVSH8W5775Z3QFDW.md",
+                  "input_id": "IN-01M7T3PYXJYGKPZFDTPMBH9T0G",
+                  "path": "00_inbox/2026-11-10_IN-01M7T3PYXJYGKPZFDTPMBH9T0G.md",
                   "occurred_at": "2026-11-10T09:00:00+09:00",
                   "corrected": false
                 },
                 {
-                  "input_id": "IN-01M7T2EGFHVWD9EJMXTN1B3N9Q",
-                  "path": "00_inbox/2026-11-03_IN-01M7T2EGFHVWD9EJMXTN1B3N9Q.md",
+                  "input_id": "IN-01M7T3PYX29AMPXQBN8NBH7F67",
+                  "path": "00_inbox/2026-11-03_IN-01M7T3PYX29AMPXQBN8NBH7F67.md",
                   "occurred_at": "2026-11-03T09:00:00+09:00",
                   "corrected": false
                 }
@@ -337,13 +337,13 @@
               "answers": []
             },
             {
-              "key": "aa341e6ddcacbcad09e6c1ffd5f1d1ea21f5ae86f42afeca221cb93112b15b6c",
+              "key": "3ca6c6c56565c7d28518a290ab9c59d304610906f8f98cece8278c25347f9f6e",
               "section": "questions",
               "text": "見直した結果、次に試したいことはありますか",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGGCFRK9YZK0SNA11SSA",
-                  "path": "00_inbox/2026-11-12_IN-01M7T2EGGCFRK9YZK0SNA11SSA.md",
+                  "input_id": "IN-01M7T3PYXYAZ00DJV40S508AN9",
+                  "path": "00_inbox/2026-11-12_IN-01M7T3PYXYAZ00DJV40S508AN9.md",
                   "occurred_at": "2026-11-12T09:00:00+09:00",
                   "corrected": false
                 }
@@ -351,20 +351,20 @@
               "reaction": null,
               "answers": [
                 {
-                  "input_id": "IN-01M7T2EH0QJ369VAFC6JHWFXFB",
-                  "path": "00_inbox/2026-11-15_IN-01M7T2EH0QJ369VAFC6JHWFXFB.md",
+                  "input_id": "IN-01M7T3PZE5S0CFP1JVG533B5HC",
+                  "path": "00_inbox/2026-11-15_IN-01M7T3PZE5S0CFP1JVG533B5HC.md",
                   "occurred_at": "2026-11-15T10:30:00+09:00"
                 }
               ]
             },
             {
-              "key": "90bd4adf4c4d07c889a69a8d8d5aef15800c79aaf65a5e9c569775deb514e080",
+              "key": "371a2c11038cc6d7abe982b3dcd53a1e292e63039e5b6fcd5f6fafde69e44f62",
               "section": "questions",
               "text": "感想は、どの本から集め始めますか",
               "sources": [
                 {
-                  "input_id": "IN-01M7T2EGGRGA779EGTB6CQQ1K3",
-                  "path": "00_inbox/2026-11-13_IN-01M7T2EGGRGA779EGTB6CQQ1K3.md",
+                  "input_id": "IN-01M7T3PYYG162QRV1WJGXA04WN",
+                  "path": "00_inbox/2026-11-13_IN-01M7T3PYYG162QRV1WJGXA04WN.md",
                   "occurred_at": "2026-11-13T09:00:00+09:00",
                   "corrected": false
                 }
@@ -375,12 +375,12 @@
           ]
         },
         "last_attempt": {
-          "id": "SYN-01M7GTEK00F9APKQC0QDD6ZJ4E",
+          "id": "SYN-01M7GTEK00KQANBT8H0QZGRXVS",
           "created_at": "2026-11-16T00:00:00.000Z",
           "status": "failed",
           "error": "llm-error",
           "warnings": [],
-          "elapsed_ms": 99
+          "elapsed_ms": 88
         },
         "next_due_at": "2026-11-23T00:00:00.000Z",
         "record_problems": 0
