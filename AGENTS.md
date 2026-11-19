@@ -55,13 +55,13 @@ scripts/verify.sh
 
 ## 本体（submodule）とfixture
 
-読取テストのfixture（`assets/*.json`、`test/fixtures/numeric-policy.json`、`test/fixtures/unassigned-and-proposals.json`）は本体の生成物です。`scripts/check_fixture_drift.mjs` が固定参照の本体で再生成した出力と比較します。日時・ULID・hashだけを置換し、記録の種類・frontmatter/JSONの値・本文の書式・期待値の差を検出します。`flutter test`（`test/fixture_drift_test.dart`、`scripts/verify.sh` も含む）から実行されます。fixtureに含まれない `Input/`・`90_system/intake/`・`90_system/associations/` は対象外で、書き込み側はprotocolテストが確認します。
+読取テストのfixture（`assets/*.json`、`test/fixtures/numeric-policy.json`、`test/fixtures/unassigned-and-proposals.json`、`test/fixtures/insights.json`）は本体の生成物です。`scripts/check_fixture_drift.mjs` が固定参照の本体で再生成した出力と比較します。日時・ULID・hash・所要時間（`elapsed_ms`）だけを置換し、記録の種類・frontmatter/JSONの値・本文の書式・期待値の差を検出します。`flutter test`（`test/fixture_drift_test.dart`、`scripts/verify.sh` も含む）から実行されます。fixtureに含まれない `Input/`・`90_system/intake/`・`90_system/associations/` は対象外で、書き込み側はprotocolテストが確認します。
 
 本体のcommitを進めるときは、次をそろえて変更します。
 
 1. `vendor/context-hub` を新しい本体commitへ更新する。
 2. `scripts/verify.sh` の固定commit（`git -C vendor/context-hub rev-parse HEAD` との比較）を同じcommitへ更新する。
-3. `flutter test` でfixtureとの差分が出た場合は、`node scripts/prepare_policy_fixtures.mjs`・`node scripts/prepare_numeric_policy_fixture.mjs`・`node scripts/prepare_inbox_fixture.mjs` で再生成し、Dart側の読取を合わせる。
+3. `flutter test` でfixtureとの差分が出た場合は、`node scripts/prepare_policy_fixtures.mjs`・`node scripts/prepare_numeric_policy_fixture.mjs`・`node scripts/prepare_inbox_fixture.mjs`・`node scripts/prepare_insights_fixture.mjs` で再生成し、Dart側の読取を合わせる。
 
 本体のCI（`client-contract` ジョブ）は、このクライアントの既定ブランチを取得し、submoduleの代わりに本体の対象commitを置いてfixture比較とDartテストを実行します（`continue-on-error` で、失敗しても本体のPRは止めません）。本体の変更で失敗した場合は、本体のmerge後にこのリポジトリでfixtureの再生成と読取の更新を行います。
 

@@ -14,6 +14,8 @@ const snapshotSkippedPaths = [
   '90_system/receipts/events',
   '90_system/intake/pending',
   '90_system/association-views',
+  // 週次の統合の実行の記録。アプリは、本体がまとめた一覧（90_system/insights.json）だけを読む。
+  '90_system/synthesis',
 ];
 
 /// 本体が知らない上位の版（schema_version 2以降）で書いた記録があるときの注意。ファイルごとには出さず1件だけ出す。
@@ -661,6 +663,110 @@ class UnassignedMemo {
   /// AIが挙げた次の一手の提案（未検証）。
   final List<String> suggestions;
 }
+
+/// 本体が書く「今週の気づき」（90_system/insights.json）。週次の統合で、たまったメモをAIがまとめて
+/// 読み直した結果のうち、最後に成功した回のもの。AI生成・未検証で、表示だけに使う。
+class Insights {
+  const Insights({
+    required this.intervalDays,
+    required this.createdAt,
+    required this.mode,
+    required this.items,
+    required this.waiting,
+    required this.failure,
+    required this.recordProblems,
+  });
+
+  /// 本体が自動で実行する間隔（日）。これより古い結果には、何日前のものかを添える。
+  final int intervalDays;
+
+  /// 最後に成功した実行の日時。まだ成功していなければnull。
+  final DateTime? createdAt;
+
+  /// 最後に成功した実行の種類（first・weekly・quiet）。quietは、新しいメモが少なく以前のメモを見直した回。
+  final String? mode;
+
+  /// 根拠のメモがすべてこの端末に届いている項目（本体の並び順）。
+  final List<InsightItem> items;
+
+  /// 根拠のメモが届いていないため、まだ載せていない項目の数。
+  final int waiting;
+
+  /// 最後の実行が失敗しているときの理由（表示用）。失敗していなければnull。
+  final String? failure;
+
+  /// 本体が読めない実行の記録の件数。1件でもあると、本体は自動で実行しない。
+  final int recordProblems;
+
+  /// 最後に成功した実行からの日数（24時間単位）。
+  int? ageDays(DateTime now) {
+    final at = createdAt;
+    if (at == null) return null;
+    final days = now.difference(at).inDays;
+    return days < 0 ? 0 : days;
+  }
+
+  /// 間隔を過ぎても新しい結果が届いていないか。
+  bool stale(DateTime now) => (ageDays(now) ?? 0) > intervalDays;
+}
+
+/// 今週の気づきの1件。
+class InsightItem {
+  const InsightItem({
+    required this.key,
+    required this.section,
+    required this.text,
+    required this.firstStep,
+    required this.sources,
+  });
+
+  /// 項目のキー（本体が決める）。
+  final String key;
+
+  /// 欄（[insightSectionLabels]のキー）。
+  final String section;
+
+  /// AIが書いた本文（未検証）。
+  final String text;
+
+  /// 止まっている意図の、最初の一歩（未検証）。なければnull。
+  final String? firstStep;
+
+  /// 根拠のメモ。
+  final List<InsightSource> sources;
+}
+
+/// 気づきの根拠のメモ。
+class InsightSource {
+  const InsightSource({
+    required this.inputId,
+    required this.at,
+    required this.corrected,
+  });
+  final String inputId;
+  final DateTime at;
+
+  /// 気づきを作った後に、このメモへ訂正が届いたか。
+  final bool corrected;
+}
+
+/// 今週の気づきの欄と見出し（表示順）。
+const insightSectionLabels = {
+  'connections': 'つながり',
+  'shifts': '考えの変化',
+  'stalled': '止まっている意図',
+  'actions': '次の一手の提案',
+  'questions': '問い',
+};
+
+/// 週次の統合が失敗した理由の表示。
+const insightFailureLabels = {
+  'invalid-output': '応答の形式が不正',
+  'timeout': '応答待ちの時間切れ',
+  'prompt-too-large': '送る内容が大きすぎる',
+  'llm-error': 'モデルの呼び出しに失敗',
+  'interrupted': '実行が途中で止まった',
+};
 
 /// 本体が書く、似ているアイデアの未確認の組（90_system/idea-index.json）。
 class IdeaCandidate {

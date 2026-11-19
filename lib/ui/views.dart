@@ -188,6 +188,9 @@ class _HubViewState extends State<HubView> {
 
   /// ホームに並べる、プロジェクト未定のメモと確認待ちのプロジェクト案の数。
   static const homeUnassigned = 3, homeProposals = 3;
+
+  /// ホームの「今週の気づき」は、欄ごとに先頭の1件を出す。「ほかN件を表示」で残りも出す。
+  bool insightsExpanded = false;
   HubController get c => widget.controller;
   HubRepository get repo => c.repository!;
 
@@ -203,6 +206,7 @@ class _HubViewState extends State<HubView> {
     if (old.page != widget.page) {
       shown = pageSize;
       unassignedShown = unassignedPageSize;
+      insightsExpanded = false;
       _visit();
     }
   }
@@ -436,6 +440,8 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
+      // 今週の気づきは、行動につながる欄（次の一手）より前に置く。
+      children.addAll(insightsHome());
       final actionable = repo.actionableProjects,
           nextCount = actionable.fold<int>(
             0,
@@ -2204,6 +2210,162 @@ class _HubViewState extends State<HubView> {
         ),
     ];
   }
+
+  /// ホームの「今週の気づき」。本体の週次の統合が、たまったメモをまとめて読み直した結果（AI生成・未検証）。
+  /// 項目ごとに根拠のメモを開いて確かめられる。本体で無効のとき・結果がないときは何も出さない。
+  List<Widget> insightsHome() {
+    final insights = repo.insights;
+    if (insights == null) return const [];
+    final now = DateTime.now(),
+        items = insights.items,
+        age = insights.ageDays(now),
+        widgets = <Widget>[];
+    if (insights.failure != null) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: NoticeBox(
+            '週次の統合（今週の気づき）の前回の実行が失敗しました（${insights.failure}）。${items.isEmpty ? '' : '前回までの気づきを表示しています。'}やり直し方は、VaultのHOME.mdの「失敗と競合」にあります。',
+            key: const Key('home-insights-failure'),
+          ),
+        ),
+      );
+    }
+    if (insights.recordProblems > 0) {
+      widgets.add(
+        const Padding(
+          padding: EdgeInsets.only(bottom: 12),
+          child: NoticeBox(
+            '週次の統合の記録に読めないものがあり、自動の実行が止まっています。VaultのHOME.mdの「失敗と競合」で場所を確認してください。',
+            key: Key('home-insights-records'),
+          ),
+        ),
+      );
+    }
+    if (items.isEmpty) {
+      // 項目はあるが、根拠のメモがまだこの端末に届いていない。
+      if (insights.waiting > 0) {
+        widgets.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(
+              '今週の気づき: 根拠のメモがこの端末に届いていない${insights.waiting}件は、同期で届いてから表示します。',
+              key: const Key('home-insights-waiting'),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        );
+      }
+      return widgets;
+    }
+    // たたんでいる間は、欄ごとに先頭の1件だけを出す。
+    final shownKeys = <String>{};
+    for (final section in insightSectionLabels.keys) {
+      final inSection = items.where((i) => i.section == section);
+      shownKeys.addAll(
+        (insightsExpanded ? inSection : inSection.take(1)).map((i) => i.key),
+      );
+    }
+    final hidden = items.length - shownKeys.length;
+    widgets.add(
+      Padding(
+        padding: const EdgeInsets.only(bottom: 20),
+        child: Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                key: const Key('home-insights'),
+                leading: const Icon(Icons.auto_awesome_outlined),
+                title: Text('今週の気づき ${items.length}件'),
+                subtitle: Text(
+                  [
+                    '${hubToday(insights.createdAt)}に、たまったメモをAIがまとめて読み直した結果（AIの推定・未検証）',
+                    if (insights.mode == 'quiet') '新しいメモが少なかったので、以前のメモの見直しが中心',
+                    if (insights.stale(now)) '$age日前の結果',
+                    '根拠のメモを開いて確かめられます',
+                    if (insights.waiting > 0)
+                      '根拠のメモが届いていない${insights.waiting}件は、届いてから表示',
+                  ].join(' · '),
+                ),
+              ),
+              for (final section in insightSectionLabels.keys)
+                if (items.any(
+                  (i) => i.section == section && shownKeys.contains(i.key),
+                )) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(72, 6, 16, 2),
+                    child: Text(
+                      insightSectionLabels[section]!,
+                      key: Key('home-insights-$section'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                  for (final item in items)
+                    if (item.section == section && shownKeys.contains(item.key))
+                      insightEntry(item),
+                ],
+              if (hidden > 0 || insightsExpanded)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(60, 0, 16, 8),
+                  child: TextButton(
+                    key: const Key('home-insights-more'),
+                    onPressed: () =>
+                        setState(() => insightsExpanded = !insightsExpanded),
+                    child: Text(insightsExpanded ? 'たたむ' : 'ほか$hidden件を表示'),
+                  ),
+                )
+              else
+                const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+    return widgets;
+  }
+
+  /// 今週の気づきの1件。本文はAIが書いたもので、そのまま文字として出す（Markdownとして解釈しない）。
+  Widget insightEntry(InsightItem item) => Padding(
+    key: Key('home-insight-${item.key}'),
+    padding: const EdgeInsets.fromLTRB(72, 4, 16, 6),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(item.text, style: const TextStyle(height: 1.6)),
+        if (item.firstStep != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              '最初の一歩: ${item.firstStep}',
+              style: const TextStyle(fontSize: 13, height: 1.6),
+            ),
+          ),
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text('根拠', style: TextStyle(fontSize: 12)),
+            for (final source in item.sources)
+              TextButton.icon(
+                key: Key('home-insight-source-${item.key}-${source.inputId}'),
+                onPressed: () {
+                  final record = repo.inputRecord(source.inputId);
+                  if (record != null) open(record.id);
+                },
+                icon: const Icon(Icons.article_outlined, size: 15),
+                label: Text(
+                  '${hubToday(source.at)}のメモ${source.corrected ? '（訂正あり）' : ''}',
+                ),
+              ),
+          ],
+        ),
+      ],
+    ),
+  );
 
   /// 「次の一手」画面の「プロジェクト未定」。どのプロジェクトにも結び付いていないメモの、
   /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。
