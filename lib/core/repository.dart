@@ -132,7 +132,12 @@ class HubRepository {
               id is! String ||
               !inputIdPattern.hasMatch(id) ||
               !path.endsWith('_$id.md') ||
-              !['memo', 'work-summary', 'correction'].contains(m['kind']) ||
+              ![
+                'memo',
+                'work-summary',
+                'action',
+                'correction',
+              ].contains(m['kind']) ||
               m['source'] is! String ||
               (m['source'] as String).isEmpty ||
               m['source_event_id'] is! String ||
@@ -341,6 +346,7 @@ class HubRepository {
     _readUnassignedActions();
     _readInsights();
     _readIntake();
+    _hideTakenOver();
     _readDigest();
     _readBackupChecks();
   }
@@ -535,6 +541,23 @@ class HubRepository {
                       (sc['due'] == null && sc['review_after'] == null)))) {
             throw const FormatException();
           }
+          // 本人が追加した行動（本体の入力の種類action）。fromは行動にした元の行。旧版の一覧にはない。
+          final act = i['action'], from = act is Map ? act['from'] : null;
+          if ((act != null && act is! Map) ||
+              (from != null &&
+                  (from is! Map ||
+                      from['input_id'] is! String ||
+                      !inputIdPattern.hasMatch(from['input_id']) ||
+                      from['text'] is! String ||
+                      (from['text'] as String).isEmpty ||
+                      (from['text'] as String).length > 2000 ||
+                      (from['key'] != null &&
+                          (from['key'] is! String ||
+                              !RegExp(
+                                r'^[a-f0-9]{64}$',
+                              ).hasMatch(from['key'])))))) {
+            throw const FormatException();
+          }
           final hints = <NowItemHint>[];
           final rawHints = i['hints'];
           if (rawHints != null) {
@@ -573,6 +596,10 @@ class HubRepository {
               due: sc is Map ? sc['due'] as String? : null,
               reviewAfter: sc is Map ? sc['review_after'] as String? : null,
               hints: r == null ? hints : const [],
+              action: act is Map,
+              fromInputId: from is Map ? from['input_id'] as String : null,
+              fromText: from is Map ? from['text'] as String : null,
+              fromKey: from is Map ? from['key'] as String? : null,
             ),
           );
         }
@@ -1543,6 +1570,8 @@ class HubRepository {
     const pendingNotice = '訂正未反映です。旧要約の可能性があるため、訂正原文を確認してください。';
     const unconfirmedNotice = '訂正整理済みですが、表示への反映未確認です。訂正原文も確認してください。';
     const reflectedNotice = '訂正原文と対応する要約です。未検証の内容を確認してください。';
+    // 行動の文面の訂正は整理しない。NOWに直した文面が載るまで、表示への反映を確かめていない。
+    const actionNotice = '行動の文面を直しました。NOWへの反映未確認です。元の文面も原文に残っています。';
     final projectStates = <String, List<String>>{};
     final children = <String, HubRecord>{}, visited = <String>{};
     for (final r in _inputs.values.where((r) => r.kind == 'correction')) {
@@ -1701,14 +1730,28 @@ class HubRepository {
         owner: owner,
         summary: summary,
       ));
+      // 本人が追加した行動はモデルで整理しないため処理記録がない。訂正を含めて「本人が追加した行動」の状態にする。
+      final action = root.kind == 'action';
+      if (action) {
+        for (final r in chain) {
+          r.status = 'action';
+        }
+      }
       if (chain.length == 1) continue;
-      final pending = receipt?['input_id'] != chain.last.sourceId;
-      final notice = pending ? pendingNotice : unconfirmedNotice;
+      // 行動は最新の文面をそのままNOWに載せるため、訂正は整理を待たない（NOWへの反映だけを確かめる）。
+      final pending = !action && receipt?['input_id'] != chain.last.sourceId;
+      final notice = pending
+          ? pendingNotice
+          : action
+          ? actionNotice
+          : unconfirmedNotice;
       final ids = chain.map((r) => r.sourceId).toSet();
       for (final r in records.values) {
         if (ids.contains(r.sourceId) ||
             r.references.any((id) => ids.contains(records[id]?.sourceId))) {
-          r.warnings.add(notice);
+          r.warnings.add(
+            action ? '行動の文面を直しています。元の文面も原文に残っています。' : notice,
+          );
           for (final c in chain) {
             if (c.id != r.id && !r.references.contains(c.id)) {
               r.references.add(c.id);
@@ -1728,13 +1771,14 @@ class HubRepository {
         if (!pending &&
             raw != null &&
             project.generatedAt != null &&
-            receipt != null &&
+            (action || receipt != null) &&
             !project.warnings.any((w) => w.contains('整合性'))) {
           final region = autoRegion(parseMarkdown(raw).body);
           reflected =
-              !project.generatedAt!.isBefore(
-                timestamp(receipt['organized_at'])!,
-              ) &&
+              (action ||
+                  !project.generatedAt!.isBefore(
+                    timestamp(receipt!['organized_at'])!,
+                  )) &&
               (region?.auto.contains(
                     '[${chain.last.sourceId}](../../${chain.last.path})',
                   ) ??
@@ -1753,7 +1797,12 @@ class HubRepository {
     for (final entry in projectStates.entries) {
       final project = projects[entry.key]!;
       project.warnings.removeWhere(
-        (w) => [pendingNotice, unconfirmedNotice, reflectedNotice].contains(w),
+        (w) => [
+          pendingNotice,
+          unconfirmedNotice,
+          reflectedNotice,
+          actionNotice,
+        ].contains(w),
       );
       final unresolved = entry.value.where((w) => w != reflectedNotice).toSet();
       project.warnings.addAll(
@@ -1973,6 +2022,18 @@ class HubRepository {
                 !inputIdPattern.hasMatch(m['target_id']))) {
           throw const FormatException();
         }
+        // 本人が次の一手へ直接追加する行動（capture・kind: action）。本文は1行の本人の言葉で、プロジェクトの指定が要る。
+        final actionCapture =
+            m['operation'] == 'capture' && m['kind'] == 'action';
+        if (actionCapture &&
+            (!validActionText(doc.body) ||
+                m['project'] is! String ||
+                !projectIdPattern.hasMatch(m['project']) ||
+                m.containsKey('tool') ||
+                (m['meta'] != null && _actionSourceOf(m['meta']) == null))) {
+          throw const FormatException();
+        }
+        String? capturedInputId;
         // 下書きから作った入力は、本体に届くまで下書きを使用中として扱う。
         final usedDraft = m['operation'] == 'capture' && m['meta'] is Map
             ? (m['meta'] as Map)['git_draft']
@@ -2080,6 +2141,8 @@ class HubRepository {
               ? '${(m['operation'] as String).endsWith('approve') ? '採用' : '却下'}依頼: ${m['candidate_id']}${m['cover_ids'] is List ? '（同じ対象の案${(m['cover_ids'] as List).length}件をまとめて判断）' : ''}'
               : correction
               ? '訂正: ${readableTitle(doc.body)}'
+              : actionCapture
+              ? '次の一手への追加: ${doc.body}（${projects[m['project']]?.title ?? m['project']}）'
               : readableTitle(doc.body),
           at: timestamp(m['occurred_at']),
         );
@@ -2288,6 +2351,13 @@ class HubRepository {
                   : 'Mini受領済み。判断・反映結果を再同期してください。';
             }
             final input = _inputs[(ack['result'] as Map)['inputId']];
+            if (actionCapture) {
+              final id = (ack['result'] as Map)['inputId'];
+              if (id is! String || !inputIdPattern.hasMatch(id)) {
+                throw const FormatException();
+              }
+              capturedInputId = id;
+            }
             // 本体は同じ対象・同じ本文の既存の訂正を重複として返すことがあるため、出典ではなく受領結果の入力で判断する。
             if (correction &&
                 input != null &&
@@ -2406,6 +2476,7 @@ class HubRepository {
           }
         }
         if (itemReport) _itemRequest(item, m, resolutionId);
+        if (actionCapture) _actionRequest(item, m, doc.body, capturedInputId);
         if (ideaLink) ideaLinkItems.add((item, m, ideaLinkId));
         if (reacting) reactionItems.add((item, m, reactionId));
         if (itemSchedule) {
@@ -2638,7 +2709,12 @@ class HubRepository {
   List<HubRecord>? correctionChainOf(String recordId) {
     final record = records[recordId];
     if (record == null ||
-        !const ['memo', 'work-summary', 'correction'].contains(record.kind)) {
+        !const [
+          'memo',
+          'work-summary',
+          'action',
+          'correction',
+        ].contains(record.kind)) {
       return null;
     }
     return _unitBySource[record.sourceId]?.chain;
@@ -2686,6 +2762,157 @@ class HubRepository {
     }
     if (waiting) (outstanding ?? _outstandingItems)[key] = item.id;
   }
+
+  /// 行動の元の行の参照（本体のassertActionMetaと同じ形）。形が合わなければnull。
+  static ActionSource? _actionSourceOf(Object? meta) {
+    if (meta is! Map ||
+        meta.keys.any(
+          (k) => !const [
+            'action_from_input',
+            'action_from_text',
+            'action_from_key',
+          ].contains(k),
+        )) {
+      return null;
+    }
+    final input = meta['action_from_input'],
+        text = meta['action_from_text'],
+        key = meta['action_from_key'];
+    if (input is! String ||
+        !inputIdPattern.hasMatch(input) ||
+        text is! String ||
+        text.isEmpty ||
+        text.length > 2000 ||
+        (key != null &&
+            (key is! String || !RegExp(r'^[a-f0-9]{64}$').hasMatch(key)))) {
+      return null;
+    }
+    return ActionSource(inputId: input, text: text, key: key as String?);
+  }
+
+  /// 行動の追加の反映状況。NOWの項目一覧に、受け付けた入力の項目が載れば反映済みとする。
+  /// それまでは「反映待ち」としてプロジェクトの次の一手に示す（追加したのに一覧にない時間をなくす）。
+  void _actionRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String text,
+    String? inputId,
+  ) {
+    final project = projects[m['project']];
+    // NOWの本文（NOW.md）に載った、または完了・誤りとして外した後なら反映済み。項目一覧だけに載った
+    // （NOWの手編集で本文を作り直せなかった・同期の途中）ときは、行動が見えなくならないよう反映待ちのまま示す。
+    final shown =
+        inputId != null &&
+        projects.values.any(
+          (p) => p.nowItems.any(
+            (i) =>
+                i.inputId == inputId &&
+                i.action &&
+                (i.resolved ||
+                    p.sections['next']!.any((e) => e.itemKey == i.key)),
+          ),
+        );
+    if (item.state == 'accepted') {
+      item.detail = shown
+          ? '次の一手にMiniが追加しました。'
+          : 'Mini受領済み。NOWの同期を待っています。';
+    }
+    if (project == null ||
+        shown ||
+        !const ['waiting', 'accepted'].contains(item.state)) {
+      return;
+    }
+    project.pendingActions.add(
+      PendingAction(
+        requestId: item.id,
+        projectId: project.id,
+        text: text,
+        state: item.state,
+        from: m['meta'] == null ? null : _actionSourceOf(m['meta']),
+      ),
+    );
+  }
+
+  /// 根拠の入力ID（訂正の整理ならチェーンの先頭）ごとの処理記録。「提案」の行の元の本文を探すときに使う。
+  late final Map<String, List<Map<String, dynamic>>> _receiptsByRoot = () {
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final r in _receipts.values) {
+      for (final id in {r['input_id'], r['root_input_id']}.whereType<String>()) {
+        map.putIfAbsent(id, () => []).add(r);
+      }
+    }
+    return map;
+  }();
+
+  static final _proposalRow = RegExp(
+    r'^(?:分類候補task・要確認: |AI提案: |提案: )(.+?) \[(IN-[0-9A-HJKMNP-TV-Z]{26})\]\(',
+  );
+
+  /// NOWの「提案」の行を行動にするときの、元の行（根拠の入力IDと本文）。行の形が合わないときはnull。
+  /// 本体はNOWへ本文を無害化（改行を空白に、HTMLコメントの開始を無効に）して載せ、元の本文で照合する。
+  /// そのため処理記録から同じ表示になる本文を探し、1件に決まればそれを使う。処理記録がないときは表示の本文を使う。
+  ActionSource? proposalSource(NowEntry entry) {
+    final m = _proposalRow.firstMatch(entry.raw);
+    if (m == null) return null;
+    final shown = m[1]!, id = m[2]!;
+    String nowText(String s) =>
+        s.replaceAll(RegExp(r'[\r\n]+'), ' ').replaceAll('<!--', '&lt;!--');
+    final candidates = <String>{};
+    for (final r in _receiptsByRoot[id] ?? const <Map<String, dynamic>>[]) {
+      final result = r['result'];
+      if (result is! Map) continue;
+      if (result['summary'] case final String s) candidates.add(s);
+      if (result['next_action_suggestions'] case final List list) {
+        candidates.addAll(list.whereType<String>());
+      }
+      if (result['extracted'] case final Map extracted) {
+        for (final section in ['current', 'next']) {
+          if (extracted[section] case final List list) {
+            for (final v in list) {
+              if (v is Map && v['text'] is String) candidates.add(v['text']);
+            }
+          }
+        }
+      }
+    }
+    final found = candidates.where((t) => nowText(t) == shown).toList();
+    final text = found.length == 1
+        ? found.single
+        : found.isEmpty && !shown.contains('&lt;!--')
+        ? shown
+        : null;
+    if (text == null || text.length > 2000) return null;
+    return ActionSource(inputId: id, text: text);
+  }
+
+  /// 反映待ちの行動の元にした行（作業要約の次の一手・「提案」）を、次の一手と提案の欄から外す。
+  /// 本体も反映するとどのプロジェクトのNOWからも外すため、反映待ちの間に二重に並べたり数えたりしない。
+  void _hideTakenOver() {
+    final pending = [for (final p in projects.values) ...p.pendingActions];
+    if (!pending.any((a) => a.from != null)) return;
+    for (final p in projects.values) {
+      p.sections['next']!.removeWhere((e) {
+        final item = e.itemKey == null
+            ? null
+            : p.nowItems.where((i) => i.key == e.itemKey).firstOrNull;
+        return item != null &&
+            !item.action &&
+            pendingActionFrom(item.inputId, item.text);
+      });
+      p.sections['proposals']!.removeWhere((e) {
+        final from = proposalSource(e);
+        return from != null && pendingActionFrom(from.inputId, from.text);
+      });
+    }
+  }
+
+  /// 反映待ちの行動の元にした行か（どのプロジェクトの行動でも同じ行は本人が引き取ったものとして扱う。本体と同じ）。
+  bool pendingActionFrom(String inputId, String text) =>
+      projects.values.any(
+        (p) => p.pendingActions.any(
+          (a) => a.from?.inputId == inputId && a.from?.text == text,
+        ),
+      );
 
   /// 「片付いたかも」の見送りの反映状況。NOWの項目一覧からその候補が消えていれば反映済みとする。
   void _hintDismissRequest(IntakeStatus item, Map<String, dynamic> m) {
@@ -2789,7 +3016,9 @@ class HubRepository {
 
   /// 最近のメモ（原文・作業要約・訂正）。新しい順の全件。画面側で少しずつ表示する。
   List<HubRecord> get recent => _ordered
-      .where((r) => ['memo', 'work-summary', 'correction'].contains(r.kind))
+      .where(
+        (r) => ['memo', 'work-summary', 'action', 'correction'].contains(r.kind),
+      )
       .toList();
   List<HubRecord> get ideas => _ordered.where((r) => r.kind == 'idea').toList();
 
@@ -2940,6 +3169,8 @@ class HubRepository {
           .where(
             (u) =>
                 u.related.contains(id) &&
+                // 本人が追加した行動は、上のNOWの「次の一手」に載っている（本体のcontextと同じ）。
+                u.root.kind != 'action' &&
                 (u.chain.last.status == 'organized') == organized,
           )
           .take(10)
@@ -3031,6 +3262,7 @@ class HubRepository {
   static const bundleKinds = {
     'memo',
     'work-summary',
+    'action',
     'correction',
     'idea',
     'knowledge',
@@ -3040,6 +3272,7 @@ class HubRepository {
   static const _bundleKindLabels = {
     'memo': 'メモ',
     'work-summary': '作業要約',
+    'action': '本人が追加した行動',
     'correction': '訂正',
     'idea': 'アイデア',
     'knowledge': '知識',
@@ -3089,6 +3322,7 @@ class HubRepository {
         final state = switch (latest.status) {
           'organized' => '整理済み',
           'failed' => '整理失敗',
+          'action' => '本人が追加した行動（整理しません）',
           _ => '未整理',
         };
         out.writeln('種類: ${_bundleKindLabels[root.kind]} / 状態: $state');
@@ -3101,7 +3335,10 @@ class HubRepository {
           );
         }
         if (unit.chain.length > 1) {
-          final pending = unit.receipt?['input_id'] != latest.sourceId;
+          // 本人が追加した行動は整理しないため、訂正は届いた時点で反映済み（本体と同じ）。
+          final pending =
+              root.kind != 'action' &&
+              unit.receipt?['input_id'] != latest.sourceId;
           out.writeln(
             '${pending ? '訂正未反映（旧解釈を表示・最新とは限りません）' : '訂正反映済み'}: ${unit.chain.map((r) => '[${r.sourceId}](${r.path})').join(' → ')}',
           );

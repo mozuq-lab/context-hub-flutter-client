@@ -279,6 +279,52 @@ class CaptureService {
             e.value.length <= 2000,
       );
 
+  /// 本人が決めた行動を、モデルを通さずにプロジェクトの「次の一手」へ載せる依頼（capture・kind: action）。
+  /// [from]はAIが読み取った行を行動にしたときの元の行。本文は本人が確かめた1行の文面。作業ツールは付けない。
+  Future<CaptureResult> saveAction(
+    String operationId,
+    String projectId,
+    String text, {
+    ActionSource? from,
+  }) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(projectId) ||
+        !validActionText(text) ||
+        (from != null &&
+            (!inputIdPattern.hasMatch(from.inputId) ||
+                from.text.isEmpty ||
+                from.text.length > 2000 ||
+                (from.key != null &&
+                    !RegExp(r'^[a-f0-9]{64}$').hasMatch(from.key!))))) {
+      throw const FormatException(
+        '行動は1行・$actionTextChars文字以内で入力し、プロジェクトを選んでください。',
+      );
+    }
+    return _saveRequest(
+      operationId,
+      digest(
+        jsonEncode([
+          'action',
+          projectId,
+          text,
+          if (from != null) [from.inputId, from.text, from.key],
+        ]),
+      ),
+      {
+        'operation': 'capture',
+        'kind': 'action',
+        'project': projectId,
+        if (from != null)
+          'meta': {
+            'action_from_input': from.inputId,
+            'action_from_text': from.text,
+            'action_from_key': ?from.key,
+          },
+      },
+      text,
+    );
+  });
+
   /// 原文を残したまま、訂正チェーンの最新の入力（targetId）を訂正する依頼。本文は訂正後の全文。
   Future<CaptureResult> saveCorrection(
     String operationId,

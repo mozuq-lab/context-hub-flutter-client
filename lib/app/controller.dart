@@ -793,6 +793,10 @@ class HubController extends ChangeNotifier {
       if (text.trim() == chain.last.body.trim()) {
         throw StateError('訂正前と同じ本文です。直したい箇所を書き換えてください。');
       }
+      // 行動の文面は、行動と同じく1行・200文字以内にする（本体が断るため）。
+      if (chain.first.kind == 'action' && !validActionText(text)) {
+        throw StateError('行動の文面は1行・$actionTextChars文字以内で、前後に空白を付けずに入力してください。');
+      }
       // 本体は訂正を32件まで、元のメモと訂正の合計を32000文字までに制限する。
       if (chain.length > 32 ||
           chain.fold<int>(text.length, (n, r) => n + r.body.length) > 32000) {
@@ -1245,6 +1249,60 @@ class HubController extends ChangeNotifier {
         reason: reason,
         note: note,
       ),
+    );
+  }
+
+  /// 本人が決めた行動を、プロジェクトの「次の一手」へ直接載せる依頼を保存する（モデルを通さない）。
+  /// [from]はAIが読み取った行（提案・作業要約の次の一手）を行動にするときの元の行。文面は本人が直したもの。
+  Future<CaptureResult> requestAction(
+    String projectId,
+    String text, {
+    ActionSource? from,
+  }) {
+    if (!validActionText(text)) {
+      throw StateError('行動は1行・$actionTextChars文字以内で、前後に空白を付けずに入力してください。');
+    }
+    return _confirmedRequest(
+      (parsed) {
+        final owner = parsed.projects[projectId];
+        if (owner == null) throw StateError('プロジェクトが見つかりません。再読込してください。');
+        // 統合済みのプロジェクトには追加しない（本体が断る）。統合先へ追加してもらう。
+        _refuseMerged(parsed, owner);
+        if (from?.key case final key?) {
+          final found = owner.nowItems.where((i) => i.key == key).firstOrNull;
+          if (found == null ||
+              found.resolved ||
+              found.action ||
+              found.section != 'next' ||
+              found.inputId != from!.inputId ||
+              found.text != from.text) {
+            throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+          }
+          // 完了・誤りとして外す報告が反映待ちの項目は、行動にしない（本体の扱いが決まっていないため）。
+          if (parsed.itemRequestIdFor(key) != null) {
+            throw StateError('この項目への報告が反映待ちです。受付状況を確認してください。');
+          }
+        } else if (from != null &&
+            !owner.sections['proposals']!.any((e) {
+              final shown = parsed.proposalSource(e);
+              return shown?.inputId == from.inputId && shown?.text == from.text;
+            })) {
+          // 「提案」の行は、今のNOWにまだ載っているときだけ行動にする。
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (from != null &&
+            (parsed.pendingActionFrom(from.inputId, from.text) ||
+                owner.nowItems.any(
+                  (i) =>
+                      i.fromInputId == from.inputId && i.fromText == from.text,
+                ))) {
+          throw StateError('この行は既に行動にしています。次の一手を確認してください。');
+        }
+        // 同じ内容の再試行だけを同じ操作として扱う。保存できたら操作IDを外すので、同じ文面を改めて足すこともできる。
+        return 'action/$projectId/${digest(jsonEncode([text, from?.inputId, from?.text, from?.key]))}';
+      },
+      (service, parsed, operation) =>
+          service.saveAction(operation, projectId, text, from: from),
     );
   }
 

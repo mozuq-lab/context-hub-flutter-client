@@ -1,4 +1,4 @@
-// Dartが保存したNOW項目の完了・解決報告と「誤りとして外す」報告、期日・見直す日の依頼、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの訂正のREQを、
+// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日の依頼、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの訂正のREQを、
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
@@ -66,6 +66,17 @@ try{
  }else if(packet.operation==='git-draft-dismiss'){
   assert.deepEqual({draftId:ack.result.draftId,dismissed:ack.result.dismissed},{draftId:packet.draft_id,dismissed:true});
   assert.equal((await readGitDrafts(config)).find(d=>d.id===packet.draft_id).status,'dismissed');
+ }else if(packet.kind==='action'){
+  // 本人が追加した行動は、モデルで整理せずに本人の言葉のままNOWの次の一手へ載る。元の行（AIの読み取り）は欄から外れる。
+  const saved=(await readInputs(config)).find(i=>i.id===ack.result.inputId);
+  assert.deepEqual({kind:saved.kind,text:saved.text,project:saved.project,tool:saved.tool,meta:saved.meta},{kind:'action',text:packet.text,project:packet.project,tool:undefined,meta:packet.meta});
+  const items=(await readNowItems(vault,packet.project)).items,item=items.find(i=>i.input_id===saved.id);
+  assert.deepEqual({section:item.section,label:item.label,text:item.text,resolution:item.resolution},{section:'next',label:'本人が追加: ',text:packet.text,resolution:null});
+  assert.deepEqual(item.action,packet.meta?{from:{input_id:packet.meta.action_from_input,text:packet.meta.action_from_text,...(packet.meta.action_from_key?{key:packet.meta.action_from_key}:{})}}:{});
+  if(packet.meta?.action_from_key)assert.ok(!items.some(i=>i.key===packet.meta.action_from_key));
+  const llm=new MockLlm();let calls=0;const complete=llm.complete.bind(llm);llm.complete=(...a)=>{calls++;return complete(...a);};
+  await organize(config,llm);assert.equal(calls,0);
+  if(packet.meta)assert.ok(!(await vault.read(`10_projects/${packet.project}/NOW.md`)).includes(`${packet.meta.action_from_text} [${packet.meta.action_from_input}](`));
  }else{
   // 下書きから作った入力は、確認した下書きのhashが一致すれば使用済みになる。
   await organize(config,new MockLlm());
