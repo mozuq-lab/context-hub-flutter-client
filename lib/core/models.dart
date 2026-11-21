@@ -176,8 +176,12 @@ class BackupCheck {
     required this.ok,
     required this.issueCount,
     required this.maxAgeDays,
+    this.encrypted = false,
   });
   final String id, archive;
+
+  /// ageで暗号化したバックアップ（.tar.gz.age）を復号して確かめた。
+  final bool encrypted;
   final DateTime archiveCreatedAt, checkedAt;
   final bool ok;
   final int issueCount;
@@ -223,7 +227,7 @@ class BackupStatus {
     final checked = _days(point.checkedAt, now);
     final t = point.archiveCreatedAt.toUtc().add(const Duration(hours: 9));
     String two(int n) => n.toString().padLeft(2, '0');
-    return '最後に確かめた復元点: ${hubToday(point.archiveCreatedAt)} ${two(t.hour)}:${two(t.minute)}のバックアップ（${ageDays(now)}日前 / ${checked == 0 ? '今日' : '$checked日前に'}復元できることを確認）';
+    return '最後に確かめた復元点: ${hubToday(point.archiveCreatedAt)} ${two(t.hour)}:${two(t.minute)}の${point.encrypted ? '暗号化した' : ''}バックアップ（${ageDays(now)}日前 / ${checked == 0 ? '今日' : '$checked日前に'}復元できることを確認）';
   }
 
   /// 本人に知らせる注意。最後の確認が失敗した、または復元点が目安より古い。
