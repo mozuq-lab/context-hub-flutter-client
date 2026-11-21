@@ -4,6 +4,7 @@ import '../core/happened.dart';
 import '../core/models.dart';
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
+import '../core/preferences.dart';
 import 'vault_access.dart';
 
 class CaptureDraft {
@@ -683,15 +684,22 @@ class CaptureService {
     String projectId,
     NowItemRef item,
     String? due,
-    String? reviewAfter,
-  ) => _serial(() async {
+    String? reviewAfter, {
+    bool withRepeat = false,
+    RepeatRule? repeat,
+  }) => _serial(() async {
+    // 繰り返しを送らない依頼では、本体は今の繰り返しを保つ（期日を外したときは繰り返しも外れる）。
+    final nextRepeat = withRepeat ? repeat : (due == null ? null : item.repeat);
     if (!_uuid.hasMatch(operationId) ||
         !projectIdPattern.hasMatch(projectId) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
         item.resolved ||
         (due != null && !validScheduleDate(due)) ||
         (reviewAfter != null && !validScheduleDate(reviewAfter)) ||
-        (due == item.due && reviewAfter == item.reviewAfter)) {
+        (repeat != null && (!withRepeat || due == null)) ||
+        (due == item.due &&
+            reviewAfter == item.reviewAfter &&
+            nextRepeat == item.repeat)) {
       throw const FormatException('項目と日付を確認してください。');
     }
     final fields = <String, dynamic>{
@@ -700,10 +708,77 @@ class CaptureService {
       'item_key': item.key,
       'due': due,
       'review_after': reviewAfter,
+      if (withRepeat) 'repeat': repeat?.toJson(),
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
+
+  /// 定例の今の回（[due]）を完了する（done）・見送る（skip）依頼。本体が次の回の期日を付ける。
+  Future<CaptureResult> saveItemOccurrence(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    String action,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(projectId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        !item.repeating ||
+        !occurrenceActions.contains(action)) {
+      throw const FormatException('項目と操作を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-occurrence',
+      'project_id': projectId,
+      'item_key': item.key,
+      'action': action,
+      'due': item.due,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 「記録に聞く」の問い。本文が問いで、[project]は任意（そのプロジェクトの記録だけから答える）。
+  Future<CaptureResult> saveAsk(
+    String operationId,
+    String question,
+    String? project,
+  ) => _serial(() async {
+    final text = question.trim();
+    if (!_uuid.hasMatch(operationId) ||
+        text.isEmpty ||
+        text.length > askQuestionChars ||
+        (project != null && !projectIdPattern.hasMatch(project))) {
+      throw const FormatException('問いは1〜$askQuestionChars文字で入力してください。');
+    }
+    final fields = <String, dynamic>{'operation': 'ask', 'project': ?project};
+    return _saveRequest(
+      operationId,
+      digest(jsonEncode(['ask', text, project])),
+      fields,
+      text,
+    );
+  });
+
+  /// 端末間でそろえる好み。本文は[encodePreferencesPayload]で作ったJSON。
+  Future<CaptureResult> savePreferences(String operationId, String payload) =>
+      _serial(() async {
+        if (!_uuid.hasMatch(operationId) ||
+            preferenceGroupsOf(payload) == null) {
+          throw const FormatException('そろえる好みを確認してください。');
+        }
+        final fields = <String, dynamic>{
+          'operation': 'client-preferences',
+          'confirmed': true,
+        };
+        return _saveRequest(
+          operationId,
+          digest(jsonEncode(['client-preferences', payload])),
+          fields,
+          payload,
+        );
+      });
 
   /// 「片付いたかも」が違うとき、そのメモからの候補を見送る依頼。項目は未解決のまま。
   Future<CaptureResult> saveHintDismiss(

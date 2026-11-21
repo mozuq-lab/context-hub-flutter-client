@@ -16,6 +16,8 @@ const snapshotSkippedPaths = [
   '90_system/association-views',
   // 週次の統合の実行の記録。アプリは、本体がまとめた一覧（90_system/insights.json）だけを読む。
   '90_system/synthesis',
+  // 定例の回を片付けた記録。アプリは、NOWの項目一覧の次の期日と、本体の経緯（HISTORY.md）だけを読む。
+  '90_system/item-occurrences',
 ];
 
 /// 本体が知らない上位の版（schema_version 2以降）で書いた記録があるときの注意。ファイルごとには出さず1件だけ出す。
@@ -132,6 +134,7 @@ class NowItemRef {
     this.scheduleId,
     this.due,
     this.reviewAfter,
+    this.repeat,
     this.hints = const [],
     this.action = false,
     this.fromInputId,
@@ -153,6 +156,12 @@ class NowItemRef {
 
   /// 本人が付けた期日・次に見直す日（YYYY-MM-DD）。古い本体や日付のない項目ではnull。
   final String? scheduleId, due, reviewAfter;
+
+  /// 期日の繰り返し（定例）。繰り返さない項目や、繰り返しを知らない本体ではnull。期日があるときだけ付く。
+  final RepeatRule? repeat;
+
+  /// 定例の今の回（期日）を片付けられる。
+  bool get repeating => repeat != null && due != null && !resolved;
 
   /// 本人がプロジェクトを指定したメモから、本体の整理でAIが「片付いたかも」と示したもの。未確認で、完了・解決ではない。
   final List<NowItemHint> hints;
@@ -416,6 +425,104 @@ bool validScheduleDate(Object? value) {
   return date.year == y && date.month == mo && date.day == d;
 }
 
+/// 定例の繰り返し（本体の`repeat`）。期日をunitのevery個分ずつ進める。
+class RepeatRule {
+  const RepeatRule(this.unit, this.every);
+  final String unit;
+  final int every;
+  static const units = ['day', 'week', 'month'];
+
+  /// 繰り返しの間隔の上限（本体のREPEAT_EVERY_MAXと同じ）。
+  static const maxEvery = 12;
+
+  /// 日付の画面で選べる繰り返し。
+  static const choices = [
+    RepeatRule('day', 1),
+    RepeatRule('week', 1),
+    RepeatRule('week', 2),
+    RepeatRule('month', 1),
+    RepeatRule('month', 3),
+  ];
+
+  /// 本体のrepeatLabelと同じ表示（毎日・毎週・毎月・N日ごと・N週ごと・Nか月ごと）。
+  String get label => every == 1
+      ? const {'day': '毎日', 'week': '毎週', 'month': '毎月'}[unit]!
+      : '$every${const {'day': '日', 'week': '週', 'month': 'か月'}[unit]}ごと';
+
+  Map<String, Object> toJson() => {'unit': unit, 'every': every};
+
+  /// 本体の記録のrepeat（{unit, every, day?}）。形式が合わなければFormatException。
+  static RepeatRule parse(Object? value) {
+    if (value is! Map ||
+        !units.contains(value['unit']) ||
+        value['every'] is! int ||
+        (value['every'] as int) < 1 ||
+        (value['every'] as int) > maxEvery ||
+        value.keys.any((k) => !const ['unit', 'every', 'day'].contains(k)) ||
+        (value['day'] != null &&
+            (value['day'] is! int ||
+                (value['day'] as int) < 1 ||
+                (value['day'] as int) > 31))) {
+      throw const FormatException();
+    }
+    return RepeatRule(value['unit'] as String, value['every'] as int);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is RepeatRule && other.unit == unit && other.every == every;
+  @override
+  int get hashCode => Object.hash(unit, every);
+}
+
+/// 定例の今の回を片付ける操作。done: 今回を完了 / skip: 今回は見送る。
+const occurrenceActions = ['done', 'skip'];
+const occurrenceActionLabels = {'done': '今回を完了', 'skip': '今回は見送る'};
+
+/// 「記録に聞く」の答えの状態（本体のaskStatuses）。
+const askStatusLabels = {
+  'pending': '答え待ち',
+  'answered': '答えあり',
+  'not-found': '記録に見当たりませんでした',
+  'unsupported': '根拠を確かめられる答えがありませんでした',
+  'no-sources': '問いに近い記録がありませんでした',
+  'failed': '答えを作れませんでした',
+};
+
+/// 答えの文と、その根拠（記録のIDと、記録からそのまま写した引用）。
+class AskSentence {
+  const AskSentence(this.text, this.evidence);
+  final String text;
+  final List<({String inputId, String quote})> evidence;
+}
+
+/// 本体が`90_system/answers/ASK-*.json`に書く、問いと答え。答えはAI生成・未検証。
+class AskAnswer {
+  const AskAnswer({
+    required this.id,
+    required this.status,
+    required this.question,
+    required this.askedAt,
+    this.project,
+    this.requestId,
+    this.answeredAt,
+    this.sentences = const [],
+    this.candidates = const [],
+    this.dropped = 0,
+    this.error,
+  });
+  final String id, status, question;
+  final String? project, requestId, error;
+  final DateTime askedAt;
+  final DateTime? answeredAt;
+  final List<AskSentence> sentences;
+
+  /// 根拠の候補としてモデルへ渡した記録のID（問いに近い順）。
+  final List<String> candidates;
+  final int dropped;
+  bool get pending => status == 'pending';
+}
+
 /// 日時の年月日をそのまま暦日（YYYY-MM-DD）にする。
 String scheduleDate(DateTime t) =>
     '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
@@ -485,6 +592,28 @@ class IntakeStatus {
     this.state = 'waiting',
     this.detail = '',
   });
+}
+
+/// 「記録に聞く」の問いの上限（本体のASK_QUESTION_CHARSと同じ）。
+const askQuestionChars = 500;
+
+/// 本体が答えた記録を残す日数（本体のASK_RETENTION_DAYSと同じ）。
+const askRetentionDays = 30;
+
+/// 「記録に聞く」の1件。この端末から送った問いは受付の状況（[request]）を持ち、答えが届けば[answer]を持つ。
+class AskThread {
+  const AskThread({
+    required this.question,
+    required this.at,
+    this.project,
+    this.request,
+    this.answer,
+  });
+  final String question;
+  final String? project;
+  final DateTime at;
+  final IntakeStatus? request;
+  final AskAnswer? answer;
 }
 
 /// 検索の種類。本体の `ctx find --kind` と同じ名前。

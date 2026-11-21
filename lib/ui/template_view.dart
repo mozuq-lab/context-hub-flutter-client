@@ -57,7 +57,7 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
       error = null;
     });
     try {
-      await widget.controller.templates.save(next);
+      await widget.controller.saveTemplates(next);
       if (mounted) setState(() => templates = next);
     } catch (e) {
       if (mounted) setState(() => error = HubController.message(e));

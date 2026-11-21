@@ -1,13 +1,13 @@
-// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日の依頼、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの訂正のREQを、
+// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）の依頼、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの訂正のREQを、
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -55,8 +55,29 @@ try{
   assert.deepEqual({due:record.due,review_after:record.review_after,source:record.source},{due:packet.due,review_after:packet.review_after,source:packet.source});
   const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
   const clearing=packet.due===null&&packet.review_after===null;
-  assert.deepEqual(item.schedule,clearing?null:{id:record.id,due:packet.due,review_after:packet.review_after});
+  // 繰り返しを省いた依頼は今の繰り返しを保ち、添えた依頼はそのとおりにする（毎月は期日の日を覚える）。
+  if(packet.repeat!==undefined)assert.deepEqual(record.repeat??null,packet.repeat&&packet.due?{...packet.repeat,...(packet.repeat.unit==='month'?{day:Number(packet.due.slice(8))}:{})}:null);
+  assert.deepEqual(item.schedule,clearing?null:{id:record.id,due:packet.due,review_after:packet.review_after,...(record.repeat?{repeat:record.repeat}:{})});
   assert.equal(activeSchedules((await readItemSchedules(vault)).records).has(packet.item_key),!clearing);
+ }else if(packet.operation==='item-occurrence'){
+  // 今の回を片付けた記録を残し、項目は欄に残したまま期日を次の回へ進める。
+  assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,action:ack.result.action,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,action:packet.action,deduped:false});
+  const occurrence=(await readItemOccurrences(vault)).records.find(o=>o.id===ack.result.occurrenceId);
+  assert.deepEqual({due:occurrence.due,next:occurrence.next_due,source:occurrence.source},{due:packet.due,next:ack.result.nextDue,source:packet.source});
+  const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
+  assert.equal(item.resolution,null);assert.equal(item.schedule.due,ack.result.nextDue);assert.ok(ack.result.nextDue>packet.due);
+ }else if(packet.operation==='ask'){
+  // 問いは受付で答え待ちとして記録し、答えはcycleと同じ処理で作る（モックのモデル）。
+  const before=(await readAskRecords(vault)).records.find(r=>r.id===ack.result.askId);
+  assert.deepEqual({status:before.status,question:before.question,project:before.project,event:before.source_event_id},{status:'pending',question:packet.text,project:packet.project??null,event:packet.request_id});
+  await answerPending(config,new MockLlm());
+  const after=(await readAskRecords(vault)).records.find(r=>r.id===ack.result.askId);
+  assert.notEqual(after.status,'pending');
+ }else if(packet.operation==='client-preferences'){
+  // 送ったまとまりを、送った日時・端末・受付IDとともに記録する。
+  const body=JSON.parse(packet.text),stored=await readClientPreferences(vault);
+  assert.deepEqual([...ack.result.applied].sort(),Object.keys(body.groups).sort());
+  for(const[g,v]of Object.entries(body.groups))assert.deepEqual({device:stored.groups[g].device,request:stored.groups[g].request_id,value:stored.groups[g].value},{device:body.device,request:packet.request_id,value:v.value});
  }else if(packet.operation==='item-hint-dismiss'){
   // 見送りは候補の表示だけを変え、項目は未解決のまま残す。
   assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,hintInputId:ack.result.hintInputId,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,hintInputId:packet.input_id,deduped:false});

@@ -499,4 +499,41 @@ void main() {
     expect(request['target_id'], item.inputId);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('行動に対応していない本体では、追加と引き取りの入口を出さず、依頼も保存しない', (tester) async {
+    tester.view.physicalSize = const Size(1280, 2400);
+    tester.view.devicePixelRatio = 1;
+    final access = MemoryUIAccess();
+    await access.init();
+    // 本体の対応表に入力の種類（capture_kinds）がない、行動を知らない本体。
+    final files = fixtureFiles();
+    final features =
+        jsonDecode(files['90_system/intake-features.json']!)
+            as Map<String, dynamic>
+          ..remove('capture_kinds');
+    files['90_system/intake-features.json'] = jsonEncode(features);
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(() async {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    expect(c.repository!.intakeFeatures.actions, isFalse);
+    await tester.tap(find.byKey(const Key('project-context-hub')).last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('project-add-action')), findsNothing);
+    expect(find.text('自分の行動にする'), findsNothing);
+    await expectLater(
+      c.requestAction(projectId, '発表資料を作る'),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('対応していません')),
+      ),
+    );
+    expect(access.requests, isEmpty);
+  });
 }

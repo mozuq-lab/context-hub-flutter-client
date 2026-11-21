@@ -16,7 +16,11 @@ import '../core/capture_progress.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
 import '../core/models.dart';
-import '../core/parser.dart' show clip;
+import '../core/preferences.dart';
+import '../core/templates.dart';
+import 'dart:math' show Random;
+import '../core/parser.dart' show clip, projectIdPattern;
+import '../core/secrets.dart' show SecretPolicy;
 import '../ai/guided_services.dart';
 
 class ReviewConfirmation {
@@ -168,6 +172,7 @@ class HubController extends ChangeNotifier {
       _pins.remove(_pins.keys.first);
     }
     _applyPins();
+    final syncing = _markPreference('pins');
     try {
       await _writeSettings();
     } catch (_) {
@@ -182,6 +187,7 @@ class HubController extends ChangeNotifier {
       throw StateError('ピン留めを保存できませんでした。もう一度お試しください。');
     }
     _changed();
+    if (syncing) _schedulePreferenceSend();
   }
 
   /// プロジェクトをピン留めする、または外す。新しいピン留めは末尾に加える。
@@ -223,6 +229,391 @@ class HubController extends ChangeNotifier {
     ids[a] = shown[to];
     ids[b] = shown[from];
     await _savePins(ids);
+  }
+
+  // ---- 好みを端末間でそろえる（ピン留めと並び順・ひな形・かごの上限） ----
+  // settings.jsonの`preferenceSync`に、この端末の名前（device）と、Vaultのidentityごとに
+  // まとまりごとの「この端末が持っている版の日時」（times）、まだ送れていないまとまり（dirty）、
+  // 最後に送った受付ID（sent）を残す。Vaultごとに本人が有効にする。
+  //
+  // どちらが新しいかは、本体が記録した日時（受け付けた時刻より先の日時は丸められる）で決める。
+  // - 本人の変更には、端末の時計と、知っている版の日時の1ミリ秒後の遅い方を付ける（時計の遅れた端末の変更が負けないように）。
+  // - 自分が送った版がVaultに記録されたら、その日時（丸めた後）を持っている版の日時にする（時計の進んだ端末が、ほかの端末の後の変更を取りこぼさないように）。
+  // - まとまりごとに別の受付ファイルで送る（1つが断られても、ほかのまとまりは届く）。
+  Map<String, dynamic> _preferenceSync = {};
+  Timer? _preferenceTimer;
+  bool _sendingPreferences = false;
+
+  /// 送らなかった・送れなかったときの知らせ（ひな形の秘密情報らしい文字列など）。なければnull。
+  String? preferenceNotice;
+
+  Map<String, dynamic>? _syncFor(String? identity) {
+    final vaults = _preferenceSync['vaults'];
+    final value = vaults is Map ? vaults[identity] : null;
+    return value is Map<String, dynamic> ? value : null;
+  }
+
+  Map<String, dynamic>? get _syncVault => _syncFor(location?.identity);
+
+  /// このVaultで好みをほかの端末とそろえているか。
+  bool get preferenceSyncEnabled => _syncVault != null;
+
+  /// 本体が好みの共有に対応しているか。
+  bool get preferenceSyncSupported =>
+      repository?.intakeFeatures.preferences ?? false;
+
+  String get _deviceName {
+    final current = _preferenceSync['device'];
+    if (current is String &&
+        RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(current)) {
+      return current;
+    }
+    final random = Random.secure();
+    final name =
+        'app-${List.generate(12, (_) => random.nextInt(16).toRadixString(16)).join()}';
+    _preferenceSync['device'] = name;
+    return name;
+  }
+
+  static Map<String, dynamic> _mapOf(Map<String, dynamic> vault, String key) =>
+      vault[key] is Map
+      ? Map<String, dynamic>.from(vault[key] as Map)
+      : <String, dynamic>{};
+
+  DateTime? _preferenceTime(String group, [String? identity]) {
+    final vault = _syncFor(identity ?? location?.identity);
+    return vault == null
+        ? null
+        : DateTime.tryParse('${_mapOf(vault, 'times')[group]}');
+  }
+
+  Set<String> _dirtyOf(String? identity) {
+    final dirty = _syncFor(identity)?['dirty'];
+    return {
+      if (dirty is List)
+        for (final g in dirty)
+          if (preferenceGroups.contains(g)) g as String,
+    };
+  }
+
+  /// まとまりの状態を変える。[sent]を渡すと、最後に送った受付IDも記録する。
+  void _setPreferenceState(
+    String identity,
+    String group,
+    DateTime at, {
+    required bool dirty,
+    String? sent,
+  }) {
+    final vault = _syncFor(identity);
+    if (vault == null) return;
+    final times = _mapOf(vault, 'times'), pending = _dirtyOf(identity);
+    times[group] = at.toUtc().toIso8601String();
+    dirty ? pending.add(group) : pending.remove(group);
+    vault['times'] = times;
+    vault['dirty'] = [
+      for (final g in preferenceGroups)
+        if (pending.contains(g)) g,
+    ];
+    if (sent != null) vault['sent'] = _mapOf(vault, 'sent')..[group] = sent;
+  }
+
+  /// 本人の変更に付ける日時。知っている版（この端末の版とVaultの版）より必ず後にする。
+  DateTime _stamp(String identity, String group) {
+    var known = _preferenceTime(group, identity);
+    if (identity == location?.identity) {
+      final shared = repository?.sharedPreferences[group]?.updatedAt;
+      if (shared != null && (known == null || shared.isAfter(known))) {
+        known = shared;
+      }
+    }
+    final now = DateTime.now().toUtc(),
+        after = known?.add(const Duration(milliseconds: 1));
+    return after != null && after.isAfter(now) ? after : now;
+  }
+
+  /// 本人が変えたまとまりを、待たずに「送っていない変更」として記録する（記録の前に読込が割り込んで、Vaultの版で上書きしないように）。
+  /// ひな形は端末で1つなので、そろえているほかのVaultにも、次に開いたときに送る。そろえていなければfalse。
+  bool _markPreference(String group) {
+    final identity = location?.identity;
+    final targets = group == 'templates'
+        ? [
+            if (_preferenceSync['vaults'] case final Map vaults)
+              for (final k in vaults.keys)
+                if (k is String) k,
+          ]
+        : [?identity];
+    var marked = false;
+    for (final id in targets) {
+      if (_syncFor(id) == null) continue;
+      _setPreferenceState(id, group, _stamp(id, group), dirty: true);
+      marked = true;
+    }
+    return marked;
+  }
+
+  void _schedulePreferenceSend() {
+    _preferenceTimer?.cancel();
+    _preferenceTimer = Timer(const Duration(seconds: 2), () {
+      sendPreferences().catchError((Object _) {});
+    });
+  }
+
+  /// まだ送っていないまとまりを、まとまりごとの受付ファイルで送る。本体が受け付けていないときは何もしない。
+  Future<void> sendPreferences() async {
+    final target = location, repo = repository;
+    if (target == null ||
+        repo == null ||
+        _disposed ||
+        _sendingPreferences ||
+        !preferenceSyncEnabled ||
+        !repo.intakeFeatures.preferences) {
+      return;
+    }
+    final identity = target.identity;
+    bool still() => !_disposed && location?.identity == identity;
+    _sendingPreferences = true;
+    final notices = <String>[];
+    try {
+      for (final group in _dirtyOf(identity)) {
+        final at = _preferenceTime(group, identity) ?? _stamp(identity, group);
+        Map<String, Object?>? value;
+        switch (group) {
+          case 'pins':
+            value = {
+              'ids': _storedPins()
+                  .where(projectIdPattern.hasMatch)
+                  .take(maxPins)
+                  .toList(),
+            };
+          case 'basket':
+            // 読み込んだかごがこのVaultのものでなければ、次の機会に送る（別のVaultの上限を送らない）。
+            if (_basketFor == identity) {
+              value = {'max_chars': basket.maxChars};
+            }
+          case 'templates':
+            final list = await templates.list();
+            if (!still()) return;
+            if (templates.unreadable) continue;
+            final policy = repo.secretPolicy.usable
+                ? repo.secretPolicy
+                : SecretPolicy.builtin;
+            if (list.any(
+              (t) => policy.find('${t.name}\n${t.body}').isNotEmpty,
+            )) {
+              // 秘密情報らしい文字列を、同期するファイルへ広げない（本体も断る）。
+              notices.add(
+                'ひな形に秘密情報らしい文字列があるため、ひな形はほかの端末とそろえていません。ひな形から取り除くと、そろえます。',
+              );
+              continue;
+            }
+            value = {
+              'items': [
+                for (final t in list)
+                  {
+                    'id': t.id,
+                    'name': t.name.trim(),
+                    'body': t.body,
+                    'project': ?_templateProject(t, identity),
+                  },
+              ],
+            };
+        }
+        if (value == null) continue;
+        final payload = encodePreferencesPayload(_deviceName, {
+          group: (at: at, value: value),
+        });
+        if (preferenceGroupsOf(payload) == null) {
+          // 本体の受付ファイルの上限（32KiB）を超えるなど、送れない形。
+          notices.add(
+            '${preferenceGroupLabels[group]}が大きすぎるため、ほかの端末とそろえていません。短くすると、そろえます。',
+          );
+          continue;
+        }
+        final result = await CaptureService(
+          access,
+          target,
+        ).savePreferences(const Uuid().v4(), payload);
+        if (!still()) return;
+        // 送っている間に本人がもう一度変えたまとまりは、次にまた送る。
+        if (result.saved && _preferenceTime(group, identity) == at) {
+          _setPreferenceState(
+            identity,
+            group,
+            at,
+            dirty: false,
+            sent: result.requestId,
+          );
+        }
+      }
+      preferenceNotice = notices.isEmpty ? null : notices.join('\n');
+      try {
+        await _writeSettings();
+      } catch (_) {}
+    } finally {
+      _sendingPreferences = false;
+      _changed();
+    }
+  }
+
+  /// このVaultで好みをそろえ始める。[useVault]がtrueなら、Vaultにある好みをこの端末へ取り込み、
+  /// Vaultにないまとまりだけを送る。falseなら、この端末の好みを送ってほかの端末にそろえてもらう。
+  Future<void> enablePreferenceSync({required bool useVault}) async {
+    final target = location, repo = repository;
+    if (target == null || repo == null) throw StateError('先にVaultを選んでください。');
+    if (!repo.intakeFeatures.preferences) {
+      throw StateError('Mac miniの本体が好みの共有に対応していません。本体を更新してください。');
+    }
+    await _loadSeen();
+    if (location?.identity != target.identity) return;
+    _deviceName;
+    final vaults = _preferenceSync['vaults'] is Map
+        ? Map<String, dynamic>.from(_preferenceSync['vaults'] as Map)
+        : <String, dynamic>{};
+    vaults[target.identity] = <String, dynamic>{
+      'times': <String, dynamic>{},
+      'dirty': <String>[],
+    };
+    _preferenceSync['vaults'] = vaults;
+    for (final group in preferenceGroups) {
+      final shared = repo.sharedPreferences[group];
+      if (useVault && shared != null) {
+        await _applySharedPreference(target.identity, group, shared);
+      } else {
+        _setPreferenceState(
+          target.identity,
+          group,
+          _stamp(target.identity, group),
+          dirty: true,
+        );
+      }
+    }
+    await _writeSettings();
+    _changed();
+    await sendPreferences();
+  }
+
+  /// このVaultで好みをそろえるのをやめる。この端末の好みはそのまま残る。
+  Future<void> disablePreferenceSync() async {
+    final vaults = _preferenceSync['vaults'];
+    if (vaults is Map) vaults.remove(location?.identity);
+    _preferenceTimer?.cancel();
+    preferenceNotice = null;
+    await _writeSettings();
+    _changed();
+  }
+
+  /// 読み込んだVaultの好みと、この端末の版を比べる。
+  /// - 自分が送った版が記録されていれば、記録の日時を持っている版の日時にする（取り込み直さない）。
+  /// - この端末の版より新しい版は取り込む（まだ送っていない変更より新しくても、後の変更が勝つ）。
+  /// - 送った依頼が断られていれば、理由を知らせる。
+  Future<void> _syncPreferences() async {
+    final repo = repository, identity = location?.identity;
+    if (repo == null || identity == null || !preferenceSyncEnabled) return;
+    var changed = false;
+    final notices = <String>[];
+    for (final group in preferenceGroups) {
+      final vault = _syncFor(identity);
+      if (vault == null) return;
+      final sent = _mapOf(vault, 'sent')[group];
+      final dirty = _dirtyOf(identity).contains(group);
+      if (sent is String) {
+        final request = repo.intake.where((i) => i.id == sent).firstOrNull;
+        if (request != null &&
+            const ['rejected', 'conflict'].contains(request.state)) {
+          notices.add(
+            '${preferenceGroupLabels[group]}をそろえられませんでした: ${request.detail}',
+          );
+        }
+      }
+      final shared = repo.sharedPreferences[group],
+          local = _preferenceTime(group, identity);
+      if (shared == null) continue;
+      if (sent is String && shared.requestId == sent) {
+        if (!dirty && local != shared.updatedAt) {
+          _setPreferenceState(identity, group, shared.updatedAt, dirty: false);
+          changed = true;
+        }
+        continue;
+      }
+      if (local != null && !shared.updatedAt.isAfter(local)) continue;
+      try {
+        await _applySharedPreference(identity, group, shared);
+        changed = true;
+      } catch (_) {
+        // 取り込めなかったまとまりは、次の読込で試し直す。
+      }
+      if (location?.identity != identity) return;
+    }
+    if (notices.isNotEmpty) preferenceNotice = notices.join('\n');
+    if (changed) {
+      try {
+        await _writeSettings();
+      } catch (_) {}
+    }
+    if (_dirtyOf(identity).isNotEmpty) _schedulePreferenceSend();
+  }
+
+  Future<void> _applySharedPreference(
+    String identity,
+    String group,
+    SharedPreference shared,
+  ) async {
+    if (location?.identity != identity) return;
+    switch (group) {
+      case 'pins':
+        final ids = pinsValue(shared.value);
+        if (ids == null) return;
+        _pins.remove(identity);
+        if (ids.isNotEmpty) _pins[identity] = ids;
+        while (_pins.length > _maxPinVaults) {
+          _pins.remove(_pins.keys.first);
+        }
+        _applyPins();
+      case 'templates':
+        final items = templatesValue(shared.value);
+        if (items == null) return;
+        final current = {for (final t in await templates.list()) t.id: t};
+        if (templates.unreadable || location?.identity != identity) return;
+        await templates.save([
+          for (final i in items)
+            MemoTemplate(
+              id: i.template.id,
+              name: i.template.name,
+              body: i.template.body,
+              projects: current[i.template.id]?.projects ?? const {},
+            ).withProject(identity, i.project),
+        ]);
+      case 'basket':
+        final max = basketValue(shared.value);
+        if (max == null) return;
+        final target = location!;
+        await _ensureBasket(target);
+        if (_basketFor != identity || location?.identity != identity) return;
+        basket = Basket(ids: basket.ids, maxChars: max);
+        await baskets.write(identity, basket);
+    }
+    if (location?.identity != identity) return;
+    _setPreferenceState(identity, group, shared.updatedAt, dirty: false);
+  }
+
+  static String? _templateProject(MemoTemplate t, String identity) {
+    final p = t.projects[identity];
+    return p != null && projectIdPattern.hasMatch(p) ? p : null;
+  }
+
+  /// ひな形の並びを保存する。好みをそろえていれば、ほかの端末へも送る。
+  Future<void> saveTemplates(List<MemoTemplate> next) async {
+    final syncing = _markPreference('templates');
+    await templates.save(next);
+    if (syncing) await _preferenceChangedSaved();
+  }
+
+  /// 記録した変更を端末の設定に残し、少し待ってから送る。
+  Future<void> _preferenceChangedSaved() async {
+    try {
+      await _writeSettings();
+    } catch (_) {}
+    _schedulePreferenceSend();
   }
 
   // ---- 同期で届いた変更の自動の読込（端末ごと。Vaultには書かない） ----
@@ -644,6 +1035,7 @@ class HubController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _preferenceTimer?.cancel();
     _epoch++;
     super.dispose();
   }
@@ -737,6 +1129,7 @@ class HubController extends ChangeNotifier {
       _syncAttention();
       _syncToday();
       await _writeSettings();
+      await _syncPreferences();
       await _pending(target, epoch);
     } catch (e) {
       if (epoch == _epoch) {
@@ -786,6 +1179,7 @@ class HubController extends ChangeNotifier {
           // 既読の記録に失敗しても閲覧は続ける。
         }
       }
+      if (current()) await _syncPreferences();
       await _pending(target, epoch, current);
     } catch (e) {
       if (current()) {
@@ -935,9 +1329,12 @@ class HubController extends ChangeNotifier {
     if (!Basket.limits.contains(maxChars)) {
       throw StateError('文字数上限を選び直してください。');
     }
+    final syncing = _markPreference('basket');
     return _setBasket(
       (current) => Basket(ids: current.ids, maxChars: maxChars),
-    );
+    ).then((_) {
+      if (syncing) _preferenceChangedSaved();
+    });
   }
 
   /// かごの記録を、コピーの直前に読み直したVaultから1つの文章にまとめる。
@@ -1584,6 +1981,9 @@ class HubController extends ChangeNotifier {
     }
     return _confirmedRequest(
       (parsed) {
+        if (!parsed.intakeFeatures.actions) {
+          throw StateError('Mac miniの本体が次の一手の直接追加に対応していません。本体を更新してください。');
+        }
         final owner = parsed.projects[projectId];
         if (owner == null) throw StateError('プロジェクトが見つかりません。再読込してください。');
         // 統合済みのプロジェクトには追加しない（本体が断る）。統合先へ追加してもらう。
@@ -1631,8 +2031,13 @@ class HubController extends ChangeNotifier {
     String projectId,
     String itemKey,
     String? due,
-    String? reviewAfter,
-  ) {
+    String? reviewAfter, {
+    bool withRepeat = false,
+    RepeatRule? repeat,
+  }) {
+    if (repeat != null && (!withRepeat || due == null)) {
+      throw StateError('繰り返しには期日が必要です。');
+    }
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
@@ -1646,8 +2051,17 @@ class HubController extends ChangeNotifier {
         if (found == null || found.resolved) {
           throw StateError('NOWが更新されています。表示を確認してから操作してください。');
         }
-        if (found.due == due && found.reviewAfter == reviewAfter) {
+        // 繰り返しを送らない依頼では、本体は今の繰り返しを保つ（期日を外すと繰り返しも外れる）。
+        final nextRepeat = withRepeat
+            ? repeat
+            : (due == null ? null : found.repeat);
+        if (found.due == due &&
+            found.reviewAfter == reviewAfter &&
+            found.repeat == nextRepeat) {
           throw StateError('日付は変わっていません。');
+        }
+        if (withRepeat && !parsed.intakeFeatures.repeat) {
+          throw StateError('Mac miniの本体が繰り返しに対応していません。本体を更新してください。');
         }
         if (parsed.scheduleRequestIdFor(itemKey) != null) {
           throw StateError('この項目の日付は依頼済みです。受付状況を確認してください。');
@@ -1660,7 +2074,7 @@ class HubController extends ChangeNotifier {
         // 依頼する日付と最新の日付記録を含め、同じ内容の再試行だけを同じ操作として扱う。
         // 項目の現在の日付のIDは外すと元に戻るため、付ける→外す→同じ日付を付ける、で過去の操作と混ざらないよう
         // 外した記録も含む最新の記録IDを使う（引き継いだ日付は項目のキーに記録がないため、現在の日付のIDも含める）。
-        return 'schedule/$projectId/$itemKey/${parsed.latestScheduleIdFor(itemKey) ?? '-'}/${found.scheduleId ?? '-'}/${due ?? '-'}/${reviewAfter ?? '-'}';
+        return 'schedule/$projectId/$itemKey/${parsed.latestScheduleIdFor(itemKey) ?? '-'}/${found.scheduleId ?? '-'}/${due ?? '-'}/${reviewAfter ?? '-'}${withRepeat ? '/${repeat == null ? 'none' : '${repeat.unit}${repeat.every}'}' : ''}';
       },
       (service, parsed, operation) => service.saveItemSchedule(
         operation,
@@ -1668,7 +2082,71 @@ class HubController extends ChangeNotifier {
         item,
         due,
         reviewAfter,
+        withRepeat: withRepeat,
+        repeat: repeat,
       ),
+    );
+  }
+
+  /// 定例の項目の今の回を完了する（done）・見送る（skip）依頼を保存する。確認した回の期日を添え、本体が次の回へ進める。
+  Future<CaptureResult> requestItemOccurrence(
+    String projectId,
+    String itemKey,
+    String action,
+  ) {
+    if (!occurrenceActions.contains(action)) {
+      throw StateError('項目と操作を確認してください。');
+    }
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
+        if (!parsed.intakeFeatures.occurrence) {
+          throw StateError('Mac miniの本体が定例の回の完了に対応していません。本体を更新してください。');
+        }
+        final found = parsed.projects[projectId]?.nowItems
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null || !found.repeating) {
+          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+        }
+        if (parsed.scheduleRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の日付は依頼済みです。受付状況を確認してください。');
+        }
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        // 確認した回（期日）と日付の記録を含め、同じ回への同じ操作の再試行だけを同じ操作として扱う。
+        return 'occurrence/$projectId/$itemKey/${found.due}/$action/${found.scheduleId ?? '-'}';
+      },
+      (service, parsed, operation) =>
+          service.saveItemOccurrence(operation, projectId, item, action),
+    );
+  }
+
+  /// 「記録に聞く」の問いを保存する。答えは本体の次の整理のときに作られ、同期で届く。
+  Future<CaptureResult> requestAsk(String question, String? project) {
+    final text = question.trim();
+    if (text.isEmpty || text.length > askQuestionChars) {
+      throw StateError('問いは1〜$askQuestionChars文字で入力してください。');
+    }
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.ask) {
+          throw StateError(
+            'Mac miniの本体で「記録に聞く」が使えません。本体の更新と設定（ask.enabled）を確かめてください。',
+          );
+        }
+        if (project != null && !parsed.projects.containsKey(project)) {
+          throw StateError('プロジェクトが見つかりません。選び直してください。');
+        }
+        // 同じ問いを聞き直す場合も、新しい問いとして送る（前の答えの後に記録が増えていることがあるため）。
+        return 'ask/${digest('$text\n${project ?? ''}')}/${parsed.asks.length}';
+      },
+      (service, parsed, operation) => service.saveAsk(operation, text, project),
     );
   }
 
@@ -1897,6 +2375,11 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['pins'] is Map) {
         _pins = Map<String, dynamic>.from(value['pins'] as Map);
       }
+      if (value is Map && value['preferenceSync'] is Map) {
+        _preferenceSync =
+            jsonDecode(jsonEncode(value['preferenceSync']))
+                as Map<String, dynamic>;
+      }
       if (value is Map) autoReload = value['autoReload'] != false;
       if (value is Map && value['today'] is Map) {
         _today = Map<String, dynamic>.from(value['today'] as Map);
@@ -1934,6 +2417,7 @@ class HubController extends ChangeNotifier {
     ...target.toJson(),
     if (_homeWidgets.isNotEmpty) 'homeWidget': _homeWidgets,
     if (_pins.isNotEmpty) 'pins': _pins,
+    if (_preferenceSync.isNotEmpty) 'preferenceSync': _preferenceSync,
     if (_today.isNotEmpty) 'today': _today,
     if (!autoReload) 'autoReload': false,
     if (_attention.identity != null || attentionNotify)
