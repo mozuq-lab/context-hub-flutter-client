@@ -410,6 +410,7 @@ class HubRepository {
             ok: j['status'] == 'ok',
             issueCount: issues.length,
             maxAgeDays: days,
+            encrypted: j['encrypted'] == true,
           ),
         );
       } catch (_) {
