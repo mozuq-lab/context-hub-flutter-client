@@ -7,6 +7,7 @@ import '../app/controller.dart';
 import '../core/calendar.dart';
 import '../core/models.dart';
 import '../core/happened.dart';
+import '../core/intake_features.dart' show unassignedScope;
 import '../core/repository.dart';
 import '../core/secrets.dart';
 import '../core/templates.dart';
@@ -1660,6 +1661,37 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// プロジェクト未定の行を完了にする（resolve）・却下する（exclude。理由は「もう古い」）・未解決へ戻す（reopen）。
+  Future<void> reportUnassigned(NowItemRef item, String action) async {
+    final (title, body, ok) = switch (action) {
+      'resolve' => ('完了にする', 'この行を完了にして、一覧から外します。', '完了にする'),
+      'exclude' => ('却下する', 'この行はやらないものとして、一覧から外します。メモは残ります。', '却下する'),
+      _ => ('元に戻す', 'この行を一覧へ戻します。', '戻す'),
+    };
+    if (!await confirmAction(title, '${item.display}\n\n$body', ok) ||
+        !mounted) {
+      return;
+    }
+    try {
+      final result = await c.requestItemResolution(
+        unassignedScope,
+        item.key,
+        action,
+        reason: action == 'exclude' ? 'outdated' : null,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '保存しました。Miniで処理されると一覧に反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   /// 本人が決めた行動を次の一手に追加する。[project]を渡すとそのプロジェクトに決まり、渡さないと進行中のプロジェクトから選ぶ。
   /// [from]はAIが読み取った行（提案・作業要約の次の一手）を行動にするときの元の行。
   Future<void> addAction({HubProject? project, ActionSource? from}) async {
@@ -2213,16 +2245,14 @@ class _HubViewState extends State<HubView> {
   bool get busy => c.loading || c.saving || c.captureWarning != null;
 
   /// 「今日やる」「今日から外す」。選んだ項目はこの端末だけに残し、Vaultには書かない。
-  Widget todayToggle(HubProject project, String key) {
+  Widget todayToggle(String projectId, String key) {
     final focus = c.today, on = focus.picked(key);
     return TextButton.icon(
       key: Key('today-${key.substring(0, 12)}'),
       // 3つ埋まっている間は、外す操作だけを受け付ける。
-      onPressed: !on && focus.full
-          ? null
-          : () => setToday(project.id, key, !on),
+      onPressed: !on && focus.full ? null : () => setToday(projectId, key, !on),
       icon: Icon(on ? Icons.wb_sunny : Icons.wb_sunny_outlined, size: 15),
-      label: Text(on ? '今日から外す' : '今日やる'),
+      label: Text(on ? '今日の3つから外す' : '今日やる'),
     );
   }
 
@@ -2259,7 +2289,7 @@ class _HubViewState extends State<HubView> {
           ? null
           : () => widget.onNavigate('project:${e.project!.id}'),
       child: Text(
-        e.project?.title ?? e.pick.projectId,
+        e.unassigned ? 'プロジェクト未定' : e.project?.title ?? e.pick.projectId,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,
@@ -2289,12 +2319,14 @@ class _HubViewState extends State<HubView> {
             ),
             if (e.missing)
               Text(
-                'NOWから見つかりません。言い換えられたか、片付いた可能性があります。',
+                '見つかりません。言い換えられたか、片付いた可能性があります。',
                 style: TextStyle(fontSize: 12, color: scheme.error),
               )
             else if (e.done)
               Text(
-                e.item!.excluded ? '誤りとして外しました' : '片付きました',
+                e.item!.excluded
+                    ? (e.unassigned ? '却下しました' : '誤りとして外しました')
+                    : '片付きました',
                 style: const TextStyle(fontSize: 12),
               )
             else if (reported)
@@ -2307,7 +2339,9 @@ class _HubViewState extends State<HubView> {
                     key: Key('today-resolve-${key.substring(0, 12)}'),
                     onPressed: busy
                         ? null
-                        : () => reportItem(e.project!, e.item!, 'resolve'),
+                        : () => e.unassigned
+                              ? reportUnassigned(e.item!, 'resolve')
+                              : reportItem(e.project!, e.item!, 'resolve'),
                     icon: const Icon(Icons.check_circle_outline, size: 15),
                     label: Text(e.item!.section == 'next' ? '完了にする' : '解決にする'),
                   ),
@@ -2315,7 +2349,7 @@ class _HubViewState extends State<HubView> {
                   key: Key('today-remove-${key.substring(0, 12)}'),
                   onPressed: () => setToday(e.pick.projectId, key, false),
                   icon: const Icon(Icons.close, size: 15),
-                  label: const Text('今日から外す'),
+                  label: const Text('今日の3つから外す'),
                 ),
               ],
             ),
@@ -2339,7 +2373,7 @@ class _HubViewState extends State<HubView> {
             Text(e.text),
             if (e.missing)
               Text(
-                'NOWから見つかりません。言い換えられたか、片付いた可能性があります。',
+                '見つかりません。言い換えられたか、片付いた可能性があります。',
                 style: TextStyle(fontSize: 12, color: scheme.error),
               )
             else if (closed)
@@ -2366,7 +2400,10 @@ class _HubViewState extends State<HubView> {
                     icon: const Icon(Icons.wb_sunny_outlined, size: 15),
                     label: const Text('今日も続ける'),
                   ),
-                if (!closed && repo.scheduleRequestIdFor(key) == null)
+                // プロジェクト未定の行には期日を付けられない（本体が受け付けない）。
+                if (!closed &&
+                    !e.unassigned &&
+                    repo.scheduleRequestIdFor(key) == null)
                   TextButton.icon(
                     key: Key('today-schedule-${key.substring(0, 12)}'),
                     onPressed: busy ? null : () => scheduleCarried(e),
@@ -2377,7 +2414,7 @@ class _HubViewState extends State<HubView> {
                   key: Key('today-drop-${key.substring(0, 12)}'),
                   onPressed: () => dropCarried(key),
                   icon: const Icon(Icons.close, size: 15),
-                  label: const Text('外す'),
+                  label: const Text('今日はやらない'),
                 ),
               ],
             ),
@@ -2408,7 +2445,7 @@ class _HubViewState extends State<HubView> {
                   Text(
                     focus.full
                         ? '今日の3つは埋まっています。続けるなら、先に今日の3つから外してください。'
-                        : '今日も続けるか、期日を付けるか、外すかを選んでください。',
+                        : '今日も続けるか、期日を付けるか、今日はやらないかを選んでください。',
                     style: const TextStyle(fontSize: 12),
                   ),
                   const SizedBox(height: 12),
@@ -2663,7 +2700,7 @@ class _HubViewState extends State<HubView> {
             // 今日の3つ（この端末だけ）。報告が反映待ちの項目は選ばせない。
             if (entry.itemKey case final key?
                 when repo.itemRequestIdFor(key) == null)
-              todayToggle(project, key),
+              todayToggle(project.id, key),
             // 報告が反映待ちの間は、重ねて依頼させない。
             if (entry.itemKey case final key?
                 when repo.itemRequestIdFor(key) == null)
@@ -2939,7 +2976,11 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
-      if (section == 'next' && repo.unassignedMemos.isNotEmpty)
+      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。
+      if (section == 'next' &&
+          (repo.unassignedMemos.isNotEmpty ||
+              (repo.intakeFeatures.unassignedItems &&
+                  repo.closedUnassigned.isNotEmpty)))
         ...unassignedGroup(),
       if (resting.isNotEmpty)
         Card(
@@ -3218,11 +3259,13 @@ class _HubViewState extends State<HubView> {
   }
 
   /// 「次の一手」画面の「プロジェクト未定」。どのプロジェクトにも結び付いていないメモの、
-  /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。
+  /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。本体が対応していれば、行ごとに今日やる・完了・却下ができる。
   List<Widget> unassignedGroup() {
     final memos = repo.unassignedMemos,
         listed = memos.take(unassignedShown).toList(),
-        rest = repo.unassignedTotal - memos.length;
+        rest = repo.unassignedTotal - memos.length,
+        actionable = repo.intakeFeatures.unassignedItems,
+        closed = actionable ? repo.closedUnassigned : const <NowItemRef>[];
     return [
       Text(
         'プロジェクト未定（メモ${repo.unassignedTotal}件）',
@@ -3230,20 +3273,25 @@ class _HubViewState extends State<HubView> {
         style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
       ),
       const SizedBox(height: 4),
-      const Text(
-        'どのプロジェクトにも結び付いていないメモから、AIが「タスク」と分類したものと、AIが挙げた次の一手の提案を新しい順に集めています。AI生成・未検証で、完了の報告や期日の対象にはなりません。メモがプロジェクトに結び付くと、そのプロジェクトの次の一手へ移ります。',
-        style: TextStyle(fontSize: 12, height: 1.6),
+      Text(
+        actionable
+            ? 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。やるなら「今日やる」、やらないなら「却下」で一覧から外せます。'
+            : 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。メモがプロジェクトに結び付くと、そのプロジェクトへ移ります。',
+        style: const TextStyle(fontSize: 12, height: 1.6),
       ),
       const SizedBox(height: 8),
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [for (final memo in listed) unassignedEntry(memo)],
+      if (listed.isNotEmpty)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final memo in listed) unassignedEntry(memo, actionable),
+              ],
+            ),
           ),
         ),
-      ),
       if (memos.length > listed.length)
         Padding(
           padding: const EdgeInsets.only(top: 8),
@@ -3265,12 +3313,69 @@ class _HubViewState extends State<HubView> {
             style: const TextStyle(fontSize: 12),
           ),
         ),
+      if (closed.isNotEmpty)
+        ExpansionTile(
+          key: const Key('unassigned-closed'),
+          tilePadding: EdgeInsets.zero,
+          title: Text(
+            '完了・却下した行（${closed.length}件）',
+            style: const TextStyle(fontSize: 14),
+          ),
+          children: [for (final item in closed) closedUnassignedRow(item)],
+        ),
       const SizedBox(height: 24),
     ];
   }
 
-  /// プロジェクト未定のメモ1件。完了の報告や期日の対象ではないので、できる操作は元のメモを開くことだけ。
-  Widget unassignedEntry(UnassignedMemo memo) {
+  /// プロジェクト未定の1行（メモの本文か提案）の操作。本体の項目一覧に載っていない行には出さない。
+  Widget unassignedActions(String inputId, String text) {
+    final item = repo.unassignedRow(inputId, text);
+    if (item == null || item.resolved) return const SizedBox.shrink();
+    if (repo.itemRequestIdFor(item.key) != null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 6),
+        child: Text('操作済み（反映待ち）', style: TextStyle(fontSize: 12)),
+      );
+    }
+    final tag = item.key.substring(0, 12);
+    return Wrap(
+      spacing: 4,
+      children: [
+        todayToggle(unassignedScope, item.key),
+        TextButton.icon(
+          key: Key('unassigned-resolve-$tag'),
+          onPressed: busy ? null : () => reportUnassigned(item, 'resolve'),
+          icon: const Icon(Icons.check_circle_outline, size: 15),
+          label: const Text('完了'),
+        ),
+        TextButton.icon(
+          key: Key('unassigned-reject-$tag'),
+          onPressed: busy ? null : () => reportUnassigned(item, 'exclude'),
+          icon: const Icon(Icons.close, size: 15),
+          label: const Text('却下'),
+        ),
+      ],
+    );
+  }
+
+  /// 完了・却下した行。未解決へ戻せる。
+  Widget closedUnassignedRow(NowItemRef item) => ListTile(
+    key: Key('unassigned-closed-${item.key.substring(0, 12)}'),
+    dense: true,
+    contentPadding: EdgeInsets.zero,
+    title: Text(item.display, maxLines: 2, overflow: TextOverflow.ellipsis),
+    subtitle: Text(item.excluded ? '却下' : '完了'),
+    trailing: repo.itemRequestIdFor(item.key) != null
+        ? const Text('反映待ち', style: TextStyle(fontSize: 12))
+        : TextButton(
+            key: Key('unassigned-reopen-${item.key.substring(0, 12)}'),
+            onPressed: busy ? null : () => reportUnassigned(item, 'reopen'),
+            child: const Text('元に戻す'),
+          ),
+  );
+
+  /// プロジェクト未定のメモ1件。本体が対応していれば行ごとに操作を付け、いつでも元のメモを開ける。
+  Widget unassignedEntry(UnassignedMemo memo, bool actionable) {
     final record = repo.inputRecord(memo.inputId);
     return Padding(
       key: Key('unassigned-${memo.inputId}'),
@@ -3287,12 +3392,20 @@ class _HubViewState extends State<HubView> {
             memo.text,
             style: const TextStyle(fontWeight: FontWeight.w600, height: 1.5),
           ),
+          if (actionable && memo.task)
+            unassignedActions(memo.inputId, memo.text),
           for (final suggestion in memo.suggestions)
             Padding(
               padding: const EdgeInsets.only(top: 4, left: 12),
-              child: Text(
-                'AI提案: $suggestion',
-                style: const TextStyle(height: 1.5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'AI提案: $suggestion',
+                    style: const TextStyle(height: 1.5),
+                  ),
+                  if (actionable) unassignedActions(memo.inputId, suggestion),
+                ],
               ),
             ),
           if (record != null)

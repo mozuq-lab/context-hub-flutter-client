@@ -1,3 +1,4 @@
+import 'intake_features.dart' show unassignedScope;
 import 'models.dart';
 import 'parser.dart' show clip;
 import 'repository.dart';
@@ -54,6 +55,13 @@ class TodayPick {
   /// [item]を今日選ぶときの記録。
   factory TodayPick.of(HubProject project, NowItemRef item) =>
       TodayPick(project.id, item.key, clip(item.text.trim(), _maxText));
+
+  /// プロジェクト未定の行[item]を今日選ぶときの記録。
+  factory TodayPick.unassigned(NowItemRef item) =>
+      TodayPick(unassignedScope, item.key, clip(item.text.trim(), _maxText));
+
+  /// プロジェクト未定の行か。
+  bool get unassigned => projectId == unassignedScope;
 }
 
 /// 「今日の3つ」の状態。[date]は選んだ日（日本時間の暦日。期日と同じ日付の決め方）。
@@ -160,9 +168,12 @@ class TodayEntry {
   const TodayEntry(this.pick, this.project, this.item);
   final TodayPick pick;
 
-  /// 項目があるプロジェクトと、NOWの項目。見つからなければnull。
+  /// 項目があるプロジェクトと、NOWの項目。見つからなければnull。プロジェクト未定の行ではprojectはいつもnull。
   final HubProject? project;
   final NowItemRef? item;
+
+  /// プロジェクト未定の行か。
+  bool get unassigned => pick.unassigned;
 
   bool get missing => item == null;
 
@@ -175,6 +186,13 @@ class TodayEntry {
 
 /// [pick]をNOWの項目へ結び付ける。
 TodayEntry todayEntry(HubRepository repo, TodayPick pick) {
+  if (pick.unassigned) {
+    return TodayEntry(
+      pick,
+      null,
+      repo.unassignedItems.where((i) => i.key == pick.itemKey).firstOrNull,
+    );
+  }
   final project = repo.projects[pick.projectId];
   final item = project?.nowItems
       .where((i) => i.key == pick.itemKey)

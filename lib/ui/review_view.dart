@@ -15,7 +15,7 @@ String reviewState(ReviewCandidate i) => switch (i.status) {
         ? '承認済み・反映済み'
         : '承認済み・反映待ち',
   'rejected' => '却下済み',
-  'stale' => '根拠の再確認が必要',
+  'stale' => '古い候補・採用できません',
   _ => '同期・形式の確認が必要',
 };
 
@@ -41,7 +41,7 @@ String policyNote(ReviewRepository r, ReviewCandidate i) {
 }
 
 /// 採用・却下の依頼の状況を、一覧の行に添える。
-String requestNote(ReviewRepository r, ReviewCandidate i) => !i.actionable
+String requestNote(ReviewRepository r, ReviewCandidate i) => !i.rejectable
     ? ''
     : r.requestIdFor(i.id) != null
     ? '\n依頼保存済み・Miniの判断待ち'
@@ -579,9 +579,9 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         ),
                       if (error != null) NoticeBox(error!, error: true),
                       if (notice != null) NoticeBox(notice),
-                      if (item.actionable && requested)
+                      if (item.rejectable && requested)
                         const NoticeBox('依頼保存済み・Miniの判断待ちです。受付状況で結果を確認してください。'),
-                      if (item.actionable &&
+                      if (item.rejectable &&
                           notice == null &&
                           failed.isNotEmpty)
                         const NoticeBox(
@@ -668,6 +668,25 @@ class _ReviewDetailState extends State<ReviewDetail> {
                       if (item.status == 'approved' &&
                           c.review!.retirementRequestIdFor(item.id) != null)
                         const NoticeBox('適用停止の依頼保存済み・Miniの判断待ちです。'),
+                      // 古くなった候補は採用できない。不要なら却下して要確認から片付ける。
+                      if (item.status == 'stale') ...[
+                        const NoticeBox(
+                          'この候補は古くなったため採用できません。不要なら却下すると、判断履歴へ移ります。',
+                          key: Key('review-stale'),
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton(
+                          key: const Key('review-reject-stale'),
+                          onPressed:
+                              busy ||
+                                  notice != null ||
+                                  requested ||
+                                  c.captureWarning != null
+                              ? null
+                              : () => decide('reject'),
+                          child: const Text('却下する'),
+                        ),
+                      ],
                       if (item.actionable)
                         Wrap(
                           spacing: 12,

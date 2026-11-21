@@ -14,6 +14,7 @@ import '../core/home_widget.dart';
 import '../core/today.dart';
 import '../core/capture_progress.dart';
 import '../core/review_candidates.dart';
+import '../core/intake_features.dart' show unassignedScope;
 import '../storage/review_service.dart';
 import '../core/people.dart';
 import '../core/models.dart';
@@ -835,6 +836,16 @@ class HubController extends ChangeNotifier {
   Future<void> setToday(String projectId, String itemKey, bool on) async {
     if (!on) return _saveToday((t) => t.remove(itemKey));
     final repo = repository;
+    // プロジェクト未定の行は、本体の項目一覧（_unassigned）から選ぶ。
+    if (projectId == unassignedScope) {
+      final item = repo?.unassignedItems
+          .where((i) => i.key == itemKey)
+          .firstOrNull;
+      if (item == null || item.resolved) {
+        throw StateError('この行は片付いたか、一覧から見つかりません。再読込して確かめてください。');
+      }
+      return _saveToday((t) => t.add(TodayPick.unassigned(item)));
+    }
     final project = repo?.projects[projectId];
     final item = project?.nowItems.where((i) => i.key == itemKey).firstOrNull;
     if (project == null || item == null || item.resolved) {
@@ -1522,7 +1533,7 @@ class HubController extends ChangeNotifier {
     final candidate = review?.byId(id);
     if (old.snapshot.fingerprint != fresh.fingerprint ||
         candidate == null ||
-        !(retiring ? candidate.retirable : candidate.actionable)) {
+        !(retiring ? candidate.retirable : candidate.rejectable)) {
       throw StateError('候補または根拠が変更されています。表示を確認してから操作してください。');
     }
     if ((retiring
@@ -1592,7 +1603,11 @@ class HubController extends ChangeNotifier {
       final candidate = review?.byId(ticket.candidate.id);
       if (fresh.fingerprint != ticket.fingerprint ||
           candidate == null ||
-          !(ticket.retiring ? candidate.retirable : candidate.actionable) ||
+          !(ticket.retiring
+              ? candidate.retirable
+              : action == 'reject'
+              ? candidate.rejectable
+              : candidate.actionable) ||
           candidate.candidateHash != ticket.candidate.candidateHash ||
           (ticket.retiring
                   ? review!.retirementRequestIdFor(candidate.id)
@@ -1993,13 +2008,23 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        final unassigned = projectId == unassignedScope;
+        if (unassigned && !parsed.intakeFeatures.unassignedItems) {
+          throw StateError(
+            'Mac miniの本体がプロジェクト未定の行の完了・却下に対応していません。本体を更新してください。',
+          );
+        }
         // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
         if (parsed.projects[projectId] case final owner?) {
           _refuseMerged(parsed, owner);
         }
-        final found = parsed.projects[projectId]?.nowItems
-            .where((i) => i.key == itemKey)
-            .firstOrNull;
+        final found =
+            (unassigned
+                    ? parsed.unassignedItems
+                    : parsed.projects[projectId]?.nowItems ??
+                          const <NowItemRef>[])
+                .where((i) => i.key == itemKey)
+                .firstOrNull;
         // 戻せるのは欄から外れている項目だけ、完了・解決にする・外すのは欄にある項目だけ。
         if (found == null || (action != 'reopen') == found.resolved) {
           throw StateError('NOWが更新されています。表示を確認してから操作してください。');

@@ -178,4 +178,45 @@ void main() {
       });
     }
   }
+  test('古くなった候補は採用できないが、却下は本体が受理する', () async {
+    final access = TempAccess();
+    await access.init();
+    addTearDown(() => access.directory.delete(recursive: true));
+    final c = review(
+      reviewFiles(),
+    ).attention.firstWhere((i) => i.status == 'stale');
+    expect(c.actionable, isFalse);
+    expect(c.rejectable, isTrue);
+    final s = ReviewService(access, location);
+    await expectLater(
+      s.submit(op, c, 'approve', target: AdoptionTarget.global()),
+      throwsFormatException,
+    );
+    final result = await s.submit(op, c, 'reject');
+    final output = '${access.directory.path}/after.json';
+    final node = await Process.run('node', [
+      'scripts/check_review_protocol.mjs',
+      access.request(location, result.requestId).path,
+      'assets/review.json',
+      output,
+    ]);
+    expect(node.exitCode, 0, reason: '${node.stdout}\n${node.stderr}');
+    final repo = HubRepository(
+      VaultSnapshot(
+        nativeReviewFiles(
+          Map<String, String>.from(
+            jsonDecode(await File(output).readAsString()) as Map,
+          ),
+        ),
+      ),
+    );
+    expect(repo.review.byId(c.id)!.status, 'rejected');
+    expect(repo.review.attention.any((i) => i.id == c.id), isFalse);
+    expect(repo.review.pending.length, 4);
+    // 確認できない候補は、却下もできない。
+    final unavailable = review(
+      reviewFiles(),
+    ).attention.firstWhere((i) => i.status == 'unavailable');
+    expect(unavailable.rejectable, isFalse);
+  });
 }

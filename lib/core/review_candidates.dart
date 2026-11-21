@@ -167,6 +167,9 @@ class ReviewCandidate {
   Map<String, dynamic> get dependencies =>
       Map<String, dynamic>.from(data['dependencies'] as Map);
   bool get actionable => status == 'pending';
+
+  /// 却下できる。確認待ちの候補と、古くなった候補（元のメモの訂正・同じ名前のプロジェクトなどで採用できないもの）。
+  bool get rejectable => actionable || status == 'stale';
   String get label => switch (kind) {
     'project' => 'プロジェクト案',
     'knowledge' => '知識',
