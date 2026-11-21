@@ -8,6 +8,7 @@ import '../core/models.dart';
 import '../core/repository.dart';
 import '../core/secrets.dart';
 import '../core/templates.dart';
+import '../core/today.dart';
 import '../storage/capture_service.dart';
 import '../storage/basket_store.dart';
 import '../storage/draft_store.dart';
@@ -440,6 +441,8 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
+      // 本人が今日やると決めたものを、いちばん上に置く。
+      children.addAll(todaySection(compact: true));
       // 今週の気づきは、行動につながる欄（次の一手）より前に置く。
       children.addAll(insightsHome());
       final actionable = repo.actionableProjects,
@@ -1694,12 +1697,13 @@ class _HubViewState extends State<HubView> {
     ),
   );
 
-  Future<void> scheduleItem(HubProject project, NowItemRef item) async {
+  /// 期日・見直す日を依頼する。依頼を保存できたらtrue。
+  Future<bool> scheduleItem(HubProject project, NowItemRef item) async {
     final value = await showDialog<({String? due, String? reviewAfter})>(
       context: context,
       builder: (_) => ScheduleDialog(item: item),
     );
-    if (value == null || !mounted) return;
+    if (value == null || !mounted) return false;
     try {
       final result = await c.requestItemSchedule(
         project.id,
@@ -1715,8 +1719,10 @@ class _HubViewState extends State<HubView> {
               : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
         );
       }
+      return result.saved;
     } catch (e) {
       if (mounted) notice(context, HubController.message(e));
+      return false;
     }
   }
 
@@ -1907,6 +1913,264 @@ class _HubViewState extends State<HubView> {
 
   bool get busy => c.loading || c.saving || c.captureWarning != null;
 
+  /// 「今日やる」「今日から外す」。選んだ項目はこの端末だけに残し、Vaultには書かない。
+  Widget todayToggle(HubProject project, String key) {
+    final focus = c.today, on = focus.picked(key);
+    return TextButton.icon(
+      key: Key('today-${key.substring(0, 12)}'),
+      // 3つ埋まっている間は、外す操作だけを受け付ける。
+      onPressed: !on && focus.full
+          ? null
+          : () => setToday(project.id, key, !on),
+      icon: Icon(on ? Icons.wb_sunny : Icons.wb_sunny_outlined, size: 15),
+      label: Text(on ? '今日から外す' : '今日やる'),
+    );
+  }
+
+  Future<void> setToday(String projectId, String key, bool on) async {
+    try {
+      await c.setToday(projectId, key, on);
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  Future<void> dropCarried(String key) async {
+    try {
+      await c.dropCarried(key);
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 持ち越した項目に期日を付ける。依頼を保存できたら、持ち越しの確認から外す。
+  Future<void> scheduleCarried(TodayEntry entry) async {
+    if (!await scheduleItem(entry.project!, entry.item!)) return;
+    await dropCarried(entry.pick.itemKey);
+  }
+
+  /// ホームと「次の一手」の先頭に置く「今日の3つ」と、前の日からの持ち越しの確認。
+  List<Widget> todaySection({bool compact = false}) {
+    final focus = c.today,
+        picks = [for (final p in focus.picks) todayEntry(repo, p)],
+        carry = [for (final p in focus.carry) todayEntry(repo, p)];
+    final scheme = Theme.of(context).colorScheme;
+    Widget projectLink(TodayEntry e) => InkWell(
+      onTap: e.project == null
+          ? null
+          : () => widget.onNavigate('project:${e.project!.id}'),
+      child: Text(
+        e.project?.title ?? e.pick.projectId,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: scheme.primary,
+        ),
+      ),
+    );
+    Widget pickRow(TodayEntry e) {
+      final key = e.pick.itemKey,
+          reported = repo.itemRequestIdFor(key) != null,
+          finished = e.done || reported;
+      return Padding(
+        key: Key('today-pick-${key.substring(0, 12)}'),
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            projectLink(e),
+            Text(
+              e.text,
+              style: finished
+                  ? TextStyle(
+                      decoration: TextDecoration.lineThrough,
+                      color: scheme.onSurfaceVariant,
+                    )
+                  : null,
+            ),
+            if (e.missing)
+              Text(
+                'NOWから見つかりません。言い換えられたか、片付いた可能性があります。',
+                style: TextStyle(fontSize: 12, color: scheme.error),
+              )
+            else if (e.done)
+              Text(
+                e.item!.excluded ? '誤りとして外しました' : '片付きました',
+                style: const TextStyle(fontSize: 12),
+              )
+            else if (reported)
+              const Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Wrap(
+              spacing: 8,
+              children: [
+                if (!finished && !e.missing)
+                  TextButton.icon(
+                    key: Key('today-resolve-${key.substring(0, 12)}'),
+                    onPressed: busy
+                        ? null
+                        : () => reportItem(e.project!, e.item!, 'resolve'),
+                    icon: const Icon(Icons.check_circle_outline, size: 15),
+                    label: Text(e.item!.section == 'next' ? '完了にする' : '解決にする'),
+                  ),
+                TextButton.icon(
+                  key: Key('today-remove-${key.substring(0, 12)}'),
+                  onPressed: () => setToday(e.pick.projectId, key, false),
+                  icon: const Icon(Icons.close, size: 15),
+                  label: const Text('今日から外す'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget carryRow(TodayEntry e) {
+      final key = e.pick.itemKey,
+              // 日付が変わった後に片付いた・報告した項目は、続けたり日付を付けたりできない。
+              closed =
+              e.missing || e.done || repo.itemRequestIdFor(key) != null;
+      return Padding(
+        key: Key('today-carry-${key.substring(0, 12)}'),
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            projectLink(e),
+            Text(e.text),
+            if (e.missing)
+              Text(
+                'NOWから見つかりません。言い換えられたか、片付いた可能性があります。',
+                style: TextStyle(fontSize: 12, color: scheme.error),
+              )
+            else if (closed)
+              const Text('片付いたか、報告済みです。', style: TextStyle(fontSize: 12)),
+            Text(
+              e.pick.carried >= todayCarryNudge
+                  ? '${e.pick.carried}日続けて持ち越しています。小さく分けると進めやすいかもしれません。'
+                  : '${e.pick.carried}日持ち越し',
+              key: Key('today-carried-${key.substring(0, 12)}'),
+              style: TextStyle(
+                fontSize: 12,
+                color: e.pick.carried >= todayCarryNudge ? scheme.error : null,
+              ),
+            ),
+            Wrap(
+              spacing: 8,
+              children: [
+                if (!closed)
+                  TextButton.icon(
+                    key: Key('today-keep-${key.substring(0, 12)}'),
+                    onPressed: focus.full
+                        ? null
+                        : () => setToday(e.pick.projectId, key, true),
+                    icon: const Icon(Icons.wb_sunny_outlined, size: 15),
+                    label: const Text('今日も続ける'),
+                  ),
+                if (!closed && repo.scheduleRequestIdFor(key) == null)
+                  TextButton.icon(
+                    key: Key('today-schedule-${key.substring(0, 12)}'),
+                    onPressed: busy ? null : () => scheduleCarried(e),
+                    icon: const Icon(Icons.event_outlined, size: 15),
+                    label: const Text('期日を付ける'),
+                  ),
+                TextButton.icon(
+                  key: Key('today-drop-${key.substring(0, 12)}'),
+                  onPressed: () => dropCarried(key),
+                  icon: const Icon(Icons.close, size: 15),
+                  label: const Text('外す'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    return [
+      if (carry.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Card(
+            key: const Key('today-carry'),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '前の日から持ち越した項目（${carry.length}件）',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    focus.full
+                        ? '今日の3つは埋まっています。続けるなら、先に今日の3つから外してください。'
+                        : '今日も続けるか、期日を付けるか、外すかを選んでください。',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final e in carry) carryRow(e),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      key: const Key('today-carry-clear'),
+                      onPressed: () async {
+                        try {
+                          await c.clearCarried();
+                        } catch (e) {
+                          if (mounted) {
+                            notice(context, HubController.message(e));
+                          }
+                        }
+                      },
+                      child: const Text('すべて外す'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      if (picks.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Card(
+            key: const Key('today'),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '今日の3つ（${picks.length}/$todayMax）',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final e in picks) pickRow(e),
+                ],
+              ),
+            ),
+          ),
+        )
+      else if (!compact)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Text(
+            '次の一手・未解決の「今日やる」から、今日手を付けるものを$todayMax つまで選べます（この端末だけに残ります）。',
+            key: const Key('today-empty'),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ),
+    ];
+  }
+
   /// プロジェクトをピン留めする、または外す（この端末の並びだけ。Vaultには書かない）。
   Future<void> togglePin(HubProject project) async {
     try {
@@ -2035,6 +2299,10 @@ class _HubViewState extends State<HubView> {
                             : '日付を付ける',
                       ),
                     ),
+            // 今日の3つ（この端末だけ）。報告が反映待ちの項目は選ばせない。
+            if (entry.itemKey case final key?
+                when repo.itemRequestIdFor(key) == null)
+              todayToggle(project, key),
             // 報告が反映待ちの間は、重ねて依頼させない。
             if (entry.itemKey case final key?
                 when repo.itemRequestIdFor(key) == null)
@@ -2173,6 +2441,7 @@ class _HubViewState extends State<HubView> {
         '次の一手',
         '進行中のプロジェクトの「次の一手」と「未解決」を、ピン留めしたプロジェクトから順に、残りは最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。どのプロジェクトにも結び付いていないメモのタスク候補とAIの提案は、「次の一手」の後ろの「プロジェクト未定」に並べます。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
       ),
+      ...todaySection(),
       Align(
         alignment: Alignment.centerLeft,
         child: SegmentedButton<String>(

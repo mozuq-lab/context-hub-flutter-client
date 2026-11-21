@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'package:path/path.dart' as p;
@@ -10,6 +11,8 @@ import '../storage/basket_store.dart';
 import '../core/repository.dart';
 import '../core/attention.dart';
 import '../core/home_widget.dart';
+import '../core/today.dart';
+import '../core/capture_progress.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
 import '../core/models.dart';
@@ -69,6 +72,7 @@ class HubController extends ChangeNotifier {
     this.access, {
     required this.sampleLoader,
     GuidedServices? guided,
+    this.autoReloadInterval,
   }) : guidedServices = guided ?? GuidedServices.native();
   final VaultAccess access;
   final Future<Map<String, String>> Function() sampleLoader;
@@ -87,7 +91,22 @@ class HubController extends ChangeNotifier {
 
   ReviewRepository? get review => repository?.review;
   final Map<String, String> _reviewOperations = {};
-  bool loading = false, saving = false, composing = false;
+  bool loading = false, saving = false;
+  bool _composing = false;
+
+  /// 入力フォーム・確認を開いているか。閉じたときに、待たせていた知らせ（保存したメモの受付・整理）を出せるよう通知する。
+  bool get composing => _composing;
+  set composing(bool value) {
+    if (_composing == value) return;
+    _composing = value;
+    // フォームを閉じる処理の途中（画面の組み立て中のこともある）で通知しないよう、少し後にする。
+    if (!value && _notices.isNotEmpty) {
+      scheduleMicrotask(() {
+        if (!_disposed) notifyListeners();
+      });
+    }
+  }
+
   String? error, captureWarning;
   List<CaptureResult> pending = [];
   int _epoch = 0;
@@ -103,6 +122,11 @@ class HubController extends ChangeNotifier {
           !identical(repository, _attentionFor) &&
           _syncAttention()) {
         _writeSettings().catchError((Object _) {});
+      }
+      // どの読み直しで記録が入れ替わっても、保存したメモの段階が進んだかを確かめる。
+      if (repository != null && !identical(repository, _progressFor)) {
+        _progressFor = repository;
+        _syncProgress();
       }
       _syncHomeWidget();
       _syncDockBadge();
@@ -201,6 +225,239 @@ class HubController extends ChangeNotifier {
     await _savePins(ids);
   }
 
+  // ---- 同期で届いた変更の自動の読込（端末ごと。Vaultには書かない） ----
+  /// アプリを前面に出している間に、Vaultが変わっていないかを確かめる間隔。nullなら確かめない（テストの既定）。
+  /// 前面に戻ったときの確認は、この値に関わらず[autoReload]が有効なら行う。
+  final Duration? autoReloadInterval;
+
+  /// 同期で届いた変更を自動で読み込むか。settings.jsonの`autoReload`（既定は有効）。
+  bool autoReload = true;
+
+  /// 自動の読込の設定を変える。設定は端末に保存する。
+  Future<void> setAutoReload(bool enabled) async {
+    if (location == null) throw StateError('先にVaultを選んでください。');
+    await _loadSeen();
+    final before = autoReload;
+    autoReload = enabled;
+    try {
+      await _writeSettings();
+    } catch (_) {
+      autoReload = before;
+      _changed();
+      throw StateError('設定を保存できませんでした。もう一度お試しください。');
+    }
+    _changed();
+  }
+
+  /// 前回の読込から変わっていないか。ファイルの更新時刻と大きさが分かる端末ではそれで、分からなければ本文で比べる。
+  static bool _sameSnapshot(VaultSnapshot a, VaultSnapshot b) {
+    if (!listEquals(a.warnings, b.warnings) || a.recognized != b.recognized) {
+      return false;
+    }
+    if (a.stamps.isNotEmpty && b.stamps.isNotEmpty) {
+      if (!mapEquals(a.stamps, b.stamps) ||
+          !setEquals(a.files.keys.toSet(), b.files.keys.toSet())) {
+        return false;
+      }
+      // 書き込まれた直後のファイルには更新時刻と大きさが付かない。そうしたファイルは本文で比べる。
+      return b.files.keys
+          .where((path) => !b.stamps.containsKey(path))
+          .every((path) => a.files[path] == b.files[path]);
+    }
+    return a.fingerprint == b.fingerprint;
+  }
+
+  /// 表示を止めずに、同期で届いた変更があれば読み込む。変わっていなければ表示を差し替えない。
+  /// 読込・保存・入力の途中では何もしない。読めなかったときは前の表示を残し、知らせない（本人の再読込で示す）。
+  /// 読み込んだらtrue。
+  Future<bool> refreshQuietly() async {
+    final target = location, previous = repository?.snapshot;
+    if (target == null ||
+        previous == null ||
+        loading ||
+        saving ||
+        composing ||
+        error != null ||
+        _quietRunning) {
+      return false;
+    }
+    _quietRunning = true;
+    try {
+      return await _refreshQuietly(target, previous);
+    } finally {
+      _quietRunning = false;
+    }
+  }
+
+  /// 自動の読込を実行中か。前の読込が終わるまで次を始めない（大きなVaultで読み続けないように）。
+  bool _quietRunning = false;
+
+  /// 最後にVaultが変わっていないかを確かめた（または読み込んだ）時刻。前面に戻ったときの間引きに使う。
+  DateTime? lastCheckedAt;
+
+  Future<bool> _refreshQuietly(
+    VaultLocation target,
+    VaultSnapshot previous,
+  ) async {
+    final epoch = _epoch, generation = ++_reloads;
+    // 読んでいる間に、確認のための読み直しで記録が新しくなった、または入力・保存が始まったら、結果を使わない。
+    bool current() =>
+        epoch == _epoch &&
+        generation == _reloads &&
+        !loading &&
+        !saving &&
+        !composing &&
+        !_disposed &&
+        identical(repository?.snapshot, previous);
+    try {
+      final data = await access.refreshSnapshot(target, previous);
+      if (!current()) return false;
+      lastCheckedAt = DateTime.now();
+      if (_sameSnapshot(previous, data)) {
+        // ファイルは変わっていなくても、日付が変われば今日の3つの持ち越しを反映する。
+        if (_syncToday()) {
+          await _writeSettings().catchError((Object _) {});
+          _changed();
+        }
+        return false;
+      }
+      repository = HubRepository(data);
+      await _ensureBasket(target);
+      await _loadSeen();
+      bool still() => epoch == _epoch && generation == _reloads && !_disposed;
+      if (!still()) return false;
+      final seen = _initializeSeen(),
+          attended = _syncAttention(),
+          rolled = _syncToday();
+      if (seen || attended || rolled) {
+        await _writeSettings().catchError((Object _) {});
+      }
+      await _pending(target, epoch, still);
+      _changed();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ---- この端末から保存したメモの進み具合（アプリを開いている間だけ。どこにも保存しない） ----
+  static const _maxTracked = 50;
+  final Map<String, CaptureStage> _tracked = {};
+
+  /// 段階を確かめた記録。記録が入れ替わったら確かめ直す。
+  HubRepository? _progressFor;
+  final List<CaptureNotice> _notices = [];
+
+  /// 段階が進んだことの知らせがあるか。
+  bool get hasCaptureNotices => _notices.isNotEmpty;
+
+  /// 段階が進んだことの知らせを受け取り、空にする。
+  List<CaptureNotice> takeCaptureNotices() {
+    final out = List<CaptureNotice>.of(_notices);
+    _notices.clear();
+    return out;
+  }
+
+  void _track(CaptureResult result) {
+    if (!result.saved) return;
+    _tracked[result.requestId] = CaptureStage.saved;
+    while (_tracked.length > _maxTracked) {
+      _tracked.remove(_tracked.keys.first);
+    }
+  }
+
+  /// 読み込んだ記録で、保存したメモの段階が進んだかを確かめる。整理済み・受け付けられなかったものは見届けて外す。
+  void _syncProgress() {
+    final repo = repository;
+    if (repo == null) return;
+    for (final e in _tracked.entries.toList()) {
+      final stage = captureStage(repo, e.key);
+      if (stage.index <= e.value.index) continue;
+      _notices.add(CaptureNotice(e.key, stage));
+      if (stage == CaptureStage.organized || stage == CaptureStage.failed) {
+        _tracked.remove(e.key);
+      } else {
+        _tracked[e.key] = stage;
+      }
+    }
+  }
+
+  // ---- 今日の3つ（端末ごと・Vaultごと。Vaultには書かない） ----
+  // settings.jsonの`today`に、Vaultのidentityごとの今日選んだ項目と、持ち越しの確認を保存する。
+  static const _maxTodayVaults = 6;
+  Map<String, dynamic> _today = {};
+
+  /// 今日の3つ。日付が変わっていれば、片付いていない項目を持ち越しの確認へ回した状態を返す
+  /// （保存は次に設定を書くとき。読むたびに持ち越しの日数は増えない）。
+  TodayFocus get today {
+    final stored = TodayFocus.fromJson(_today[location?.identity ?? '']);
+    final repo = repository;
+    if (repo == null) return stored;
+    return stored.rollOver(hubToday(), (p) => todayOpen(repo, p));
+  }
+
+  /// 日付が変わった後の状態を記録へ反映する。記録が変わったらtrue（設定の保存が要る）。
+  bool _syncToday() {
+    final target = location;
+    if (target == null || repository == null) return false;
+    final stored = _today[target.identity];
+    if (stored == null) return false;
+    final next = today;
+    if (jsonEncode(next.toJson()) == jsonEncode(stored)) return false;
+    _putToday(target.identity, next);
+    return true;
+  }
+
+  void _putToday(String identity, TodayFocus value) {
+    // いま使っているVaultを最後に置き、古いVaultの分から手放す。
+    _today.remove(identity);
+    if (!value.isEmpty) _today[identity] = value.toJson();
+    while (_today.length > _maxTodayVaults) {
+      _today.remove(_today.keys.first);
+    }
+  }
+
+  Future<void> _saveToday(
+    TodayFocus Function(TodayFocus current) change,
+  ) async {
+    final target = location;
+    if (target == null || repository == null) {
+      throw StateError('先にVaultを選んでください。');
+    }
+    await _loadSeen();
+    final before = Map<String, dynamic>.from(_today);
+    _putToday(target.identity, change(today));
+    try {
+      await _writeSettings();
+    } catch (_) {
+      // 保存できなかった選択を、保存できたように見せない。
+      _today = before;
+      _changed();
+      throw StateError('今日の3つを保存できませんでした。もう一度お試しください。');
+    }
+    _changed();
+  }
+
+  /// 次の一手・未解決の項目を、今日の3つに加える（[on]がfalseなら外す）。
+  /// 持ち越しの確認にある項目を加えると、「今日も続ける」として持ち越しから移す。
+  Future<void> setToday(String projectId, String itemKey, bool on) async {
+    if (!on) return _saveToday((t) => t.remove(itemKey));
+    final repo = repository;
+    final project = repo?.projects[projectId];
+    final item = project?.nowItems.where((i) => i.key == itemKey).firstOrNull;
+    if (project == null || item == null || item.resolved) {
+      throw StateError('この項目は片付いたか、NOWから見つかりません。再読込して確かめてください。');
+    }
+    await _saveToday((t) => t.add(TodayPick.of(project, item)));
+  }
+
+  /// 持ち越しの確認から外す（今日はやらない）。
+  Future<void> dropCarried(String itemKey) =>
+      _saveToday((t) => t.remove(itemKey));
+
+  /// 持ち越しの確認をすべて外す。
+  Future<void> clearCarried() => _saveToday((t) => t.clearCarry());
+
   // ---- Androidのホーム画面ウィジェット（端末の表示だけ。Vaultには書かない） ----
   /// 表示設定はVaultごとに持つ。サンプルや別のVaultで選んだ設定を、ほかのVaultへ持ち込まない。
   Map<String, dynamic> _homeWidgets = {};
@@ -220,7 +477,7 @@ class HubController extends ChangeNotifier {
     if (repo != null) {
       try {
         content = encodeHomeWidget(
-          homeWidgetContent(repo, settings: homeWidget),
+          homeWidgetContent(repo, settings: homeWidget, focus: today.picks),
         );
       } catch (_) {
         content = null;
@@ -461,6 +718,9 @@ class HubController extends ChangeNotifier {
     captureWarning = null;
     basket = const Basket();
     _basketFor = null;
+    // 前のVaultで保存したメモの知らせは、別のVaultで出さない。
+    _tracked.clear();
+    _notices.clear();
     _changed();
     try {
       final data = await access.readSnapshot(target);
@@ -468,12 +728,14 @@ class HubController extends ChangeNotifier {
         return;
       }
       repository = HubRepository(data);
+      lastCheckedAt = DateTime.now();
       _visits.clear();
       await _ensureBasket(target);
       if (epoch != _epoch) return;
       await _loadSeen();
       _initializeSeen();
       _syncAttention();
+      _syncToday();
       await _writeSettings();
       await _pending(target, epoch);
     } catch (e) {
@@ -508,13 +770,16 @@ class HubController extends ChangeNotifier {
           : await access.refreshSnapshot(target, previous);
       if (!current()) return;
       repository = HubRepository(data);
+      lastCheckedAt = DateTime.now();
       // Vaultを開くのに失敗した後の再読込でも、残したかごを読んでから使う（空のかごで上書きしない）。
       await _ensureBasket(target);
       // Vaultを開くのに失敗した後の再読込でも、残した設定（既読・ピン留め・ウィジェット・判断待ち）を読んでから書く（空の設定で上書きしない）。
       await _loadSeen();
       if (!current()) return;
-      final seen = _initializeSeen(), attended = _syncAttention();
-      if (seen || attended) {
+      final seen = _initializeSeen(),
+          attended = _syncAttention(),
+          rolled = _syncToday();
+      if (seen || attended || rolled) {
         try {
           await _writeSettings();
         } catch (_) {
@@ -717,7 +982,9 @@ class HubController extends ChangeNotifier {
     saving = true;
     _changed();
     try {
-      return await CaptureService(access, location!).save(draft);
+      final result = await CaptureService(access, location!).save(draft);
+      _track(result);
+      return result;
     } finally {
       saving = false;
       await reload();
@@ -802,10 +1069,12 @@ class HubController extends ChangeNotifier {
           chain.fold<int>(text.length, (n, r) => n + r.body.length) > 32000) {
         throw StateError('このメモは訂正の上限に達しています。新しいメモとして追加してください。');
       }
-      return await CaptureService(
+      final result = await CaptureService(
         access,
         target,
       ).saveCorrection(operationId, expectedLatestId, text);
+      _track(result);
+      return result;
     } finally {
       saving = false;
       if (!_disposed) await reload();
@@ -1577,6 +1846,10 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['pins'] is Map) {
         _pins = Map<String, dynamic>.from(value['pins'] as Map);
       }
+      if (value is Map) autoReload = value['autoReload'] != false;
+      if (value is Map && value['today'] is Map) {
+        _today = Map<String, dynamic>.from(value['today'] as Map);
+      }
       if (value is Map) {
         final settings = AttentionSettings.fromJson(value['attention']);
         _attention = settings.state;
@@ -1610,6 +1883,8 @@ class HubController extends ChangeNotifier {
     ...target.toJson(),
     if (_homeWidgets.isNotEmpty) 'homeWidget': _homeWidgets,
     if (_pins.isNotEmpty) 'pins': _pins,
+    if (_today.isNotEmpty) 'today': _today,
+    if (!autoReload) 'autoReload': false,
     if (_attention.identity != null || attentionNotify)
       'attention': AttentionSettings(_attention, attentionNotify).toJson(),
   };

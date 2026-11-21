@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'models.dart';
 import 'parser.dart' show clip;
 import 'repository.dart';
+import 'today.dart';
 
 /// Androidのホーム画面ウィジェットの表示設定。端末ごとの設定で、Vaultには書かない。
 ///
@@ -51,10 +52,12 @@ const homeWidgetMaxBytes = 4096;
 /// 表示用の文字列まで組み立てて渡し、ネイティブ側は並べるだけにする。
 /// 本文を出す場合も、秘密情報らしい文字列は伏せる。
 /// 「次の一手」の画面と同じく、期日が近い項目を先に並べ、見直す日が先の項目は数えず出さない。
+/// 本人が[focus]（今日の3つ）に選んだ項目は、期日の近い項目よりも先に並べる。
 Map<String, Object?> homeWidgetContent(
   HubRepository repo, {
   HomeWidgetSettings settings = const HomeWidgetSettings(),
   DateTime? now,
+  List<TodayPick> focus = const [],
 }) {
   final active = repo.actionableProjects;
   final review = repo.review.pendingRows.length;
@@ -98,7 +101,19 @@ Map<String, Object?> homeWidgetContent(
         ? a.$1.id.compareTo(b.$1.id)
         : a.$4.compareTo(b.$4),
   );
-  final entries = [for (final e in soon) (e.$1, e.$2), ...rest];
+  final ordered = [for (final e in soon) (e.$1, e.$2), ...rest];
+  int rank((HubProject, NowEntry) e) {
+    final i = focus.indexWhere(
+      (t) => t.projectId == e.$1.id && t.itemKey == e.$2.itemKey,
+    );
+    return i < 0 ? focus.length : i;
+  }
+
+  // 安定した並べ替え（今日の3つの順、残りは元の順）。
+  final entries = [
+    for (final (i, e) in ordered.indexed) (rank(e), i, e),
+  ]..sort((a, b) => a.$1 != b.$1 ? a.$1.compareTo(b.$1) : a.$2.compareTo(b.$2));
+  final listed = [for (final e in entries) e.$3];
   // ロック画面にも出るため、本体の設定で足した規則も当てる。規則を確かめられないときは本文を出さない。
   final policy = repo.secretPolicy;
   String line(String title, String text) {
@@ -122,7 +137,7 @@ Map<String, Object?> homeWidgetContent(
         : '次の一手 ${entries.length}件 · 確認待ち $review件',
     'lines': settings.showText && policy.usable
         ? [
-            for (final (p, e) in entries.take(homeWidgetMaxLines))
+            for (final (p, e) in listed.take(homeWidgetMaxLines))
               line(p.title, e.text),
           ]
         : const <String>[],
