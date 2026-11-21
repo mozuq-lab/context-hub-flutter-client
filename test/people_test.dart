@@ -262,7 +262,7 @@ void main() {
       expect(synced.pendingPersonAdds, isEmpty);
       expect(
         synced.intake.firstWhere((i) => i.id == added.requestId).detail,
-        '人の登録をMiniが反映しました。',
+        '人の登録をMac miniが反映しました。',
       );
       final edited = await service.savePersonDefinition(
         editOp,
@@ -284,7 +284,7 @@ void main() {
       expect(synced.people, isEmpty);
       expect(
         synced.intake.firstWhere((i) => i.id == removed.requestId).detail,
-        '人を外す操作をMiniが反映しました。',
+        '人を外す操作をMac miniが反映しました。',
       );
     } finally {
       await access.directory.delete(recursive: true);

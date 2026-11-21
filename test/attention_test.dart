@@ -105,7 +105,7 @@ Map<String, dynamic> settingsOf(AttentionAccess access) =>
     jsonDecode(access.states['settings.json']!) as Map<String, dynamic>;
 
 void main() {
-  test('確認待ちの候補・作業記録の下書き・止まったNOWを、判断できる画面ごとに数える', () {
+  test('確認待ちの候補・作業記録の下書き・更新が止まった現状を、判断できる画面ごとに数える', () {
     final repo = HubRepository(fixture(withConflict(withDraft(baseFiles()))));
     final items = attentionItems(repo);
     expect(items.where((i) => i.kind == 'candidate'), hasLength(4));
@@ -274,7 +274,7 @@ void main() {
     );
     final notice = attentionNotice(items)!;
     expect(notice.title, '確認待ちが6件増えています');
-    expect(notice.text, '候補 4件 · 作業記録の下書き 1件 · 止まったNOW 1件（この端末に同期済みの内容）');
+    expect(notice.text, '候補 4件 · 作業記録の下書き 1件 · 更新が止まった現状 1件（この端末に同期済みの内容）');
     expect(notice.key, attentionNotice(items.reversed.toList())!.key);
     expect(notice.key, isNot(attentionNotice(items.skip(1).toList())!.key));
     // 端末側の上限（題名80字・本文200字・鍵64字）に収まる。

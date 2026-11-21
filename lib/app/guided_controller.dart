@@ -264,7 +264,7 @@ class GuidedController extends ChangeNotifier {
     final st = state!;
     if (st.unreadable) {
       throw const ModelException(
-        '端末内の深掘りの状態（今月の利用回数など）を読み出せませんでした。画面を開き直してください。',
+        '端末内の「質問に答えてまとめる」の状態（今月の利用回数など）を読み出せませんでした。画面を開き直してください。',
       );
     }
     final secrets = secretPolicy;

@@ -135,6 +135,23 @@ class HubRepository {
   /// 対象のメモの総数。[unassignedMemos]は新しい順に本体の上限までで、原文が届いたものだけ。
   int unassignedTotal = 0;
 
+  /// 「プロジェクト未定」の行の項目（本体の`now-items/_unassigned.json`）。完了・却下した行を含む。対応前の本体では空。
+  final List<NowItemRef> unassignedItems = [];
+
+  /// 「プロジェクト未定」の項目一覧を本体が書いた日時。完了・却下の反映を確かめるのに使う。
+  DateTime? unassignedItemsGeneratedAt;
+
+  /// プロジェクト未定のメモの1行（メモの本文か提案）の項目。項目一覧がない・行が載っていなければnull。
+  NowItemRef? unassignedRow(String inputId, String text) => unassignedItems
+      .where((i) => i.inputId == inputId && i.text == text)
+      .firstOrNull;
+
+  /// プロジェクト未定の行のうち、本人が完了・却下したもの（新しい報告順）。
+  List<NowItemRef> get closedUnassigned => [
+    for (final i in unassignedItems)
+      if (i.resolved) i,
+  ];
+
   /// 今週の気づき（週次の統合の結果）。本体で無効・一覧を書いていない・読めないときはnull。
   Insights? insights;
 
@@ -409,6 +426,7 @@ class HubRepository {
     _readGitDrafts();
     _readIdeaIndex();
     _readUnassignedActions();
+    _readUnassignedItems();
     _readInsights();
     _readAnswers();
     _readSharedPreferences();
@@ -531,6 +549,103 @@ class HubRepository {
     }
   }
 
+  /// 項目一覧の1件を読む。形式に合わなければFormatException。プロジェクトの項目一覧と「プロジェクト未定」の項目一覧で共通。
+  NowItemRef _nowItemRef(Object? raw) {
+    final i = raw as Map<String, dynamic>,
+        r = i['resolution'],
+        sc = i['schedule'];
+    if (i['key'] is! String ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(i['key']) ||
+        !['next', 'open'].contains(i['section']) ||
+        i['label'] is! String ||
+        i['text'] is! String ||
+        i['input_id'] is! String ||
+        !inputIdPattern.hasMatch(i['input_id']) ||
+        (r != null &&
+            (r is! Map ||
+                r['id'] is! String ||
+                !RegExp(r'^RES-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(r['id']) ||
+                // 誤りとして外した項目だけが、理由と一言を持つ。
+                (r['action'] == 'exclude'
+                    ? !exclusionReasons.contains(r['reason']) ||
+                          (r['note'] != null && !validExclusionNote(r['note']))
+                    : r['action'] != null ||
+                          r['reason'] != null ||
+                          r['note'] != null))) ||
+        (sc != null &&
+            (sc is! Map ||
+                sc['id'] is! String ||
+                !RegExp(r'^SCH-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(sc['id']) ||
+                (sc['due'] != null && !validScheduleDate(sc['due'])) ||
+                (sc['review_after'] != null &&
+                    !validScheduleDate(sc['review_after'])) ||
+                (sc['due'] == null && sc['review_after'] == null) ||
+                (sc['repeat'] != null && sc['due'] == null)))) {
+      throw const FormatException();
+    }
+    // 本人が追加した行動（本体の入力の種類action）。fromは行動にした元の行。旧版の一覧にはない。
+    final act = i['action'], from = act is Map ? act['from'] : null;
+    if ((act != null && act is! Map) ||
+        (from != null &&
+            (from is! Map ||
+                from['input_id'] is! String ||
+                !inputIdPattern.hasMatch(from['input_id']) ||
+                from['text'] is! String ||
+                (from['text'] as String).isEmpty ||
+                (from['text'] as String).length > 2000 ||
+                (from['key'] != null &&
+                    (from['key'] is! String ||
+                        !RegExp(r'^[a-f0-9]{64}$').hasMatch(from['key'])))))) {
+      throw const FormatException();
+    }
+    final repeat = sc is Map && sc['repeat'] != null
+        ? RepeatRule.parse(sc['repeat'])
+        : null;
+    final hints = <NowItemHint>[];
+    final rawHints = i['hints'];
+    if (rawHints != null) {
+      if (rawHints is! List) throw const FormatException();
+      for (final h in rawHints) {
+        if (h is! Map ||
+            h['input_id'] is! String ||
+            !inputIdPattern.hasMatch(h['input_id']) ||
+            h['quote'] is! String ||
+            (h['quote'] as String).isEmpty) {
+          throw const FormatException();
+        }
+        // 同じメモからの候補は1件だけにする（本体は重ねて書かない）。
+        if (hints.any((x) => x.inputId == h['input_id'])) continue;
+        hints.add(
+          NowItemHint(
+            inputId: h['input_id'] as String,
+            quote: h['quote'] as String,
+            at: timestamp(h['at']),
+          ),
+        );
+      }
+    }
+    return NowItemRef(
+      key: i['key'],
+      section: i['section'],
+      label: i['label'],
+      text: i['text'],
+      inputId: i['input_id'],
+      resolutionId: r is Map ? r['id'] as String : null,
+      resolvedAt: r is Map ? timestamp(r['at']) : null,
+      exclusionReason: r is Map ? r['reason'] as String? : null,
+      exclusionNote: r is Map ? r['note'] as String? : null,
+      scheduleId: sc is Map ? sc['id'] as String : null,
+      due: sc is Map ? sc['due'] as String? : null,
+      reviewAfter: sc is Map ? sc['review_after'] as String? : null,
+      repeat: repeat,
+      hints: r == null ? hints : const [],
+      action: act is Map,
+      fromInputId: from is Map ? from['input_id'] as String : null,
+      fromText: from is Map ? from['text'] as String : null,
+      fromKey: from is Map ? from['key'] as String? : null,
+    );
+  }
+
   /// 本体がNOWと同時に書く項目一覧を読み、NOWの各行に項目キーを結び付ける。
   void _readNowItems() {
     // 期日・見直す日の記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（有効な日付は項目一覧のscheduleを使う）。
@@ -573,108 +688,7 @@ class HubRepository {
         }
         final items = <NowItemRef>[];
         for (final raw in j['items'] as List) {
-          final i = raw as Map<String, dynamic>,
-              r = i['resolution'],
-              sc = i['schedule'];
-          if (i['key'] is! String ||
-              !RegExp(r'^[a-f0-9]{64}$').hasMatch(i['key']) ||
-              !['next', 'open'].contains(i['section']) ||
-              i['label'] is! String ||
-              i['text'] is! String ||
-              i['input_id'] is! String ||
-              !inputIdPattern.hasMatch(i['input_id']) ||
-              (r != null &&
-                  (r is! Map ||
-                      r['id'] is! String ||
-                      !RegExp(
-                        r'^RES-[0-9A-HJKMNP-TV-Z]{26}$',
-                      ).hasMatch(r['id']) ||
-                      // 誤りとして外した項目だけが、理由と一言を持つ。
-                      (r['action'] == 'exclude'
-                          ? !exclusionReasons.contains(r['reason']) ||
-                                (r['note'] != null &&
-                                    !validExclusionNote(r['note']))
-                          : r['action'] != null ||
-                                r['reason'] != null ||
-                                r['note'] != null))) ||
-              (sc != null &&
-                  (sc is! Map ||
-                      sc['id'] is! String ||
-                      !RegExp(
-                        r'^SCH-[0-9A-HJKMNP-TV-Z]{26}$',
-                      ).hasMatch(sc['id']) ||
-                      (sc['due'] != null && !validScheduleDate(sc['due'])) ||
-                      (sc['review_after'] != null &&
-                          !validScheduleDate(sc['review_after'])) ||
-                      (sc['due'] == null && sc['review_after'] == null) ||
-                      (sc['repeat'] != null && sc['due'] == null)))) {
-            throw const FormatException();
-          }
-          // 本人が追加した行動（本体の入力の種類action）。fromは行動にした元の行。旧版の一覧にはない。
-          final act = i['action'], from = act is Map ? act['from'] : null;
-          if ((act != null && act is! Map) ||
-              (from != null &&
-                  (from is! Map ||
-                      from['input_id'] is! String ||
-                      !inputIdPattern.hasMatch(from['input_id']) ||
-                      from['text'] is! String ||
-                      (from['text'] as String).isEmpty ||
-                      (from['text'] as String).length > 2000 ||
-                      (from['key'] != null &&
-                          (from['key'] is! String ||
-                              !RegExp(
-                                r'^[a-f0-9]{64}$',
-                              ).hasMatch(from['key'])))))) {
-            throw const FormatException();
-          }
-          final repeat = sc is Map && sc['repeat'] != null
-              ? RepeatRule.parse(sc['repeat'])
-              : null;
-          final hints = <NowItemHint>[];
-          final rawHints = i['hints'];
-          if (rawHints != null) {
-            if (rawHints is! List) throw const FormatException();
-            for (final h in rawHints) {
-              if (h is! Map ||
-                  h['input_id'] is! String ||
-                  !inputIdPattern.hasMatch(h['input_id']) ||
-                  h['quote'] is! String ||
-                  (h['quote'] as String).isEmpty) {
-                throw const FormatException();
-              }
-              // 同じメモからの候補は1件だけにする（本体は重ねて書かない）。
-              if (hints.any((x) => x.inputId == h['input_id'])) continue;
-              hints.add(
-                NowItemHint(
-                  inputId: h['input_id'] as String,
-                  quote: h['quote'] as String,
-                  at: timestamp(h['at']),
-                ),
-              );
-            }
-          }
-          items.add(
-            NowItemRef(
-              key: i['key'],
-              section: i['section'],
-              label: i['label'],
-              text: i['text'],
-              inputId: i['input_id'],
-              resolutionId: r is Map ? r['id'] as String : null,
-              resolvedAt: r is Map ? timestamp(r['at']) : null,
-              exclusionReason: r is Map ? r['reason'] as String? : null,
-              exclusionNote: r is Map ? r['note'] as String? : null,
-              scheduleId: sc is Map ? sc['id'] as String : null,
-              due: sc is Map ? sc['due'] as String? : null,
-              reviewAfter: sc is Map ? sc['review_after'] as String? : null,
-              repeat: repeat,
-              hints: r == null ? hints : const [],
-              action: act is Map,
-              fromInputId: from is Map ? from['input_id'] as String : null,
-              fromText: from is Map ? from['text'] as String : null,
-              fromKey: from is Map ? from['key'] as String? : null,
-            ),
-          );
+          items.add(_nowItemRef(raw));
         }
         project.nowItems.addAll(items);
         project.nowItemsGeneratedAt = timestamp(j['generated_at']);
@@ -887,6 +901,33 @@ class HubRepository {
     } catch (_) {
       unassignedMemos.clear();
       unassignedTotal = 0;
+      _problem(path);
+    }
+  }
+
+  /// 本体が書く「プロジェクト未定」の行の項目一覧を読む。原文が届いているメモの行だけを使う。
+  void _readUnassignedItems() {
+    final path = '90_system/now-items/$unassignedScope.json',
+        raw = snapshot.files[path];
+    if (raw == null) return;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      if (j['schema_version'] != 1 ||
+          j['project'] != unassignedScope ||
+          j['items'] is! List) {
+        throw const FormatException();
+      }
+      final items = [for (final raw in j['items'] as List) _nowItemRef(raw)];
+      unassignedItemsGeneratedAt = timestamp(j['generated_at']);
+      final seen = <String>{};
+      for (final item in items) {
+        if (!seen.add(item.key)) throw const FormatException();
+        final input = _inputs[item.inputId];
+        if (input == null || input.kind == 'correction') continue;
+        unassignedItems.add(item);
+      }
+    } catch (_) {
+      unassignedItems.clear();
       _problem(path);
     }
   }
@@ -1452,7 +1493,7 @@ class HubRepository {
 
   /// 別AIへ渡す資料を止める注意があるか。[scope]は資料に入るプロジェクト（nullなら全体）。
   /// 本人のInput（取り込み前の依頼）とアイデアの問題、[scope]に入らないプロジェクトのフォルダーの
-  /// 問題、同期の競合コピー、表示だけに使うプロジェクト未定の一覧と今週の気づきの一覧の問題は、資料の内容に関係しないので
+  /// 問題、同期の競合コピー、表示だけに使うプロジェクト未定の一覧・項目一覧と今週の気づきの一覧の問題は、資料の内容に関係しないので
   /// 止めない。メモ・処理記録・知識など、どのプロジェクトに関係するか分からないものの問題は、
   /// これまでどおり止める。
   bool copyBlocked([Set<String>? scope]) {
@@ -1463,6 +1504,7 @@ class HubRepository {
           // 人の定義と一覧は、別のAIへ渡す文脈に含めない。
           path.startsWith('40_people/') ||
           path == unassignedActionsPath ||
+          path == '90_system/now-items/$unassignedScope.json' ||
           path == insightsPath) {
         continue;
       }
@@ -1503,7 +1545,7 @@ class HubRepository {
   void _readNow(HubProject project) {
     final path = '10_projects/${project.id}/NOW.md', raw = snapshot.files[path];
     if (raw == null) {
-      project.warnings.add('NOWが未生成です。整理後に表示されます。');
+      project.warnings.add('現状が未生成です。AIの読み取り後に表示されます。');
       return;
     }
     try {
@@ -1516,7 +1558,7 @@ class HubRepository {
       if (region == null ||
           m['project'] != project.id ||
           m['generated_hash'] != 'sha256:${digest(region.auto)}') {
-        project.warnings.add('NOWの整合性を確認できません。手動変更や同期競合の可能性があります。');
+        project.warnings.add('現状の整合性を確認できません。手動変更や同期競合の可能性があります。');
       }
       if (region != null) {
         project.notes =
@@ -1593,7 +1635,7 @@ class HubRepository {
       );
     } catch (_) {
       project.nowRecordId = null;
-      project.warnings.add('NOWの形式・整合性を確認できません。');
+      project.warnings.add('現状の形式・整合性を確認できません。');
       _problem(path);
     }
   }
@@ -1665,10 +1707,10 @@ class HubRepository {
   final List<_Unit> _units = [];
   void _corrections() {
     const pendingNotice = '訂正未反映です。旧要約の可能性があるため、訂正原文を確認してください。';
-    const unconfirmedNotice = '訂正整理済みですが、表示への反映未確認です。訂正原文も確認してください。';
+    const unconfirmedNotice = '訂正を読み取り済みですが、表示への反映未確認です。訂正原文も確認してください。';
     const reflectedNotice = '訂正原文と対応する要約です。未検証の内容を確認してください。';
     // 行動の文面の訂正は整理しない。NOWに直した文面が載るまで、表示への反映を確かめていない。
-    const actionNotice = '行動の文面を直しました。NOWへの反映未確認です。元の文面も原文に残っています。';
+    const actionNotice = '行動の文面を直しました。現状への反映未確認です。元の文面も原文に残っています。';
     final projectStates = <String, List<String>>{};
     final children = <String, HubRecord>{}, visited = <String>{};
     for (final r in _inputs.values.where((r) => r.kind == 'correction')) {
@@ -1846,9 +1888,7 @@ class HubRepository {
       for (final r in records.values) {
         if (ids.contains(r.sourceId) ||
             r.references.any((id) => ids.contains(records[id]?.sourceId))) {
-          r.warnings.add(
-            action ? '行動の文面を直しています。元の文面も原文に残っています。' : notice,
-          );
+          r.warnings.add(action ? '行動の文面を直しています。元の文面も原文に残っています。' : notice);
           for (final c in chain) {
             if (c.id != r.id && !r.references.contains(c.id)) {
               r.references.add(c.id);
@@ -2026,7 +2066,8 @@ class HubRepository {
             (doc.body.trim().isNotEmpty ||
                 m['confirmed'] != true ||
                 m['project_id'] is! String ||
-                !projectIdPattern.hasMatch(m['project_id']) ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
                 m['item_key'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !['resolve', 'reopen', 'exclude'].contains(m['action']) ||
@@ -2286,7 +2327,7 @@ class HubRepository {
               : creation
               ? '新しいプロジェクトの作成依頼: ${m['title']}'
               : conflictResolve
-              ? 'NOWを生成版に戻す依頼: ${projects[conflictProject]?.title ?? m['target']}'
+              ? '現状を生成版に戻す依頼: ${projects[conflictProject]?.title ?? m['target']}'
               : mergeChange
               ? '${m['operation'] == 'project-merge' ? '統合の依頼' : '統合の取り消しの依頼'}: ${projects[m['project_id']]?.title ?? m['project_id']} ${m['operation'] == 'project-merge' ? '→' : '←'} ${projects[m['into_id']]?.title ?? m['into_id']}'
               : statusChange
@@ -2302,6 +2343,8 @@ class HubRepository {
               : itemReport
               ? '${m['action'] == 'resolve'
                     ? '完了・解決'
+                    : m['action'] == 'exclude' && m['project_id'] == unassignedScope
+                    ? '却下'
                     : m['action'] == 'exclude'
                     ? '誤りとして外す（${exclusionReasonLabels[m['reason']]}）'
                     : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
@@ -2331,7 +2374,7 @@ class HubRepository {
           if (newerSchema(ack)) {
             // 本体が新しい形式で受付を記録した。競合ではないので、更新を案内する。
             item.state = 'unknown';
-            item.detail = '本体が新しい形式で受付を記録しました。アプリを更新してください。';
+            item.detail = 'Mac miniが新しい形式で受け取りを記録しました。アプリを更新してください。';
             _noteNewer(ackPath);
           } else if (ack['schema_version'] != 1 ||
               ack['status'] != 'accepted' ||
@@ -2350,7 +2393,7 @@ class HubRepository {
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
-              item.detail = '適用停止をMiniが受領しました。本文と採用履歴は保持されます。';
+              item.detail = '適用停止をMac miniが受け取りました。本文と採用履歴は保持されます。';
             }
             if (keeping) {
               final r = ack['result'] as Map;
@@ -2362,7 +2405,7 @@ class HubRepository {
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
-              item.detail = '「まだ有効」をMiniが記録しました。見直しの日数はここから数え直します。';
+              item.detail = '「まだ有効」をMac miniが記録しました。見直しの日数はここから数え直します。';
             }
             if (statusChange) {
               final r = ack['result'] as Map;
@@ -2483,8 +2526,8 @@ class HubRepository {
                 throw const FormatException();
               }
               item.detail = applied.isEmpty
-                  ? 'Mini受領済み。ほかの端末の変更の方が新しいか、同じ内容のため、記録は変わりませんでした。'
-                  : 'Miniが記録しました（${applied.map((g) => preferenceGroupLabels[g]).join('・')}）。';
+                  ? 'Mac miniが受け取り済み。ほかの端末の変更の方が新しいか、同じ内容のため、記録は変わりませんでした。'
+                  : 'Mac miniが記録しました（${applied.map((g) => preferenceGroupLabels[g]).join('・')}）。';
             }
             if (creation) {
               final r = ack['result'] as Map, memo = r['firstMemoInputId'];
@@ -2500,7 +2543,7 @@ class HubRepository {
               }
               item.detail = projects.containsKey(m['project_id'])
                   ? 'プロジェクトを作成しました。'
-                  : 'Mini受領済み。プロジェクト定義の同期を待っています。';
+                  : 'Mac miniが受け取り済み。プロジェクト定義の同期を待っています。';
             }
             if (conflictResolve) {
               final r = ack['result'] as Map;
@@ -2530,8 +2573,8 @@ class HubRepository {
               }
               ideaLinkId = r['linkId'] as String;
               item.detail = m['action'] == 'link'
-                  ? 'Miniがアイデアを束ねました。'
-                  : 'Miniが別の話として記録しました。';
+                  ? 'Mac miniがアイデアを束ねました。'
+                  : 'Mac miniが別の話として記録しました。';
             }
             if (reacting) {
               final r = ack['result'] as Map;
@@ -2546,7 +2589,7 @@ class HubRepository {
                 throw const FormatException();
               }
               reactionId = r['reactionId'] as String;
-              item.detail = 'Miniが反応を記録しました。';
+              item.detail = 'Mac miniが反応を記録しました。';
             }
             if (hintDismiss) {
               final r = ack['result'] as Map;
@@ -2568,7 +2611,7 @@ class HubRepository {
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
-              item.detail = 'Miniが見送りを受領しました。';
+              item.detail = 'Mac miniが見送りを受け取りました。';
             }
             if (decision) {
               final result = ack['result'] as Map,
@@ -2585,12 +2628,12 @@ class HubRepository {
               }
               final candidate = review.byId(m['candidate_id'] as String);
               item.detail = candidate == null
-                  ? 'Mini受領済み。判断・反映結果の同期を待っています。'
+                  ? 'Mac miniが受け取り済み。判断・反映結果の同期を待っています。'
                   : candidate.status == 'approved'
                   ? (candidate.reflected ? '承認済み・反映済み' : '承認済み・反映待ち')
                   : candidate.status == 'rejected'
                   ? '却下済み'
-                  : 'Mini受領済み。判断・反映結果を再同期してください。';
+                  : 'Mac miniが受け取り済み。判断・反映結果を再同期してください。';
             }
             final input = _inputs[(ack['result'] as Map)['inputId']];
             if (actionCapture) {
@@ -2637,7 +2680,7 @@ class HubRepository {
                 (item.state == 'accepted' && !correctionSynced))) {
           _outstandingCorrections[m['target_id'] as String] = item.id;
           if (item.state == 'accepted') {
-            item.detail = 'Mini受領済み。訂正原文の同期を待っています。';
+            item.detail = 'Mac miniが受け取り済み。訂正原文の同期を待っています。';
           }
         }
         if (statusChange) {
@@ -2686,7 +2729,7 @@ class HubRepository {
               _latestMergeIntoId(into) == changeId) {
             _outstandingMergeInto[into] = item.id;
             _outstandingMergeInto[m['project_id'] as String] = item.id;
-            item.detail = 'Mini受領済み。統合先のプロジェクト定義の同期を待っています。';
+            item.detail = 'Mac miniが受け取り済み。統合先のプロジェクト定義の同期を待っています。';
           }
         }
         if (creation &&
@@ -2710,11 +2753,11 @@ class HubRepository {
             // 確認したNOWのままなら同期待ち。片付け後に新しく止まったNOWは、別の競合として扱う。
             if (conflict != null && conflict.nowHash == m['target_hash']) {
               _outstandingConflicts[conflictProject] = item.id;
-              item.detail = 'Mini受領済み。NOWの同期を待っています。';
+              item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
             } else {
               item.detail = acceptedMemo
-                  ? 'NOWを生成版に戻しました。手で変えた行はメモとして残っています。'
-                  : 'NOWを生成版に戻しました。';
+                  ? '現状を生成版に戻しました。手で変えた行はメモとして残っています。'
+                  : '現状を生成版に戻しました。';
             }
           }
         }
@@ -2826,10 +2869,10 @@ class HubRepository {
               receivedAt == null ||
               generated.isBefore(receivedAt))) {
         _outstandingSchedules[key] = item.id;
-        item.detail = 'Mini受領済み。NOWの同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
       } else {
         item.detail =
-            '定例の回をMiniが反映しました。${next == null ? '' : '次の期日は $next です。'}';
+            '定例の回をMac miniが反映しました。${next == null ? '' : '次の期日は $next です。'}';
       }
     }
   }
@@ -2860,7 +2903,7 @@ class HubRepository {
           ? '答えは保存期間（$askRetentionDays日）を過ぎたため、本体が片付けました。'
           : askOff
           ? askDisabledWaiting
-          : 'Mini受領済み。答えは次の整理のときに作ります。';
+          : 'Mac miniが受け取り済み。答えは次のAI読み取りのときに作ります。';
     }
     asks.add(
       AskThread(
@@ -3061,7 +3104,7 @@ class HubRepository {
           // 記録より後に作られた一覧が届いていれば、一覧に従う。
           if (!current.generatedAt.isBefore(record.createdAt)) continue;
         }
-        item.detail = 'Mini受領済み。今週の気づきの一覧の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。今週の気づきの一覧の同期を待っています。';
       }
       _pendingInsightReactions[key] = (requestId: item.id, reaction: wanted);
     }
@@ -3093,7 +3136,7 @@ class HubRepository {
     final created = _ideaLinkCreatedAt(linkId), indexed = _ideaIndexAt;
     if (created == null || indexed == null || indexed.isBefore(created)) {
       _outstandingIdeaLinks[key] = item.id;
-      item.detail = 'Mini受領済み。似ているアイデアの一覧の同期を待っています。';
+      item.detail = 'Mac miniが受け取り済み。似ているアイデアの一覧の同期を待っています。';
     }
   }
 
@@ -3116,7 +3159,7 @@ class HubRepository {
       return '名前か別名が既存のプロジェクト${other is String && projectIdPattern.hasMatch(other) ? '（$other）' : ''}と重なるため、作成しませんでした。名前を変えて作成し直すか、既存のプロジェクトを使ってください。';
     }
     if (reason is Map && reason['code'] == 'conflict-target-changed') {
-      return '確認した後にNOWが変わっていました。再読込して差分を確認し直してください。';
+      return '確認した後に現状が変わっていました。再読込して差分を確認し直してください。';
     }
     if (reason is Map && reason['code'] == 'insight-missing') {
       return '今週の気づきが見つかりません（次の週の気づきに入れ替わった可能性があります）。再読込して確かめてください。';
@@ -3192,7 +3235,7 @@ class HubRepository {
     if (reason is Map && reason['code'] == 'conflict-missing') {
       return '戻す必要のある競合がありませんでした。既に生成版に戻っている可能性があります。';
     }
-    return '${error['code'] ?? '受付失敗'}';
+    return '${error['code'] ?? '受け付けられず'}';
   }
 
   /// 原文の記録（メモ・作業要約・訂正）が属する訂正チェーン。元の記録が先頭、最新の訂正が末尾。原文でなければnull。
@@ -3220,9 +3263,12 @@ class HubRepository {
   }
 
   String _itemTitle(String projectId, String key) {
-    final item = projects[projectId]?.nowItems
-        .where((i) => i.key == key)
-        .firstOrNull;
+    final item =
+        (projectId == unassignedScope
+                ? unassignedItems
+                : projects[projectId]?.nowItems ?? const <NowItemRef>[])
+            .where((i) => i.key == key)
+            .firstOrNull;
     return clip(item?.display ?? key.substring(0, 12), 80);
   }
 
@@ -3240,12 +3286,14 @@ class HubRepository {
     var waiting = false;
     if (item.state == 'accepted') {
       final at = (times ?? _resolutionTimes)[recordId],
-          generated = project?.nowItemsGeneratedAt;
+          generated = m['project_id'] == unassignedScope
+              ? unassignedItemsGeneratedAt
+              : project?.nowItemsGeneratedAt;
       if (at == null || generated == null || generated.isBefore(at)) {
         waiting = true;
-        item.detail = 'Mini受領済み。NOWの同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
       } else {
-        item.detail = '$whatをMiniが反映しました。';
+        item.detail = '$whatをMac miniが反映しました。';
       }
     } else if (item.state == 'waiting') {
       waiting = true;
@@ -3304,8 +3352,8 @@ class HubRepository {
         );
     if (item.state == 'accepted') {
       item.detail = shown
-          ? '次の一手にMiniが追加しました。'
-          : 'Mini受領済み。NOWの同期を待っています。';
+          ? '次の一手にMac miniが追加しました。'
+          : 'Mac miniが受け取り済み。現状の同期を待っています。';
     }
     if (project == null ||
         shown ||
@@ -3327,7 +3375,10 @@ class HubRepository {
   late final Map<String, List<Map<String, dynamic>>> _receiptsByRoot = () {
     final map = <String, List<Map<String, dynamic>>>{};
     for (final r in _receipts.values) {
-      for (final id in {r['input_id'], r['root_input_id']}.whereType<String>()) {
+      for (final id in {
+        r['input_id'],
+        r['root_input_id'],
+      }.whereType<String>()) {
         map.putIfAbsent(id, () => []).add(r);
       }
     }
@@ -3397,12 +3448,11 @@ class HubRepository {
   }
 
   /// 反映待ちの行動の元にした行か（どのプロジェクトの行動でも同じ行は本人が引き取ったものとして扱う。本体と同じ）。
-  bool pendingActionFrom(String inputId, String text) =>
-      projects.values.any(
-        (p) => p.pendingActions.any(
-          (a) => a.from?.inputId == inputId && a.from?.text == text,
-        ),
-      );
+  bool pendingActionFrom(String inputId, String text) => projects.values.any(
+    (p) => p.pendingActions.any(
+      (a) => a.from?.inputId == inputId && a.from?.text == text,
+    ),
+  );
 
   /// 「片付いたかも」の見送りの反映状況。NOWの項目一覧からその候補が消えていれば反映済みとする。
   void _hintDismissRequest(IntakeStatus item, Map<String, dynamic> m) {
@@ -3416,9 +3466,11 @@ class HubRepository {
         false;
     if (item.state == 'waiting' || (item.state == 'accepted' && shown)) {
       _outstandingHintDismissals['$key/$input'] = item.id;
-      if (item.state == 'accepted') item.detail = 'Mini受領済み。NOWの同期を待っています。';
+      if (item.state == 'accepted') {
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
+      }
     } else if (item.state == 'accepted') {
-      item.detail = '見送りをMiniが反映しました。';
+      item.detail = '見送りをMac miniが反映しました。';
     }
   }
 
@@ -3488,16 +3540,16 @@ class HubRepository {
       if (record == null) {
         waiting = current == before;
         item.detail = waiting
-            ? 'Mini受領済み。人の定義の同期を待っています。'
-            : 'Mini受領済み。変更記録の同期を待っています。';
+            ? 'Mac miniが受け取り済み。人の定義の同期を待っています。'
+            : 'Mac miniが受け取り済み。変更記録の同期を待っています。';
       } else if (current == record['before_hash'] &&
           latestPersonChangeId(personId) == changeId) {
         waiting = true;
-        item.detail = 'Mini受領済み。人の定義の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。人の定義の同期を待っています。';
       } else {
         item.detail = current == record['after_hash']
-            ? '$whatをMiniが反映しました。'
-            : '$whatをMiniが反映しました（その後に別の変更があります）。';
+            ? '$whatをMac miniが反映しました。'
+            : '$whatをMac miniが反映しました（その後に別の変更があります）。';
       }
     } else if (item.state == 'waiting') {
       waiting = current == before;
@@ -3537,16 +3589,16 @@ class HubRepository {
       if (record == null) {
         waiting = current == m['project_hash'];
         item.detail = waiting
-            ? 'Mini受領済み。プロジェクト定義の同期を待っています。'
-            : 'Mini受領済み。変更記録の同期を待っています。';
+            ? 'Mac miniが受け取り済み。プロジェクト定義の同期を待っています。'
+            : 'Mac miniが受け取り済み。変更記録の同期を待っています。';
       } else if (current == record['before_hash'] &&
           latest(projectId) == changeId) {
         waiting = true;
-        item.detail = 'Mini受領済み。プロジェクト定義の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。プロジェクト定義の同期を待っています。';
       } else {
         item.detail = current == record['after_hash']
-            ? '$whatをMiniが反映しました。'
-            : '$whatをMiniが反映しました（その後に別の変更があります）。';
+            ? '$whatをMac miniが反映しました。'
+            : '$whatをMac miniが反映しました（その後に別の変更があります）。';
       }
     } else if (item.state == 'waiting') {
       waiting = current == m['project_hash'];
@@ -3561,7 +3613,8 @@ class HubRepository {
   /// 最近のメモ（原文・作業要約・訂正）。新しい順の全件。画面側で少しずつ表示する。
   List<HubRecord> get recent => _ordered
       .where(
-        (r) => ['memo', 'work-summary', 'action', 'correction'].contains(r.kind),
+        (r) =>
+            ['memo', 'work-summary', 'action', 'correction'].contains(r.kind),
       )
       .toList();
   List<HubRecord> get ideas => _ordered.where((r) => r.kind == 'idea').toList();
@@ -3926,7 +3979,7 @@ class HubRepository {
         final project = projects[resolveProject(record.sourceId)];
         if (project == null || _blocksContext(project)) {
           throw FormatException(
-            '「${record.title}」のNOWに整合性・訂正の反映・競合の注意があります。プロジェクト画面で確認するか、かごから外してください。',
+            '「${record.title}」の現状に整合性・訂正の反映・競合の注意があります。プロジェクト画面で確認するか、かごから外してください。',
           );
         }
         if (!seen.add('NOW:${project.id}')) continue;

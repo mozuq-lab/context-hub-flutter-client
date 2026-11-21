@@ -36,7 +36,7 @@ void main() {
   test('Dartの実保存REQを上流parseIntake/ingestが原文のまま重複なく受領', () async {
     await check(draft);
   });
-  test('選んで深掘りのメモを、metaを保ったまま上流が受領する', () async {
+  test('質問に答えてまとめるのメモを、metaを保ったまま上流が受領する', () async {
     final s = GuidedSession(
       id: '33333333-2222-4333-8444-555555555555',
       vault: 'vault',

@@ -9,14 +9,15 @@ const root=await mkdtemp(join(tmpdir(),'ctx-review-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
  const{files}=JSON.parse(await readFile(fixture,'utf8'));for(const[p,value]of Object.entries(files))await vault.write(p,value);
+ const before=(await buildReviewIndex(config)).items.find(i=>i.id===packet.candidate_id),pendingBefore=(await buildReviewIndex(config)).items.filter(i=>i.status==='pending').length;
  await vault.create(path,raw);await utimes(await vault.path(path),new Date(0),new Date(0));
  assert.equal((await ingest(config)).accepted,1);assert.equal((await ingest(config)).deduped,1);
  const ack=JSON.parse(await vault.read(`90_system/intake/${packet.request_id}.json`));assert.equal(ack.result.candidateId,packet.candidate_id);
  await rebuildDashboard(config);const index=await buildReviewIndex(config),candidate=index.items.find(i=>i.id===packet.candidate_id);
- assert.equal(candidate.status,packet.operation.endsWith('approve')?'approved':'rejected');assert.equal(candidate.reflected,true);assert.equal(index.items.filter(i=>i.status==='pending').length,3);
+ assert.equal(candidate.status,packet.operation.endsWith('approve')?'approved':'rejected');assert.equal(candidate.reflected,true);assert.equal(index.items.filter(i=>i.status==='pending').length,pendingBefore-(before?.status==='pending'?1:0));
  assert.equal(await vault.read(path),raw);
  // 確定後の訂正は過去の判断を取り消さない。端末側も同じ履歴を保持する。
- if(candidate.inputIds.length){
+ if(candidate.inputIds.length&&before?.status!=='stale'){
   await correctInput(config,candidate.inputIds.at(-1),{source:'cli',occurredAt:'2026-11-01T04:00:00Z',text:'判断後に根拠を見直す'});
   await rebuildDashboard(config);
   assert.equal((await buildReviewIndex(config)).items.find(i=>i.id===candidate.id).status,candidate.status);

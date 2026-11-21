@@ -186,7 +186,7 @@ void main() {
     }
   });
 
-  test('止まったNOWの差分を示し、Dartの依頼を本体が受理すると生成版に戻る', () async {
+  test('更新が止まった現状の差分を示し、Dartの依頼を本体が受理すると生成版に戻る', () async {
     final access = TempAccess();
     await access.init();
     try {
@@ -234,7 +234,7 @@ void main() {
         contains('サンプルの検索を確認する。'),
       );
       final item = synced.intake.firstWhere((i) => i.id == saved.requestId);
-      expect(item.title, 'NOWを生成版に戻す依頼: AI Context Hub');
+      expect(item.title, '現状を生成版に戻す依頼: AI Context Hub');
       expect(item.detail, contains('生成版に戻しました'));
       final memo = synced.records.values.where(
         (r) => r.kind == 'memo' && r.body.contains('サンプルの検索は手で確認済み。'),
@@ -292,7 +292,7 @@ void main() {
     expect(repo.pendingProjectCreations, isEmpty);
   });
 
-  testWidgets('メニューから新しいプロジェクトを依頼し、止まったNOWには戻す操作を出す', (tester) async {
+  testWidgets('メニューから新しいプロジェクトを依頼し、更新が止まった現状には戻す操作を出す', (tester) async {
     final files = fixtureFiles();
     files['90_system/conflicts/NOW.context-hub.01M2DSFVRRA5MFS95MKFPP2CCZ.md'] =
         files[nowPath]!;
@@ -317,7 +317,7 @@ void main() {
     await tester.tap(find.byKey(const Key('project-context-hub')).first);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('now-conflict')), findsOneWidget);
-    expect(find.text('NOWの更新が止まっています'), findsOneWidget);
+    expect(find.text('現状の更新が止まっています'), findsOneWidget);
     expect(find.textContaining('手で直した次の一手'), findsWidgets);
     await tester.tap(find.byKey(const Key('conflict-resolve')));
     await tester.pumpAndSettle();
@@ -352,7 +352,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('project-create-submit')));
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに作成の依頼を保存しました'), findsOneWidget);
+    expect(find.text('この端末に作成の依頼を保存しました'), findsOneWidget);
     final create = access.requests.values
         .map(parseMarkdown)
         .firstWhere((d) => d.meta['operation'] == 'project-create');

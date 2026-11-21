@@ -91,7 +91,7 @@ void main() {
     await tester.enterText(find.byKey(const Key('memo-text')), '雑な思いつきを保存');
     await tester.tap(find.byKey(const Key('save-memo')));
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    expect(find.text('この端末に保存しました'), findsOneWidget);
     expect(access.writes, 1);
   });
   testWidgets('狭い画面でもdrawerから最近のメモを開ける', (tester) async {

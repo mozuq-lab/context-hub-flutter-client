@@ -38,7 +38,7 @@ Future<void> showPreferenceSync(BuildContext context, HubController c) async {
                 children: [
                   Text(
                     '${preferenceGroups.map((g) => preferenceGroupLabels[g]).join('・')}を、同じVaultを使うほかの端末（MacとAndroid）とそろえます。'
-                    '変えたときに受付ファイルでMiniへ送り、Miniがまとまりごとに新しい方を残します。ほかの端末は読み込んだときに取り込みます。'
+                    '変えたときに保存してMac miniへ送り、Mac miniがまとまりごとに新しい方を残します。ほかの端末は読み込んだときに取り込みます。'
                     '既読・ウインドウ・通知・APIキーのような、この端末だけの設定は送りません。',
                     style: const TextStyle(fontSize: 13, height: 1.6),
                   ),

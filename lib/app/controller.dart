@@ -14,6 +14,7 @@ import '../core/home_widget.dart';
 import '../core/today.dart';
 import '../core/capture_progress.dart';
 import '../core/review_candidates.dart';
+import '../core/intake_features.dart' show unassignedScope;
 import '../storage/review_service.dart';
 import '../core/people.dart';
 import '../core/models.dart';
@@ -835,10 +836,20 @@ class HubController extends ChangeNotifier {
   Future<void> setToday(String projectId, String itemKey, bool on) async {
     if (!on) return _saveToday((t) => t.remove(itemKey));
     final repo = repository;
+    // プロジェクト未定の行は、本体の項目一覧（_unassigned）から選ぶ。
+    if (projectId == unassignedScope) {
+      final item = repo?.unassignedItems
+          .where((i) => i.key == itemKey)
+          .firstOrNull;
+      if (item == null || item.resolved) {
+        throw StateError('この行は片付いたか、一覧から見つかりません。再読込して確かめてください。');
+      }
+      return _saveToday((t) => t.add(TodayPick.unassigned(item)));
+    }
     final project = repo?.projects[projectId];
     final item = project?.nowItems.where((i) => i.key == itemKey).firstOrNull;
     if (project == null || item == null || item.resolved) {
-      throw StateError('この項目は片付いたか、NOWから見つかりません。再読込して確かめてください。');
+      throw StateError('この項目は片付いたか、現状から見つかりません。再読込して確かめてください。');
     }
     await _saveToday((t) => t.add(TodayPick.of(project, item)));
   }
@@ -1367,7 +1378,7 @@ class HubController extends ChangeNotifier {
     if (draftId != null) {
       // 保存確認待ちの操作がある間は、同じ下書きから二重に入力を作らない。
       if (pending.isNotEmpty) {
-        throw StateError('保存確認待ちの操作があります。受付状況で確認してから保存してください。');
+        throw StateError('保存確認待ちの操作があります。保存と反映で確認してから保存してください。');
       }
       final found = repository!.gitDrafts[draftId];
       if (found == null ||
@@ -1441,7 +1452,7 @@ class HubController extends ChangeNotifier {
     try {
       // 結果不明の依頼が残っていると、同じチェーンへの訂正が届いているかを判断できない。
       if (pending.isNotEmpty) {
-        throw StateError('保存確認待ちの操作があります。受付状況で確認してから訂正してください。');
+        throw StateError('保存確認待ちの操作があります。保存と反映で確認してから訂正してください。');
       }
       final fresh = await access.readSnapshot(target);
       if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
@@ -1453,7 +1464,7 @@ class HubController extends ChangeNotifier {
         throw CorrectionTargetChanged();
       }
       if (parsed.correctionRequestIdFor(recordId) != null) {
-        throw StateError('このメモの訂正は反映待ちです。受付状況を確認してください。');
+        throw StateError('このメモの訂正は反映待ちです。保存と反映を確認してください。');
       }
       if (text.trim() == chain.last.body.trim()) {
         throw StateError('訂正前と同じ本文です。直したい箇所を書き換えてください。');
@@ -1522,14 +1533,14 @@ class HubController extends ChangeNotifier {
     final candidate = review?.byId(id);
     if (old.snapshot.fingerprint != fresh.fingerprint ||
         candidate == null ||
-        !(retiring ? candidate.retirable : candidate.actionable)) {
+        !(retiring ? candidate.retirable : candidate.rejectable)) {
       throw StateError('候補または根拠が変更されています。表示を確認してから操作してください。');
     }
     if ((retiring
             ? review!.retirementRequestIdFor(id)
             : review!.requestIdFor(id)) !=
         null) {
-      throw StateError('この候補の依頼は保存済みです。受付状況を確認してください。');
+      throw StateError('この候補の依頼は保存済みです。保存と反映を確認してください。');
     }
     if (target != null && !retiring) review!.validateTarget(target);
     // まとめて判断する案。本人が外した案（[exclude]）は含めず、確認待ちに残す。
@@ -1592,13 +1603,17 @@ class HubController extends ChangeNotifier {
       final candidate = review?.byId(ticket.candidate.id);
       if (fresh.fingerprint != ticket.fingerprint ||
           candidate == null ||
-          !(ticket.retiring ? candidate.retirable : candidate.actionable) ||
+          !(ticket.retiring
+              ? candidate.retirable
+              : action == 'reject'
+              ? candidate.rejectable
+              : candidate.actionable) ||
           candidate.candidateHash != ticket.candidate.candidateHash ||
           (ticket.retiring
                   ? review!.retirementRequestIdFor(candidate.id)
                   : review!.requestIdFor(candidate.id)) !=
               null) {
-        throw StateError('確認中に候補・根拠・受付が変わりました。再読込して確認してください。');
+        throw StateError('確認中に候補・根拠・受け取り状況が変わりました。再読込して確認してください。');
       }
       if (ticket.retiring != (action == 'retire')) {
         throw const FormatException('確認と操作が一致しません。');
@@ -1616,7 +1631,7 @@ class HubController extends ChangeNotifier {
         for (final shown in ticket.covers) {
           final member = members[shown.id];
           if (member == null || member.candidateHash != shown.candidateHash) {
-            throw StateError('確認中に候補・根拠・受付が変わりました。再読込して確認してください。');
+            throw StateError('確認中に候補・根拠・受け取り状況が変わりました。再読込して確認してください。');
           }
           covers.add(member);
         }
@@ -1694,7 +1709,7 @@ class HubController extends ChangeNotifier {
       }
       if (review!.policyKeepRequestIdFor(candidateId) != null ||
           review!.retirementRequestIdFor(candidateId) != null) {
-        throw StateError('この方針の依頼は保存済みです。受付状況を確認してください。');
+        throw StateError('この方針の依頼は保存済みです。保存と反映を確認してください。');
       }
       // 確かめた内容と、前回確かめた日時を含める。保存結果が不明なまま押し直しても同じ操作として1回だけ保存する。
       final key =
@@ -1739,14 +1754,14 @@ class HubController extends ChangeNotifier {
         throw StateError('プロジェクト定義が変更されています。表示を確認してから操作してください。');
       }
       if (parsed.projectStatusRequestIdFor(projectId) != null) {
-        throw StateError('このプロジェクトの状態変更は依頼済みです。受付状況を確認してください。');
+        throw StateError('このプロジェクトの状態変更は依頼済みです。保存と反映を確認してください。');
       }
       if (parsed.projectDefinitionRequestIdFor(projectId) != null) {
         throw StateError('呼び名とキーワードの変更が反映されるまで待ってから依頼してください。');
       }
       _refuseMerged(parsed, project);
       if (pending.isNotEmpty) {
-        throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
+        throw StateError('保存確認待ちの操作があります。保存と反映で確認してから依頼してください。');
       }
       // 状態を含めないことで、保存結果が不明なまま別の状態を依頼する二重送信を防ぐ。
       // 最新の変更記録を含め、同じ定義へ戻った後の依頼が過去の操作と混ざらないようにする。
@@ -1806,7 +1821,7 @@ class HubController extends ChangeNotifier {
           if (parsed.projectMergeRequestIdFor(p.id) != null ||
               parsed.projectDefinitionRequestIdFor(p.id) != null ||
               parsed.projectStatusRequestIdFor(p.id) != null) {
-            throw StateError('「${p.title}」への依頼が反映待ちです。受付状況を確認してください。');
+            throw StateError('「${p.title}」への依頼が反映待ちです。保存と反映を確認してください。');
           }
         }
         if (unmerge) {
@@ -1852,7 +1867,7 @@ class HubController extends ChangeNotifier {
         }
         if (parsed.projectDefinitionRequestIdFor(projectId) != null ||
             parsed.projectStatusRequestIdFor(projectId) != null) {
-          throw StateError('このプロジェクトへの依頼が反映待ちです。受付状況を確認してください。');
+          throw StateError('このプロジェクトへの依頼が反映待ちです。保存と反映を確認してください。');
         }
         _refuseMerged(parsed, found);
         final problem = next.problem;
@@ -1897,7 +1912,7 @@ class HubController extends ChangeNotifier {
           throw StateError('人の定義が変更されています。表示を確認してから操作してください。');
         }
         if (parsed.personRequestIdFor(personId) != null) {
-          throw StateError('この人への依頼が反映待ちです。受付状況を確認してください。');
+          throw StateError('この人への依頼が反映待ちです。保存と反映を確認してください。');
         }
       }
       if (draft != null) {
@@ -1951,7 +1966,7 @@ class HubController extends ChangeNotifier {
       _changed();
       final key = '${target.identity}/${keyFor(parsed)}';
       if (pending.isNotEmpty) {
-        throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
+        throw StateError('保存確認待ちの操作があります。保存と反映で確認してから依頼してください。');
       }
       final operation = _reviewOperations.putIfAbsent(
         key,
@@ -1993,19 +2008,29 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
+        final unassigned = projectId == unassignedScope;
+        if (unassigned && !parsed.intakeFeatures.unassignedItems) {
+          throw StateError(
+            'Mac miniの本体がプロジェクト未定の行の完了・却下に対応していません。本体を更新してください。',
+          );
+        }
         // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
         if (parsed.projects[projectId] case final owner?) {
           _refuseMerged(parsed, owner);
         }
-        final found = parsed.projects[projectId]?.nowItems
-            .where((i) => i.key == itemKey)
-            .firstOrNull;
+        final found =
+            (unassigned
+                    ? parsed.unassignedItems
+                    : parsed.projects[projectId]?.nowItems ??
+                          const <NowItemRef>[])
+                .where((i) => i.key == itemKey)
+                .firstOrNull;
         // 戻せるのは欄から外れている項目だけ、完了・解決にする・外すのは欄にある項目だけ。
         if (found == null || (action != 'reopen') == found.resolved) {
-          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
         if (parsed.itemRequestIdFor(itemKey) != null) {
-          throw StateError('この項目は報告済みです。受付状況を確認してください。');
+          throw StateError('この項目は報告済みです。保存と反映を確認してください。');
         }
         item = found;
         // 最新の解決・再開記録を含め、解決→再開→解決のように同じ操作を繰り返しても過去の操作と混ざらないようにする。
@@ -2050,15 +2075,15 @@ class HubController extends ChangeNotifier {
               found.section != 'next' ||
               found.inputId != from!.inputId ||
               found.text != from.text) {
-            throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+            throw StateError('現状が更新されています。表示を確認してから操作してください。');
           }
           // 完了・誤りとして外す報告が反映待ちの項目は、行動にしない（本体の扱いが決まっていないため）。
           if (parsed.itemRequestIdFor(key) != null) {
-            throw StateError('この項目への報告が反映待ちです。受付状況を確認してください。');
+            throw StateError('この項目への報告が反映待ちです。保存と反映を確認してください。');
           }
           // 日付・定例の回の依頼が反映待ちの項目も、先に行動になると依頼が断られるため、反映を待つ。
           if (parsed.scheduleRequestIdFor(key) != null) {
-            throw StateError('この項目の日付の依頼が反映待ちです。受付状況を確認してください。');
+            throw StateError('この項目の日付の依頼が反映待ちです。保存と反映を確認してください。');
           }
         } else if (from != null &&
             !owner.sections['proposals']!.any((e) {
@@ -2066,7 +2091,7 @@ class HubController extends ChangeNotifier {
               return shown?.inputId == from.inputId && shown?.text == from.text;
             })) {
           // 「提案」の行は、今のNOWにまだ載っているときだけ行動にする。
-          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
         if (from != null &&
             (parsed.pendingActionFrom(from.inputId, from.text) ||
@@ -2107,7 +2132,7 @@ class HubController extends ChangeNotifier {
             .where((i) => i.key == itemKey)
             .firstOrNull;
         if (found == null || found.resolved) {
-          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
         // 繰り返しを送らない依頼では、本体は今の繰り返しを保つ（期日を外すと繰り返しも外れる）。
         final nextRepeat = withRepeat
@@ -2122,7 +2147,7 @@ class HubController extends ChangeNotifier {
           throw StateError('Mac miniの本体が繰り返しに対応していません。本体を更新してください。');
         }
         if (parsed.scheduleRequestIdFor(itemKey) != null) {
-          throw StateError('この項目の日付は依頼済みです。受付状況を確認してください。');
+          throw StateError('この項目の日付は依頼済みです。保存と反映を確認してください。');
         }
         // 完了・解決の報告が先に反映されると、本体は日付の依頼を断る。
         if (parsed.itemRequestIdFor(itemKey) != null) {
@@ -2168,10 +2193,10 @@ class HubController extends ChangeNotifier {
             .where((i) => i.key == itemKey)
             .firstOrNull;
         if (found == null || !found.repeating) {
-          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
         if (parsed.scheduleRequestIdFor(itemKey) != null) {
-          throw StateError('この項目の日付は依頼済みです。受付状況を確認してください。');
+          throw StateError('この項目の日付は依頼済みです。保存と反映を確認してください。');
         }
         if (parsed.itemRequestIdFor(itemKey) != null) {
           throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
@@ -2194,9 +2219,7 @@ class HubController extends ChangeNotifier {
     return _confirmedRequest(
       (parsed) {
         if (!parsed.intakeFeatures.ask) {
-          throw StateError(
-            'Mac miniの本体で「記録に聞く」が使えません。本体の更新と設定（ask.enabled）を確かめてください。',
-          );
+          throw StateError('今は「記録に聞く」を使えません。Mac miniの本体を更新するか、この機能をオンにしてください。');
         }
         if (project != null && !parsed.projects.containsKey(project)) {
           throw StateError('プロジェクトが見つかりません。選び直してください。');
@@ -2227,13 +2250,13 @@ class HubController extends ChangeNotifier {
         if (found == null ||
             found.resolved ||
             !found.hints.any((h) => h.inputId == inputId)) {
-          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
         if (parsed.itemRequestIdFor(itemKey) != null) {
-          throw StateError('この項目は完了・解決を報告済みです。受付状況を確認してください。');
+          throw StateError('この項目は完了・解決を報告済みです。保存と反映を確認してください。');
         }
         if (parsed.hintDismissRequestIdFor(itemKey, inputId) != null) {
-          throw StateError('この候補は見送り済みです。受付状況を確認してください。');
+          throw StateError('この候補は見送り済みです。保存と反映を確認してください。');
         }
         item = found;
         return 'hint/$projectId/$itemKey/$inputId';
@@ -2266,7 +2289,7 @@ class HubController extends ChangeNotifier {
       repository = parsed;
       _changed();
       if (pending.any((p) => p.operationId != request.operationId)) {
-        throw StateError('保存確認待ちの操作があります。受付状況で確認してから依頼してください。');
+        throw StateError('保存確認待ちの操作があります。保存と反映で確認してから依頼してください。');
       }
       // 保存結果が不明だった同じ依頼の確認では、自分自身を作成依頼中として重なりに数えない。
       if (!pending.any((p) => p.operationId == request.operationId)) {
@@ -2294,10 +2317,10 @@ class HubController extends ChangeNotifier {
       (parsed) {
         final found = parsed.projects[projectId];
         if (found?.nowConflict?.nowHash != expectedHash) {
-          throw StateError('NOWが更新されています。表示を確認してから操作してください。');
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
         if (parsed.conflictRequestIdFor(projectId) != null) {
-          throw StateError('生成版に戻す依頼は送信済みです。受付状況を確認してください。');
+          throw StateError('生成版に戻す依頼は送信済みです。保存と反映を確認してください。');
         }
         project = found!;
         return 'conflict-resolve/$projectId/$expectedHash';
@@ -2341,7 +2364,7 @@ class HubController extends ChangeNotifier {
           throw StateError('似ているアイデアの一覧が更新されています。表示を確認してから操作してください。');
         }
         if (parsed.ideaLinkRequestIdFor(a, b) != null) {
-          throw StateError('この組は依頼済みです。受付状況を確認してください。');
+          throw StateError('この組は依頼済みです。保存と反映を確認してください。');
         }
         final ra = parsed.ideaRecord(a), rb = parsed.ideaRecord(b);
         if (ra == null || rb == null) {
@@ -2401,7 +2424,7 @@ class HubController extends ChangeNotifier {
           throw StateError('下書きが更新されています。表示を確認してから操作してください。');
         }
         if (parsed.draftRequestIdFor(draftId) != null) {
-          throw StateError('この下書きは操作済みです。受付状況を確認してください。');
+          throw StateError('この下書きは操作済みです。保存と反映を確認してください。');
         }
         draft = found;
         return 'git-draft-dismiss/$draftId/$expectedHash';

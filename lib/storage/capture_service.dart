@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../core/happened.dart';
 import '../core/people.dart';
 import '../core/models.dart';
+import '../core/intake_features.dart' show unassignedScope;
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
 import '../core/preferences.dart';
@@ -379,7 +380,10 @@ class CaptureService {
     List<ReviewCandidate> covers = const [],
   }) => _serial(() async {
     if (!_uuid.hasMatch(operationId) ||
-        !candidate.actionable ||
+        // 古くなった候補は却下だけ。まとめた判断にはできない（本体と同じ）。
+        !(action == 'reject' && covers.isEmpty
+            ? candidate.rejectable
+            : candidate.actionable) ||
         !['approve', 'reject'].contains(action) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(candidate.candidateHash)) {
       throw const FormatException('候補と操作内容を確認してください。');
@@ -558,7 +562,7 @@ class CaptureService {
         !projectIdPattern.hasMatch(project.id) ||
         conflict == null ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(conflict.nowHash)) {
-      throw const FormatException('戻す対象のNOWを確認してください。');
+      throw const FormatException('戻す対象の現状を確認してください。');
     }
     final fields = <String, dynamic>{
       'operation': 'conflict-resolve',
@@ -641,7 +645,10 @@ class CaptureService {
   }) => _serial(() async {
     final exclude = action == 'exclude';
     if (!_uuid.hasMatch(operationId) ||
-        !projectIdPattern.hasMatch(projectId) ||
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
+        // プロジェクト未定の行は、「もう古い」としてだけ外せる（本体と同じ）。
+        (projectId == unassignedScope && exclude && reason != 'outdated') ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
         !['resolve', 'reopen', 'exclude'].contains(action) ||
         (action != 'reopen') == item.resolved ||

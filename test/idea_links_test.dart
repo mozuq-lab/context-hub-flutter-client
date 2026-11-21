@@ -99,7 +99,7 @@ void main() {
     expect(group.linksDirectly(c.b, c.a), isTrue);
     expect(repo.ideaLinkRequestIdFor(c.a, c.b), isNull);
     expect(repo.intake.single.state, anyOf('accepted', 'organized'));
-    expect(repo.intake.single.detail, 'Miniがアイデアを束ねました。');
+    expect(repo.intake.single.detail, 'Mac miniがアイデアを束ねました。');
 
     // 束から外す（別の話）と、束も候補もなくなる。
     final aHash = digestOf(linked, c.a), bHash = digestOf(linked, c.b);

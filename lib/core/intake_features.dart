@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'happened.dart' show defaultMaxBackdateDays;
 import 'models.dart' show askQuestionChars;
 
+/// 本体の「プロジェクト未定」の行を指す、項目の置き場（記録と依頼の`project_id`に入る）。
+const unassignedScope = '_unassigned';
+
 /// 本体が書く、受け付ける依頼の種類とメモの任意の欄の一覧。
 const intakeFeaturesPath = '90_system/intake-features.json';
 
@@ -18,6 +21,8 @@ class IntakeFeatures {
     this.askEnabled = false,
     this.askMaxChars = askQuestionChars,
     this.captureKinds = const {},
+    this.itemScopes = const {},
+    this.reviewRejects = const {},
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -38,7 +43,19 @@ class IntakeFeatures {
   /// 送れる入力の種類（`capture_kinds`）。書かれていなければメモと作業要約だけ。
   final Set<String> captureKinds;
 
+  /// 完了・却下を受け付ける、プロジェクト以外の項目の置き場（`item_scopes`）。
+  final Set<String> itemScopes;
+
+  /// 確認待ち以外で却下を受け付ける候補の状態（`review_rejects`）。`stale`は古くなった候補。
+  final Set<String> reviewRejects;
+
+  /// 古くなった候補を却下できる。
+  bool get staleReject => reviewRejects.contains('stale');
+
   bool get happenedOn => captureFields.contains('happened_on');
+
+  /// 「プロジェクト未定」の行を完了・却下にでき、「今日の3つ」に選べる（行に項目キーがある）。
+  bool get unassignedItems => itemScopes.contains(unassignedScope);
 
   /// 本人が次の一手に直接足す行動（`kind: action`）を送れる。
   bool get actions => captureKinds.contains('action');
@@ -72,7 +89,9 @@ class IntakeFeatures {
       }
       final days = m['max_backdate_days'], titles = m['calendar_titles'];
       final schedule = m['item_schedule_fields'], ask = m['ask'];
-      final kinds = m['capture_kinds'];
+      final kinds = m['capture_kinds'],
+          scopes = m['item_scopes'],
+          rejects = m['review_rejects'];
       final askMax = ask is Map ? ask['max_question_chars'] : null;
       return IntakeFeatures._(
         itemScheduleFields: {
@@ -83,6 +102,16 @@ class IntakeFeatures {
         captureKinds: {
           if (kinds is List)
             for (final v in kinds)
+              if (v is String) v,
+        },
+        itemScopes: {
+          if (scopes is List)
+            for (final v in scopes)
+              if (v is String) v,
+        },
+        reviewRejects: {
+          if (rejects is List)
+            for (final v in rejects)
               if (v is String) v,
         },
         askEnabled: ask is Map && ask['enabled'] == true,

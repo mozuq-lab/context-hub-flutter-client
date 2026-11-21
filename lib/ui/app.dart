@@ -104,7 +104,7 @@ class _HubShellState extends State<HubShell> {
         context,
         message.text,
         action: (
-          label: message.page == 'intake' ? '受付状況' : '最近のメモ',
+          label: message.page == 'intake' ? '保存と反映' : '最近のメモ',
           onPressed: () {
             if (idle && c.repository != null) show(message.page);
           },
@@ -173,7 +173,7 @@ class _HubShellState extends State<HubShell> {
       return;
     }
     if (c.captureWarning != null) {
-      notice(context, '保存の確認情報を読めません。受付状況を確認してください。');
+      notice(context, '保存の確認情報を読めません。保存と反映を確認してください。');
       return;
     }
     // 記録の詳細などを開いていても、その上に開く。
@@ -320,7 +320,7 @@ class _HubShellState extends State<HubShell> {
     }
   }
 
-  /// プロジェクト画面の「出典付きcontextをコピー」と同じ確認を経てコピーする。
+  /// プロジェクト画面の「別のAIに渡す文章をコピー」と同じ確認を経てコピーする。
   Future<void> copyContext() async {
     final id = openProject;
     if (c.repository == null || c.loading) return;
@@ -331,7 +331,7 @@ class _HubShellState extends State<HubShell> {
     try {
       final text = await c.context(id);
       await Clipboard.setData(ClipboardData(text: text));
-      if (mounted) notice(context, '出典付きcontextをコピーしました');
+      if (mounted) notice(context, '別のAIに渡す文章をコピーしました');
     } catch (e) {
       if (mounted) notice(context, HubController.message(e));
     }
@@ -586,7 +586,7 @@ class _HubShellState extends State<HubShell> {
                   // 文脈かごは、記録を入れたとき（または開いている間）だけメニューに出す。
                   if (c.basket.ids.isNotEmpty || page == 'basket')
                     ('basket', '文脈かご', Icons.shopping_basket_outlined),
-                  ('intake', '受付状況', Icons.inbox_outlined),
+                  ('intake', '保存と反映', Icons.inbox_outlined),
                 ])
                   ListTile(
                     key: Key('nav-${item.$1}'),
@@ -616,7 +616,7 @@ class _HubShellState extends State<HubShell> {
                   ListTile(
                     key: const Key('nav-guided'),
                     leading: const Icon(Icons.checklist, size: 20),
-                    title: const Text('選んで深掘り'),
+                    title: const Text('質問に答えてまとめる'),
                     enabled: c.captureWarning == null && !c.loading,
                     onTap: () async {
                       Navigator.pop(context);
@@ -904,7 +904,7 @@ class _HubShellState extends State<HubShell> {
                 'basket' => '文脈かご',
                 'people' => '人',
                 _ when page.startsWith('person:') => '人',
-                'intake' => '受付状況',
+                'intake' => '保存と反映',
                 _ when openProject != null => 'プロジェクト',
                 _ => 'ホーム',
               }
@@ -939,7 +939,7 @@ class _HubShellState extends State<HubShell> {
                   ? null
                   : () => showGuided(context, c),
               icon: const Icon(Icons.checklist, size: 18),
-              label: const Text('選んで深掘り'),
+              label: const Text('質問に答えてまとめる'),
             ),
           ),
         if (has)
@@ -962,7 +962,7 @@ class _HubShellState extends State<HubShell> {
         if (c.error != null) NoticeBox(c.error!, error: true),
         if (c.captureWarning != null) NoticeBox(c.captureWarning!, error: true),
         if (c.pending.isNotEmpty)
-          NoticeBox('保存確認待ちが${c.pending.length}件あります。受付状況から同じ操作を確認できます。'),
+          NoticeBox('保存確認待ちが${c.pending.length}件あります。保存と反映から同じ操作を確認できます。'),
         Expanded(
           child: has
               ? HubView(
@@ -1140,7 +1140,7 @@ Future<void> showAttentionSettings(
               children: [
                 const Text(
                   'アプリを閉じている間も、数時間おきにこの端末に同期済みのVaultを読み、'
-                  '確認待ちの候補・作業記録の下書き・止まったNOWが増えたときだけ通知します。'
+                  '確認待ちの候補・作業記録の下書き・更新が止まった現状が増えたときだけ通知します。'
                   '通知に出すのは件数と種類だけで、本文は出しません。'
                   '読むのは端末内のフォルダーだけで、ネットワークには接続しません。'
                   '同期が遅れていると、通知も遅れます。'

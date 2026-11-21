@@ -139,7 +139,7 @@ void main() {
       );
       expect(
         accepted.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        'Mini受領済み。NOWの同期を待っています。',
+        'Mac miniが受け取り済み。現状の同期を待っています。',
       );
       final fixtureFile = File('${access.directory.path}/with-hint.json')
         ..writeAsStringSync(jsonEncode(files));
@@ -157,7 +157,7 @@ void main() {
       expect(synced.hintDismissRequestIdFor(item.key, hint.inputId), isNull);
       expect(
         synced.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        '見送りをMiniが反映しました。',
+        '見送りをMac miniが反映しました。',
       );
     } finally {
       await access.directory.delete(recursive: true);

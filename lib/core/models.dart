@@ -294,9 +294,9 @@ class BackupStatus {
     if (last == null) return const [];
     return [
       if (!last.ok)
-        '最後の確認でバックアップ（${last.archive}）から復元できませんでした（${last.issueCount}件の問題）。Miniで`ctx backup status`の内容を確かめ、バックアップを取り直してください。',
+        '最後の確認でバックアップ（${last.archive}）から復元できませんでした（${last.issueCount}件の問題）。Mac miniで`ctx backup status`の内容を確かめ、バックアップを取り直してください。',
       if (point != null && ageDays(now)! > last.maxAgeDays)
-        '確かめた復元点が${ageDays(now)}日前のバックアップです（目安は${last.maxAgeDays}日以内）。バックアップが続いているかを確認し、Miniで`ctx backup verify`を実行してください。',
+        '確かめた復元点が${ageDays(now)}日前のバックアップです（目安は${last.maxAgeDays}日以内）。バックアップが続いているかを確認し、Mac miniで`ctx backup verify`を実行してください。',
     ];
   }
 }
@@ -342,7 +342,7 @@ class HubProject {
     'open': [],
     'proposals': [],
   };
-  final List<String> warnings = ['AIによる整理・自己報告を含む、未検証の要約です。'], references = [];
+  final List<String> warnings = ['AIの読み取り・自己報告を含む、未検証の要約です。'], references = [];
 
   /// 本体が生成するプロジェクトの経緯（HISTORY.md）。古い本体や未生成ならnull。
   HubDigest? history;
@@ -654,7 +654,7 @@ const searchKindLabels = {
   'correction': '訂正',
   'idea': 'アイデア',
   'knowledge': '知識',
-  'now': 'NOW',
+  'now': '現状',
   'reference': '資料',
 };
 
@@ -835,9 +835,9 @@ class NewProjectRequest {
       }
     }
     for (final p in pending) {
-      if (p.projectId == projectId) return 'このプロジェクトは作成を依頼済みです。受付状況を確認してください。';
+      if (p.projectId == projectId) return 'このプロジェクトは作成を依頼済みです。保存と反映を確認してください。';
       if (wanted.contains(normalizeProjectName(p.title))) {
-        return '「${p.title}」は作成を依頼済みです。受付状況を確認してください。';
+        return '「${p.title}」は作成を依頼済みです。保存と反映を確認してください。';
       }
     }
     return null;

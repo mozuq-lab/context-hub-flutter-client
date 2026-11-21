@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/models.dart';
@@ -14,6 +15,28 @@ import 'fixtures.dart';
 
 const statusOp = '21111111-2222-4333-8444-555555555555';
 const projectPath = '10_projects/context-hub/project.md';
+
+/// プロジェクト画面の「…」を開く。
+Future<void> openProjectMore(WidgetTester tester) async {
+  await tester.ensureVisible(find.byKey(const Key('project-more')));
+  await tester.tap(find.byKey(const Key('project-more')));
+  await tester.pumpAndSettle();
+}
+
+/// 「…」の中の操作が押せるか。開いて確かめ、閉じる。
+Future<bool> projectMenuEnabled(WidgetTester tester, String key) async {
+  await openProjectMore(tester);
+  final enabled = tester.widget<PopupMenuItem>(find.byKey(Key(key))).enabled;
+  await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+  await tester.pumpAndSettle();
+  return enabled;
+}
+
+/// 画面の先頭へ戻る。
+Future<void> scrollToTop(WidgetTester tester) async {
+  await tester.drag(find.byType(ListView).last, const Offset(0, 3000));
+  await tester.pumpAndSettle();
+}
 
 void main() {
   test('サンプルのふりかえりと、状態・停滞・定義hashを読む', () {
@@ -107,7 +130,7 @@ void main() {
       final item = synced.intake.firstWhere((i) => i.id == saved.requestId);
       expect(item.state, 'accepted');
       expect(item.title, '状態変更依頼: AI Context Hub → 休止');
-      expect(item.detail, '状態の変更をMiniが反映しました。');
+      expect(item.detail, '状態の変更をMac miniが反映しました。');
       expect(synced.orderedProjects.last.id, 'context-hub');
       // 再開すると定義は元のhashへ戻る。古い休止依頼を未反映と扱わず、再び状態を変えられる。
       final paused = synced.projects['context-hub']!;
@@ -139,11 +162,11 @@ void main() {
       expect(back.projectStatusRequestIdFor('context-hub'), isNull);
       expect(
         back.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        '状態の変更をMiniが反映しました（その後に別の変更があります）。',
+        '状態の変更をMac miniが反映しました（その後に別の変更があります）。',
       );
       expect(
         back.intake.firstWhere((i) => i.id == resumed.requestId).detail,
-        '状態の変更をMiniが反映しました。',
+        '状態の変更をMac miniが反映しました。',
       );
       expect(back.latestStatusChangeId('context-hub'), isNotNull);
     } finally {
@@ -200,14 +223,20 @@ void main() {
     expect(find.text('直近60日のふりかえり'), findsOneWidget);
     expect(find.textContaining('停滞しているプロジェクト 1件'), findsOneWidget);
     expect(find.textContaining('停滞（14日超）'), findsWidgets);
+    // 停滞しているプロジェクトは、ホームから直接開ける。
+    expect(find.byKey(const Key('home-stale-context-hub')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('home-stale-context-hub')));
+    await tester.pumpAndSettle();
+    expect(find.text('プロジェクト · 進行中'), findsOneWidget);
     await tester.tap(find.byKey(const Key('nav-digest')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('digest-body')), findsOneWidget);
     expect(find.textContaining('動きのあったプロジェクト'), findsWidgets);
     await tester.tap(find.byKey(const Key('project-context-hub')).first);
     await tester.pumpAndSettle();
-    expect(find.text('PROJECT / 進行中'), findsOneWidget);
+    expect(find.text('プロジェクト · 進行中'), findsOneWidget);
     expect(find.textContaining('再開するか、休止・完了にするか'), findsOneWidget);
+    await openProjectMore(tester);
     await tester.tap(find.byKey(const Key('project-status')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('project-status-active')), findsNothing);
@@ -217,7 +246,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(submit);
     await tester.pumpAndSettle();
-    expect(find.text('状態の変更を依頼しました。Miniで受け付けられると反映されます。'), findsOneWidget);
+    expect(find.text('状態の変更を依頼しました。Mac miniで処理されると反映されます。'), findsOneWidget);
     expect(access.writes, 1);
     final meta = parseMarkdown(access.requests.values.single).meta;
     expect(meta['operation'], 'project-status');
@@ -230,13 +259,9 @@ void main() {
     });
     await c.reload();
     await tester.pumpAndSettle();
+    await scrollToTop(tester);
     expect(find.textContaining('状態の変更を依頼済みです'), findsOneWidget);
-    expect(
-      tester
-          .widget<OutlinedButton>(find.byKey(const Key('project-status')))
-          .onPressed,
-      isNull,
-    );
+    expect(await projectMenuEnabled(tester, 'project-status'), isFalse);
     expect(tester.takeException(), isNull);
   });
 }

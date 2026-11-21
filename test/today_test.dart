@@ -236,7 +236,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('today')), findsOneWidget);
     expect(find.text('今日の3つ（1/3）'), findsOneWidget);
-    expect(find.text('今日から外す'), findsNWidgets(2));
+    expect(find.text('今日の3つから外す'), findsNWidgets(2));
     // ホームにも出る。
     await tester.tap(find.text('ホーム').first);
     await tester.pumpAndSettle();

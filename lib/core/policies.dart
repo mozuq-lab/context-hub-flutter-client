@@ -48,7 +48,9 @@ class PolicyBundle {
     final ids = projectIds.toSet().toList()..sort();
     final projects = data['projects'] as Map;
     if (ids.any((id) => !projects.containsKey(id))) {
-      throw const FormatException('有効方針が未同期・未初期化・不整合です。Miniで集約し同期して再読込してください。');
+      throw const FormatException(
+        '有効方針が未同期・未初期化・不整合です。Mac miniで集約し同期して再読込してください。',
+      );
     }
     return '${_header(ids.isEmpty ? '共通のみ' : '共通＋プロジェクト ${ids.join(', ')}')}\n${policyDocument(data['global'] as List, '共通')}${ids.map((id) => '\n${policyDocument(projects[id] as List, 'プロジェクト $id')}').join()}';
   }
@@ -326,7 +328,9 @@ class PolicyReader {
     } on _NewerPolicies {
       throw const FormatException('有効方針を本体が新しい形式で書いています。アプリを更新してください。');
     } catch (_) {
-      throw const FormatException('有効方針が未同期・未初期化・不整合です。Miniで集約し同期して再読込してください。');
+      throw const FormatException(
+        '有効方針が未同期・未初期化・不整合です。Mac miniで集約し同期して再読込してください。',
+      );
     }
   }
 }

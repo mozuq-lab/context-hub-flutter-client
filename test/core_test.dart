@@ -225,7 +225,7 @@ void main() {
     expect(repo.warnings.join(' '), contains('整合性'));
     expect(() => repo.context('context-hub'), throwsFormatException);
   });
-  test('不完全な整理結果のreceiptを採用せず注意する', () {
+  test('不完全なAIの読み取り結果のreceiptを採用せず注意する', () {
     final files = fixtureFiles(), path = '90_system/receipts/$inputId.json';
     final receipt = jsonDecode(files[path]!) as Map<String, dynamic>;
     receipt['result'] = {'project_candidates': []};

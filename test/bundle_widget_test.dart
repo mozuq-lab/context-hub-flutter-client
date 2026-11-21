@@ -171,7 +171,7 @@ void main() {
     await tester.enterText(find.byKey(const Key('memo-text')), 'かごがあっても保存できる');
     await tester.tap(find.byKey(const Key('save-memo')));
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    expect(find.text('この端末に保存しました'), findsOneWidget);
     expect(access.writes, 1);
 
     await tester.pumpWidget(const SizedBox());

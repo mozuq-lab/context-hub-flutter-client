@@ -63,6 +63,13 @@ Map<String, String> withFeatures(
 String preferencesFile(Map<String, Map<String, Object?>> groups) =>
     jsonEncode({'schema_version': 1, 'groups': groups});
 
+/// 項目の「…」を開く。
+Future<void> openMore(WidgetTester tester, String tag) async {
+  await tester.ensureVisible(find.byKey(Key('item-more-$tag')));
+  await tester.tap(find.byKey(Key('item-more-$tag')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   test('項目一覧の繰り返しと本体の対応表を読み、不正な繰り返しの一覧は使わない', () {
     final repo = HubRepository(fixture(withRepeat(fixtureFiles(), 0)));
@@ -208,7 +215,7 @@ void main() {
       expect(synced.scheduleRequestIdFor(item.key), isNull);
       expect(
         synced.intake.firstWhere((i) => i.id == done.requestId).detail,
-        '定例の回をMiniが反映しました。次の期日は ${next.due} です。',
+        '定例の回をMac miniが反映しました。次の期日は ${next.due} です。',
       );
     } finally {
       await access.directory.delete(recursive: true);
@@ -391,7 +398,7 @@ void main() {
       expect(synced.sharedPreferences['pins']!.updatedAt, at);
       expect(
         synced.intake.single.detail,
-        'Miniが記録しました（ピン留めと並び順・メモのひな形・文脈かごの上限）。',
+        'Mac miniが記録しました（ピン留めと並び順・メモのひな形・文脈かごの上限）。',
       );
     } finally {
       await access.directory.delete(recursive: true);
@@ -509,9 +516,11 @@ void main() {
     await tester.pumpAndSettle();
     final item = c.repository!.projects[projectId]!.nowItems.first,
         short = item.key.substring(0, 12);
-    expect(find.text('定例を終える'), findsOneWidget);
+    // 定例は「今回を完了」を出し、やめる操作は「…」にまとめる。
+    expect(find.byKey(Key('round-done-$short')), findsOneWidget);
+    await openMore(tester, short);
+    expect(find.text('定例をやめる'), findsOneWidget);
     // 日付の画面では、今の繰り返しが選ばれ、期日を外すと繰り返しは選べない。
-    await tester.ensureVisible(find.byKey(Key('schedule-$short')));
     await tester.tap(find.byKey(Key('schedule-$short')));
     await tester.pumpAndSettle();
     ChoiceChip chip(String key) =>
@@ -544,7 +553,7 @@ void main() {
     await c.reload();
     await tester.pumpAndSettle();
     expect(find.byKey(Key('round-done-$short')), findsNothing);
-    expect(find.text('日付を依頼済み（反映待ち）'), findsOneWidget);
+    expect(find.text('期日を依頼済み（反映待ち）'), findsOneWidget);
   });
 
   testWidgets('記録に聞くで問いを送り、届いた答えの根拠から元の記録を開ける', (tester) async {
@@ -718,7 +727,7 @@ void main() {
     expect(old.warnings, isEmpty);
     expect(old.asks.single.request?.detail, contains('保存期間（30日）を過ぎた'));
     final fresh = HubRepository(fixture(files('2026-10-29T00:00:00.000Z')));
-    expect(fresh.asks.single.request?.detail, contains('次の整理'));
+    expect(fresh.asks.single.request?.detail, contains('次のAI読み取り'));
     // 本体の設定で無効にした間は、次の整理で答えるとは示さない（本体は有効に戻すと答える）。
     // 本体は受け付けたときに答え待ちの記録を書くので、記録が届いた後と、同期される前の両方を確かめる。
     final off = withFeatures(files('2026-10-29T00:00:00.000Z'), ['ask']);

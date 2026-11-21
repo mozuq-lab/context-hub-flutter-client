@@ -173,7 +173,7 @@ void main() {
     );
   });
 
-  test('この端末から保存したメモが、Miniで受け付けられ、整理されたことを1回ずつ知らせる', () async {
+  test('この端末から保存したメモが、Mac miniで受け付けられ、整理されたことを1回ずつ知らせる', () async {
     final access = MemoryUIAccess();
     final files = fixtureFiles();
     access.current = fixture(files);
@@ -195,7 +195,10 @@ void main() {
     expect(captureStage(c.repository!, saved.requestId), CaptureStage.accepted);
     var notices = c.takeCaptureNotices();
     expect(notices.map((n) => n.stage), [CaptureStage.accepted]);
-    expect(captureNoticeText(notices).text, 'メモをMiniが受け付けました（整理はこれから）');
+    expect(
+      captureNoticeText(notices).text,
+      'メモをMac miniが受け取りました（AIの読み取りはこれから）',
+    );
     expect(c.takeCaptureNotices(), isEmpty);
     access.current = fixture(
       processed(files, saved.requestId, raw, organized: true),
@@ -203,26 +206,26 @@ void main() {
     await c.reload();
     notices = c.takeCaptureNotices();
     expect(notices.map((n) => n.stage), [CaptureStage.organized]);
-    expect(captureNoticeText(notices), (text: 'メモが整理されました', page: 'recent'));
+    expect(captureNoticeText(notices), (text: 'メモをAIが読み取りました', page: 'recent'));
     // 見届けたものは、もう知らせない。
     await c.reload();
     expect(c.hasCaptureNotices, isFalse);
   });
 
-  test('知らせの文は件数と段階をまとめ、受け付けられなかったものがあれば受付状況へ案内する', () {
+  test('知らせの文は件数と段階をまとめ、受け付けられなかったものがあれば保存と反映へ案内する', () {
     expect(
       captureNoticeText(const [
         CaptureNotice('a', CaptureStage.organized),
         CaptureNotice('b', CaptureStage.organized),
       ]),
-      (text: '2件のメモが整理されました', page: 'recent'),
+      (text: '2件のメモをAIが読み取りました', page: 'recent'),
     );
     expect(
       captureNoticeText(const [
         CaptureNotice('a', CaptureStage.organized),
         CaptureNotice('b', CaptureStage.failed),
       ]),
-      (text: 'メモが整理されました。メモの受付か整理がうまくいきませんでした', page: 'intake'),
+      (text: 'メモをAIが読み取りました。メモの受け取りかAIの読み取りがうまくいきませんでした', page: 'intake'),
     );
     final repo = HubRepository(fixture());
     expect(captureStage(repo, 'REQ-unknown'), CaptureStage.saved);
@@ -275,9 +278,9 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(c.repository!.inputRecord(newInput) != null, isTrue);
-    expect(find.text('メモが整理されました'), findsOneWidget);
+    expect(find.text('メモをAIが読み取りました'), findsOneWidget);
     await tester.tap(find.text('最近のメモ').last);
     await tester.pumpAndSettle();
-    expect(find.text('RECENT NOTES'), findsOneWidget);
+    expect(find.text('雑な思いつきも、作業の記録も、そのまま残せます。'), findsOneWidget);
   });
 }

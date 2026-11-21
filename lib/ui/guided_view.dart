@@ -165,7 +165,7 @@ class _GuidedPageState extends State<GuidedPage> {
     if (g.resumable != null &&
         !await _confirm(
           '新しく始めますか？',
-          '前回の深掘りは破棄されます。Vaultには何も書いていません。',
+          '前回の問答は破棄されます。Vaultには何も書いていません。',
           '新しく始める',
         )) {
       return;
@@ -189,9 +189,9 @@ class _GuidedPageState extends State<GuidedPage> {
 
   Future<void> _discard() async {
     if (await _confirm(
-      '深掘りを破棄しますか？',
+      '問答を破棄しますか？',
       g.locked
-          ? '保存結果がまだ分かりません。Inputに保存済みの可能性があるため、同じ内容を保存し直さないでください。保存されたかは受付状況で確かめられます。回答とまとめはこの端末から消えます。'
+          ? '保存結果がまだ分かりません。保存済みの可能性があるため、同じ内容を保存し直さないでください。保存されたかは保存と反映で確かめられます。回答とまとめはこの端末から消えます。'
           : '回答とまとめはこの端末から消えます。Vaultには何も書いていません。',
       '破棄する',
     )) {
@@ -209,7 +209,7 @@ class _GuidedPageState extends State<GuidedPage> {
     canPop: !g.saving,
     child: Scaffold(
       appBar: AppBar(
-        title: const Text('選んで深掘り'),
+        title: const Text('質問に答えてまとめる'),
         actions: [
           IconButton(
             key: const Key('guided-settings'),
@@ -330,7 +330,7 @@ class _GuidedPageState extends State<GuidedPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('前回の深掘りがあります', style: theme.textTheme.titleSmall),
+                Text('前回の問答があります', style: theme.textTheme.titleSmall),
                 const SizedBox(height: 4),
                 Text(
                   '${previous.purpose.label}・${previous.steps.length}問回答・${timeLabel(previous.updatedAt)}',
@@ -357,7 +357,7 @@ class _GuidedPageState extends State<GuidedPage> {
                         key: const Key('guided-resume-drop'),
                         onPressed: () async {
                           if (await _confirm(
-                            '前回の深掘りを破棄しますか？',
+                            '前回の問答を破棄しますか？',
                             '回答とまとめはこの端末から消えます。Vaultには何も書いていません。',
                             '破棄する',
                           )) {
@@ -376,7 +376,7 @@ class _GuidedPageState extends State<GuidedPage> {
       ],
       if (g.otherVaultLocked) ...[
         const NoticeBox(
-          '別のVaultで始めた深掘りに、保存結果を確かめていないものがあります。そのVaultのInputに保存済みの可能性があります。そのVaultを開いてからこの画面を開くと、同じ操作を確かめられます。',
+          '別のVaultで始めた問答に、保存結果を確かめていないものがあります。そのVaultに保存済みの可能性があります。そのVaultを開いてからこの画面を開くと、同じ操作を確かめられます。',
           key: Key('guided-other-locked'),
         ),
         Align(
@@ -386,7 +386,7 @@ class _GuidedPageState extends State<GuidedPage> {
             onPressed: () async {
               if (await _confirm(
                 '確かめずに破棄しますか？',
-                '別のVaultの深掘りを、この端末から消します。保存されたかは、そのVaultを開くと受付状況で確かめられます。同じ内容を保存し直さないでください。',
+                '別のVaultの問答を、この端末から消します。保存されたかは、そのVaultを開くと保存と反映で確かめられます。同じ内容を保存し直さないでください。',
                 '破棄する',
               )) {
                 await g.dropStored();
@@ -397,7 +397,7 @@ class _GuidedPageState extends State<GuidedPage> {
         ),
         const SizedBox(height: 16),
       ] else if (g.otherVault) ...[
-        const NoticeBox('別のVaultで始めた深掘りが残っています。新しく始めると、その深掘りは破棄されます。'),
+        const NoticeBox('別のVaultで始めた問答が残っています。新しく始めると、その問答は破棄されます。'),
         const SizedBox(height: 16),
       ],
       Text('何をしますか', style: theme.textTheme.titleMedium),
@@ -449,7 +449,7 @@ class _GuidedPageState extends State<GuidedPage> {
         subtitle: Text(
           project == null
               ? '共通方針・進行中のプロジェクトの名前・最近のメモ5件（最大$guidedContextChars字）。選択肢が具体的になります。'
-              : 'このプロジェクトの名前・方針・現在地・次の一手・未解決・提案・関連するメモ（未整理・整理失敗を含む）（最大$guidedContextChars字）。選択肢が具体的になります。',
+              : 'このプロジェクトの名前・方針・現在地・次の一手・未解決・提案・関連するメモ（読み取り前・読み取り失敗を含む）（最大$guidedContextChars字）。選択肢が具体的になります。',
           style: _small,
         ),
       ),
@@ -483,13 +483,13 @@ class _GuidedPageState extends State<GuidedPage> {
       const SizedBox(height: 12),
       Text(
         sendsMaterial
-            ? '送り先はAnthropicのClaude APIです。目的・きっかけ・回答と上の資料を、問いとまとめを作るためだけに送ります（プロジェクトを選んだときは、その名前とIDも送ります）。Vaultへは、最後に「Inputへ保存」を押したときだけ書きます。'
-            : '送り先はAnthropicのClaude APIです。目的・きっかけ・回答だけを、問いとまとめを作るためだけに送ります。プロジェクトの名前などVaultの内容は送りません。Vaultへは、最後に「Inputへ保存」を押したときだけ書きます。',
+            ? '送り先はAnthropicのClaude APIです。目的・きっかけ・回答と上の資料を、問いとまとめを作るためだけに送ります（プロジェクトを選んだときは、その名前とIDも送ります）。Vaultへは、最後に「メモとして保存」を押したときだけ書きます。'
+            : '送り先はAnthropicのClaude APIです。目的・きっかけ・回答だけを、問いとまとめを作るためだけに送ります。プロジェクトの名前などVaultの内容は送りません。Vaultへは、最後に「メモとして保存」を押したときだけ書きます。',
         key: const Key('guided-send-note'),
         style: _small,
       ),
       Text(
-        '今月の呼び出し: ${usage.calls} / ${st.monthlyLimit}回（1回の深掘りで、問いの数＋1回ほど）',
+        '今月の呼び出し: ${usage.calls} / ${st.monthlyLimit}回（1回の問答で、問いの数＋1回ほど）',
         key: const Key('guided-usage'),
         style: _small,
       ),
@@ -769,7 +769,7 @@ class _GuidedPageState extends State<GuidedPage> {
     if (r?.saved == true) {
       return [
         const NoticeBox(
-          'この端末のInputに保存しました。同期後にMiniが受け取り、整理します。受付状況で確かめられます。',
+          'この端末に保存しました。同期後にMac miniが受け取り、AIが読み取ります。保存と反映で確かめられます。',
           key: Key('guided-saved'),
         ),
         const SizedBox(height: 16),
@@ -888,7 +888,7 @@ class _GuidedPageState extends State<GuidedPage> {
               key: const Key('guided-save'),
               onPressed: g.saving || problem != null ? null : _save,
               icon: const Icon(Icons.save_alt, size: 18),
-              label: const Text('Inputへ保存'),
+              label: const Text('メモとして保存'),
             ),
           if (g.locked)
             FilledButton(
@@ -995,7 +995,7 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                '選んで深掘りは、あなたのAPIキーでAnthropicのClaude APIを端末から直接呼び出します。料金はAnthropicの契約に応じてかかります。',
+                '「質問に答えてまとめる」は、あなたのAPIキーでAnthropicのClaude APIを端末から直接呼び出します。料金はAnthropicの契約に応じてかかります。',
                 style: _small,
               ),
               const SizedBox(height: 12),

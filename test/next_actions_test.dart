@@ -151,7 +151,7 @@ void main() {
     // プロジェクト名からプロジェクト画面へ移る。
     await tester.tap(find.byKey(const Key('next-project-side-app')));
     await tester.pumpAndSettle();
-    expect(find.text('PROJECT / 進行中'), findsOneWidget);
+    expect(find.text('プロジェクト · 進行中'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/calendar.dart';
@@ -34,6 +35,13 @@ Map<String, String> withSchedule(
     'review_after': reviewAfter,
   };
   return {...files, path: jsonEncode(items)};
+}
+
+/// 項目の「…」を開く。
+Future<void> openMore(WidgetTester tester, String tag) async {
+  await tester.ensureVisible(find.byKey(Key('item-more-$tag')));
+  await tester.tap(find.byKey(Key('item-more-$tag')));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -182,7 +190,7 @@ void main() {
       expect(synced.scheduleRequestIdFor(item.key), isNull);
       expect(
         synced.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        '日付をMiniが反映しました。',
+        '日付をMac miniが反映しました。',
       );
 
       final cleared = await service.saveItemSchedule(
@@ -288,6 +296,7 @@ void main() {
     final item = HubRepository(
       fixture(files),
     ).projects['side-app']!.nowItems.firstWhere((i) => i.section == 'next');
+    await openMore(tester, item.key.substring(0, 12));
     await tester.tap(find.byKey(Key('schedule-${item.key.substring(0, 12)}')));
     await tester.pumpAndSettle();
     expect(find.text('期日と次に見直す日'), findsOneWidget);
@@ -315,7 +324,7 @@ void main() {
     });
     await c.reload();
     await tester.pumpAndSettle();
-    expect(find.text('日付を依頼済み（反映待ち）'), findsOneWidget);
+    expect(find.text('期日を依頼済み（反映待ち）'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -353,10 +362,14 @@ void main() {
           (i) => i.section == 'next',
         );
     // 見直す日だけの項目には出さない。
+    await openMore(tester, undated.key.substring(0, 12));
     expect(
       find.byKey(Key('calendar-${undated.key.substring(0, 12)}')),
       findsNothing,
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await openMore(tester, item.key.substring(0, 12));
     await tester.tap(find.byKey(Key('calendar-${item.key.substring(0, 12)}')));
     await tester.pumpAndSettle();
     final event = access.events.single;
@@ -372,6 +385,7 @@ void main() {
     });
     await c.reload();
     await tester.pumpAndSettle();
+    await openMore(tester, item.key.substring(0, 12));
     await tester.tap(find.byKey(Key('calendar-${item.key.substring(0, 12)}')));
     await tester.pumpAndSettle();
     expect(access.events, hasLength(1));

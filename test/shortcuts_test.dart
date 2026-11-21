@@ -55,7 +55,7 @@ void main() {
     await press(tester, LogicalKeyboardKey.digit2);
     expect(appBarTitle(tester), '次の一手');
     await press(tester, LogicalKeyboardKey.digit8);
-    expect(appBarTitle(tester), '受付状況');
+    expect(appBarTitle(tester), '保存と反映');
     // 検索を開くと入力欄へ移り、文字はそのまま入る。
     await press(tester, LogicalKeyboardKey.keyF);
     expect(appBarTitle(tester), '検索');
@@ -132,7 +132,7 @@ void main() {
     await tester.pumpAndSettle();
     await press(tester, LogicalKeyboardKey.keyC, shift: true);
     expect(copied, await c.context('context-hub'));
-    expect(find.text('出典付きcontextをコピーしました'), findsOneWidget);
+    expect(find.text('別のAIに渡す文章をコピーしました'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

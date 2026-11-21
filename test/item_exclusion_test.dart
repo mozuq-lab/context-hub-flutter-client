@@ -67,6 +67,13 @@ Map<String, String> withExcluded(
   return {...files, path: jsonEncode(items)};
 }
 
+/// 項目の「…」を開く。
+Future<void> openMore(WidgetTester tester, String tag) async {
+  await tester.ensureVisible(find.byKey(Key('item-more-$tag')));
+  await tester.tap(find.byKey(Key('item-more-$tag')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   test('誤りとして外した項目を、完了・解決とは別に読む', () {
     final files = fixtureFiles(),
@@ -629,6 +636,7 @@ void main() {
     await tester.pumpAndSettle();
     final item = HubRepository(fixture(files)).projects[projectId]!.nowItems[1];
     final short = item.key.substring(0, 12);
+    await openMore(tester, short);
     await tester.tap(find.byKey(Key('exclude-$short')));
     await tester.pumpAndSettle();
     // 理由を選ぶまでは依頼できない。本人がプロジェクトを指定したメモでは、関連付けを変えないと伝える。
@@ -711,7 +719,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('reopen-$short')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('この項目をNOWの元の欄へ戻すよう依頼します。'), findsOneWidget);
+    expect(find.textContaining('この項目を現状の元の欄へ戻すよう依頼します。'), findsOneWidget);
     expect(find.textContaining('元に戻ります'), findsNothing);
     expect(tester.takeException(), isNull);
   });

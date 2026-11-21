@@ -7,6 +7,7 @@ import '../app/controller.dart';
 import '../core/calendar.dart';
 import '../core/models.dart';
 import '../core/happened.dart';
+import '../core/intake_features.dart' show unassignedScope;
 import '../core/repository.dart';
 import '../core/secrets.dart';
 import '../core/templates.dart';
@@ -52,8 +53,8 @@ Future<String?> checkSecretsBeforeSave(
         width: 480,
         child: Text(
           '${describeSecrets(findings)}に見える文字列があります。\n\n'
-          'Inputへ保存したメモは、同期先のすべての端末とバックアップに残り、後から消せません（訂正しても元のメモは残ります）。'
-          '整理用のAIへは伏せ字にして渡しますが、本当に秘密の値なら「伏せ字にして保存」を選んでください。',
+          '保存したメモは、同期先のすべての端末とバックアップに残り、後から消せません（訂正しても元のメモは残ります）。'
+          '読み取り用のAIへは伏せ字にして渡しますが、本当に秘密の値なら「伏せ字にして保存」を選んでください。',
         ),
       ),
       actions: [
@@ -277,21 +278,23 @@ class _HubViewState extends State<HubView> {
     }
   }
 
-  Widget title(String eyebrow, String text, String subtitle) => Padding(
+  /// 画面の見出し。labelは状態など、見出しの上に添える短い語（任意）。
+  Widget title(String text, String subtitle, {String? label}) => Padding(
     padding: const EdgeInsets.only(bottom: 28),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          eyebrow,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1.4,
-            color: Theme.of(context).colorScheme.primary,
+        if (label != null) ...[
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.primary,
+            ),
           ),
-        ),
-        const SizedBox(height: 10),
+          const SizedBox(height: 10),
+        ],
         Text(
           text,
           style: const TextStyle(
@@ -388,7 +391,7 @@ class _HubViewState extends State<HubView> {
           key: Key('snapshot-limit'),
           padding: EdgeInsets.only(bottom: 12),
           child: NoticeBox(
-            'Vaultの記録が多く、アプリが一度に読める上限に達しました。一部の記録を読めていないため、整理済みのメモが「未整理」に見えたり、確認待ちの候補や方針が欠けたりすることがあります。文脈のコピーは止まります。Vaultの記録そのものは失われていません。',
+            'Vaultの記録が多く、アプリが一度に読める上限に達しました。一部の記録を読めていないため、読み取り済みのメモが「読み取り前」に見えたり、確認待ちの候補や方針が欠けたりすることがあります。文脈のコピーは止まります。Vaultの記録そのものは失われていません。',
             error: true,
           ),
         ),
@@ -428,9 +431,8 @@ class _HubViewState extends State<HubView> {
     } else if (page == 'home') {
       children.add(
         title(
-          'YOUR CONTEXT',
           '今日、どこから始める？',
-          '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+          '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ\n読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
         ),
       );
       final backupNow = DateTime.now();
@@ -622,7 +624,7 @@ class _HubViewState extends State<HubView> {
                         project.pendingActions.firstOrNull?.text != null
                             ? '$actionLabel${project.pendingActions.first.text}（反映待ち）'
                             : project.sections['next']?.firstOrNull?.text ??
-                                  '次の一手はまだ整理されていません。',
+                                  '次の一手はまだ作られていません。',
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -739,7 +741,11 @@ class _HubViewState extends State<HubView> {
                   leading: const Icon(Icons.fact_check_outlined),
                   title: Text('確認待ち ${review.pendingRows.length}件'),
                   subtitle: Text(
-                    '要確認 ${review.attention.length}件 · 採用前に内容と元のメモを確認',
+                    [
+                      'AIの提案を、採用するか却下するか決めます',
+                      if (review.attention.isNotEmpty)
+                        '要確認 ${review.attention.length}件',
+                    ].join(' · '),
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => widget.onNavigate('review'),
@@ -750,11 +756,11 @@ class _HubViewState extends State<HubView> {
                     dense: true,
                     contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
                     title: Text(
-                      '「${item.title}」をプロジェクトにしますか？',
+                      'プロジェクト案: ${item.title}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    subtitle: Text('AIのプロジェクト案・未承認 · 根拠のメモ$memos件'),
+                    subtitle: Text('採用するとプロジェクトを作ります · 元のメモ$memos件'),
                     trailing: const Icon(Icons.chevron_right, size: 18),
                     onTap: () => Navigator.push(
                       context,
@@ -772,26 +778,48 @@ class _HubViewState extends State<HubView> {
           ),
         ),
       );
-      final stale = repo.projects.values.where((p) => p.stale(now)).length;
+      final stale = repo.orderedProjects
+          .where((p) => !p.merged && p.stale(now))
+          .toList();
       children.add(
         Padding(
           padding: const EdgeInsets.only(bottom: 20),
           child: Card(
-            child: ListTile(
-              key: const Key('home-digest'),
-              leading: const Icon(Icons.event_note_outlined),
-              title: Text(
-                repo.digestDocument == null
-                    ? 'ふりかえり（未生成）'
-                    : '直近${repo.digestDocument!.periodDays ?? 7}日のふりかえり',
-              ),
-              subtitle: Text(
-                stale == 0
-                    ? '動いたプロジェクトと現在地の変化を確認'
-                    : '停滞しているプロジェクト $stale件 · 再開か休止・完了かを判断',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => widget.onNavigate('digest'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ListTile(
+                  key: const Key('home-digest'),
+                  leading: const Icon(Icons.event_note_outlined),
+                  title: Text(
+                    repo.digestDocument == null
+                        ? 'ふりかえり（未生成）'
+                        : '直近${repo.digestDocument!.periodDays ?? 7}日のふりかえり',
+                  ),
+                  subtitle: Text(
+                    stale.isEmpty
+                        ? '動いたプロジェクトと現在地の変化を見ます'
+                        : '停滞しているプロジェクト ${stale.length}件 · 開いて、続けるか休止・完了にするかを決めます',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => widget.onNavigate('digest'),
+                ),
+                // 停滞しているプロジェクトは、その場で開いて状態を決められるようにする。
+                for (final p in stale.take(3))
+                  ListTile(
+                    key: Key('home-stale-${p.id}'),
+                    dense: true,
+                    contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
+                    title: Text(
+                      p.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text('$projectStaleDays日以上、新しいメモがありません'),
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () => widget.onNavigate('project:${p.id}'),
+                  ),
+              ],
             ),
           ),
         ),
@@ -815,18 +843,16 @@ class _HubViewState extends State<HubView> {
               ),
             ),
       );
-      // 受付と整理の状況は1行にまとめ、詳細は「受付状況」で見る。
-      if (repo.intake.isNotEmpty || c.pending.isNotEmpty) {
-        final waiting = repo.intake.where((s) => s.state == 'waiting').length,
-            failing = repo.intake
-                .where(
-                  (s) => const [
-                    'failed',
-                    'rejected',
-                    'conflict',
-                  ].contains(s.state),
-                )
-                .length;
+      // 保存と反映の状況は1行にまとめ、詳細は「保存と反映」で見る。
+      // 受け取られた依頼は記録として残り続けるので、数えるのはまだ受け取られていないものと問題だけ。
+      final waiting = repo.intake.where((s) => s.state == 'waiting').length,
+          failing = repo.intake
+              .where(
+                (s) =>
+                    const ['failed', 'rejected', 'conflict'].contains(s.state),
+              )
+              .length;
+      if (waiting + failing + c.pending.length > 0) {
         children.add(
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -836,7 +862,10 @@ class _HubViewState extends State<HubView> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text(
-                  '受付状況: Mini受領待ち $waiting件 · 失敗・競合 $failing件 · 保存確認待ち ${c.pending.length}件（詳細は「受付状況」）',
+                  // 問題があるときだけ件数を並べ、なければ反映待ちの件数だけを示す。
+                  failing + c.pending.length > 0
+                      ? '保存と反映: 失敗 $failing件 · 保存確認待ち ${c.pending.length}件（開いて確かめる）'
+                      : '保存と反映: Mac miniの受け取り待ち $waiting件',
                   style: const TextStyle(fontSize: 12),
                 ),
               ),
@@ -849,9 +878,8 @@ class _HubViewState extends State<HubView> {
     } else if (page == 'ask') {
       children.add(
         title(
-          'ASK YOUR RECORDS',
           '記録に聞く',
-          '「前にこの件はどう決めたか」のような問いに、Vaultのメモと作業要約だけを根拠に答えます。答えの文ごとに根拠の記録と引用が付き、元の記録を開けます。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+          'メモと作業要約だけを根拠に答えます。答えの文ごとに根拠の記録が付きます。\n読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
         ),
       );
       children.add(AskPanel(controller: c, onRecord: open));
@@ -860,9 +888,8 @@ class _HubViewState extends State<HubView> {
     } else if (page == 'intake') {
       children.add(
         title(
-          'CAPTURE STATUS',
-          '受付状況',
-          'Input保存、Mini受領、整理はそれぞれ別の段階です。同期後に再読込してください。',
+          '保存と反映',
+          'この端末で保存したものが、Mac miniに受け取られ、反映されるまでを示します。同期の後に再読込すると進みます。',
         ),
       );
       for (final result in c.pending) {
@@ -881,7 +908,7 @@ class _HubViewState extends State<HubView> {
                             notice(
                               context,
                               r.saved
-                                  ? 'この端末のInputに保存されています'
+                                  ? 'この端末に保存されています'
                                   : 'まだ保存を確認できません。同じ操作IDを保持しています。',
                             );
                           }
@@ -898,7 +925,7 @@ class _HubViewState extends State<HubView> {
         );
       }
       if (repo.intake.isEmpty && c.pending.isEmpty) {
-        children.add(const Text('この端末に受付ファイルはありません。'));
+        children.add(const Text('この端末から保存したものはありません。'));
       }
       for (final status in repo.intake) {
         children.add(
@@ -906,16 +933,21 @@ class _HubViewState extends State<HubView> {
             padding: const EdgeInsets.only(bottom: 12),
             child: Card(
               child: ListTile(
-                title: Text(stateLabel(status.state)),
+                title: Text(intakeStateLabel(status.state)),
                 subtitle: Text(
-                  '${status.title}\n${timeLabel(status.at)}\n${status.detail}',
+                  [
+                    status.title,
+                    timeLabel(status.at),
+                    if (status.detail.isNotEmpty) status.detail,
+                    ?intakeNextStep(status.state),
+                  ].join('\n'),
                   style: const TextStyle(height: 1.7),
                 ),
                 onTap: () {
                   showDialog(
                     context: context,
                     builder: (_) => AlertDialog(
-                      title: Text(stateLabel(status.state)),
+                      title: Text(intakeStateLabel(status.state)),
                       content: SelectableText('${status.id}\n${status.detail}'),
                       actions: [
                         TextButton(
@@ -936,7 +968,6 @@ class _HubViewState extends State<HubView> {
       final records = ideas ? repo.ideas : repo.recent;
       children.add(
         title(
-          ideas ? 'IDEAS' : 'RECENT NOTES',
           ideas ? 'アイデア' : '最近のメモ',
           ideas ? '原文に戻りながら、育てたいアイデアを探します。' : '雑な思いつきも、作業の記録も、そのまま残せます。',
         ),
@@ -986,9 +1017,8 @@ class _HubViewState extends State<HubView> {
     final ids = c.basket.ids, missing = c.missingInBasket.toSet();
     final out = <Widget>[
       title(
-        'CONTEXT BASKET',
         '文脈かご',
-        '別のAIに渡したい記録を、検索・最近のメモ・アイデア・記録の詳細から入れます。プロジェクトをまたいで選べます。まとめてコピーすると、選んだ順に、出典・訂正の注意・AI推定の区別と、関わるプロジェクトの方針を付けた1つの文章になります。かごの中身はこの端末だけに残し、Vaultには書きません。',
+        '別のAIに渡す記録を集めます。コピーすると、出典と注意書き付きの1つの文章になります。中身はこの端末だけに残ります。',
       ),
     ];
     if (ids.isEmpty) {
@@ -1158,11 +1188,7 @@ class _HubViewState extends State<HubView> {
     final words = HubRepository.searchTokens(query);
     final filter = searchFilter;
     final out = <Widget>[
-      title(
-        'FIND A THOUGHT',
-        '検索',
-        'タイトルと本文を検索します。複数の語は空白で区切ります。プロジェクト・種類・期間で絞り込むと、語を入れなくても一覧できます。',
-      ),
+      title('検索', 'タイトルと本文から探します。語は空白で区切ります。絞り込みだけでも一覧できます。'),
       TextField(
         key: const Key('search-query'),
         controller: queryController,
@@ -1315,19 +1341,14 @@ class _HubViewState extends State<HubView> {
     final digest = repo.digestDocument;
     if (digest == null) {
       return [
-        title(
-          'REVIEW',
-          'ふりかえり',
-          '本体のcycleまたはdigestがVaultのREVIEW.mdを生成すると、ここに表示されます。',
-        ),
+        title('ふりかえり', 'Mac miniがふりかえりを作ると、ここに表示されます。'),
         const Text('ふりかえりはまだ生成されていません。'),
       ];
     }
     return [
       title(
-        'REVIEW',
         '直近${digest.periodDays ?? 7}日のふりかえり',
-        '生成: ${timeLabel(digest.generatedAt)}\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '生成: ${timeLabel(digest.generatedAt)}\n読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
       ),
       for (final warning in digest.warnings)
         Padding(
@@ -1365,12 +1386,12 @@ class _HubViewState extends State<HubView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'NOWの更新が止まっています',
+                '現状の更新が止まっています',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 6),
               Text(
-                'NOWの自動で作られる部分が手で書き換えられているため、${timeLabel(project.generatedAt)}の生成から更新されていません。'
+                '現状の自動で作られる部分が手で書き換えられているため、${timeLabel(project.generatedAt)}の生成から更新されていません。'
                 '下の内容は止まった時点のものです${conflict.count > 1 ? '（新しい版の退避${conflict.count}件）' : ''}。',
                 style: const TextStyle(fontSize: 12, height: 1.6),
               ),
@@ -1402,9 +1423,7 @@ class _HubViewState extends State<HubView> {
                 ),
               const SizedBox(height: 12),
               if (requested)
-                const NoticeBox(
-                  '生成版に戻す依頼を送りました。Miniで受け付けられ、同期されると最新のNOWが表示されます。',
-                )
+                const NoticeBox('生成版に戻す依頼を送りました。Mac miniで処理されると最新の現状が表示されます。')
               else
                 OutlinedButton.icon(
                   key: const Key('conflict-resolve'),
@@ -1423,10 +1442,10 @@ class _HubViewState extends State<HubView> {
 
   Future<void> resolveConflict(HubProject project, NowConflict conflict) async {
     if (!await confirmAction(
-      'NOWを生成版に戻す',
+      '現状を生成版に戻す',
       '${conflict.manualLines.isEmpty ? '' : '手で変えた${conflict.manualLines.length}行を、このプロジェクトのメモとして保存してから、'}'
-          'Miniが最新の入力からNOWを作り直します。NOWの自動で作られる部分の外に書いたメモは残ります。'
-          '置き換える前のNOWの全文は本体の記録に残ります。',
+          'Mac miniが最新の入力から現状を作り直します。現状の自動で作られる部分の外に書いたメモは残ります。'
+          '置き換える前の現状の全文は本体の記録に残ります。',
       '生成版に戻す',
     )) {
       return;
@@ -1440,8 +1459,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '生成版に戻す依頼を保存しました。Miniで受け付けられると反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '生成版に戻す依頼を保存しました。Mac miniで処理されると反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1463,8 +1482,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '状態の変更を依頼しました。Miniで受け付けられると反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '状態の変更を依頼しました。Mac miniで処理されると反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1486,8 +1505,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '呼び名とキーワードの変更を依頼しました。Miniで受け付けられると反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '呼び名とキーワードの変更を依頼しました。Mac miniで処理されると反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1522,8 +1541,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '統合を依頼しました。Miniで受け付けられると反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '統合を依頼しました。Mac miniで処理されると反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1558,8 +1577,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '統合の取り消しを依頼しました。Miniで受け付けられると反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '統合の取り消しを依頼しました。Mac miniで処理されると反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1594,7 +1613,8 @@ class _HubViewState extends State<HubView> {
     String action,
   ) async {
     final resolve = action == 'resolve',
-        verb = item.section == 'next' ? '完了' : '解決';
+        verb = item.section == 'next' ? '完了' : '解決',
+        resolveLabel = item.repeating ? '定例をやめる' : '$verbにする';
     // 外したときに起きたこと（読み直し・関連の変更）だけを、元に戻ると伝える。
     final undo = switch (item.exclusionReason) {
       'misread' => '誤りとして外したときのメモの読み直しも元に戻ります。',
@@ -1603,9 +1623,9 @@ class _HubViewState extends State<HubView> {
       _ => '',
     };
     if (!await confirmAction(
-          resolve ? '$verbにする' : '未解決に戻す',
-          '${item.display}\n\n${resolve ? 'この項目をNOWの「解決済み・完了」へ移すよう依頼します。原文と整理結果は変わりません。' : 'この項目をNOWの元の欄へ戻すよう依頼します。$undo'}',
-          resolve ? '$verbにする' : '戻す',
+          resolve ? resolveLabel : '未解決に戻す',
+          '${item.display}\n\n${resolve ? 'この項目を現状の「解決済み・完了」へ移すよう依頼します。原文とAIの読み取り結果は変わりません。' : 'この項目を現状の元の欄へ戻すよう依頼します。$undo'}',
+          resolve ? resolveLabel : '戻す',
         ) ||
         !mounted) {
       return;
@@ -1620,8 +1640,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '報告を保存しました。Miniで受け付けられるとNOWに反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '報告を保存しました。Mac miniで処理されると現状に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1651,8 +1671,39 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '報告を保存しました。Miniで受け付けられるとNOWに反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '報告を保存しました。Mac miniで処理されると現状に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// プロジェクト未定の行を完了にする（resolve）・却下する（exclude。理由は「もう古い」）・未解決へ戻す（reopen）。
+  Future<void> reportUnassigned(NowItemRef item, String action) async {
+    final (title, body, ok) = switch (action) {
+      'resolve' => ('完了にする', 'この行を完了にして、一覧から外します。', '完了にする'),
+      'exclude' => ('却下する', 'この行はやらないものとして、一覧から外します。メモは残ります。', '却下する'),
+      _ => ('元に戻す', 'この行を一覧へ戻します。', '戻す'),
+    };
+    if (!await confirmAction(title, '${item.display}\n\n$body', ok) ||
+        !mounted) {
+      return;
+    }
+    try {
+      final result = await c.requestItemResolution(
+        unassignedScope,
+        item.key,
+        action,
+        reason: action == 'exclude' ? 'outdated' : null,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '保存しました。Mac miniで処理されると一覧に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1695,8 +1746,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '次の一手への追加を保存しました。Miniで受け付けられるとNOWに反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '次の一手への追加を保存しました。Mac miniで処理されると現状に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1716,7 +1767,7 @@ class _HubViewState extends State<HubView> {
           style: const TextStyle(fontSize: 15),
         ),
         Text(
-          '反映待ち（${stateLabel(action.state)}）',
+          '反映待ち（${intakeStateLabel(action.state)}）',
           style: const TextStyle(fontSize: 12),
         ),
       ],
@@ -1749,8 +1800,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '日付を依頼しました。Miniで受け付けられるとNOWと一覧に反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '日付を依頼しました。Mac miniで処理されると現状と一覧に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
       return result.saved;
@@ -1766,11 +1817,7 @@ class _HubViewState extends State<HubView> {
         waiting = repo.pendingPersonAdds,
         supported = repo.intakeFeatures.people;
     return [
-      title(
-        'PEOPLE',
-        '人',
-        '登録した人ごとに、名前が出てくる記録と、プロジェクトをまたいだ未完了の次の一手・未解決をMiniが集めます。名前の一致はAIを使わずに判定し、登録した人だけを対象にします。',
-      ),
+      title('人', '登録した人の名前が出てくる記録と、関わる次の一手・未解決を集めます。名前の一致はAIを使わずに判定します。'),
       Align(
         alignment: Alignment.centerLeft,
         child: FilledButton.tonalIcon(
@@ -1809,7 +1856,7 @@ class _HubViewState extends State<HubView> {
                 if (person.aliases.isNotEmpty)
                   '呼び名: ${person.aliases.join('、')}',
                 person.page == null
-                    ? '一覧はまだ作られていません（次の整理で作られます）'
+                    ? '一覧はまだ作られていません（次のAI読み取りで作られます）'
                     : '最後に出てきた日: ${person.lastSeen == null ? 'まだありません' : displayTime(person.lastSeen).substring(0, 10)} · 記録 ${person.records}件 · 未完了の項目 ${person.openItems}件',
               ].join('\n'),
               style: const TextStyle(height: 1.6),
@@ -1827,8 +1874,8 @@ class _HubViewState extends State<HubView> {
             title: Text(pending.name),
             subtitle: Text(
               pending.state == 'accepted'
-                  ? 'Mini受領済み。人の定義の同期を待っています。'
-                  : '登録を依頼済み（Miniでの受付を待っています）',
+                  ? 'Mac miniが受け取り済み。人の定義の同期を待っています。'
+                  : '登録を依頼済み（Mac miniでの処理を待っています）',
             ),
           ),
         ),
@@ -1847,12 +1894,12 @@ class _HubViewState extends State<HubView> {
             requested;
     return [
       title(
-        'PERSON',
+        label: '人',
         person.name,
         [
           if (person.aliases.isNotEmpty) '呼び名: ${person.aliases.join('、')}',
           if (page != null)
-            '生成: ${timeLabel(page.generatedAt)} · 読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+            '生成: ${timeLabel(page.generatedAt)} · 読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
         ].join('\n'),
       ),
       Wrap(
@@ -1877,12 +1924,12 @@ class _HubViewState extends State<HubView> {
         const Padding(
           key: Key('person-requested'),
           padding: EdgeInsets.only(top: 12),
-          child: NoticeBox('この人への依頼が反映待ちです。Miniで受け付けられると反映されます。'),
+          child: NoticeBox('この人への依頼が反映待ちです。Mac miniで処理されると反映されます。'),
         ),
       const SizedBox(height: 16),
       if (page == null)
         const Text(
-          'まだ一覧が作られていません。Miniで次の整理が終わり、同期されると表示されます。',
+          'まだ一覧が作られていません。Mac miniで次のAI読み取りが終わり、同期されると表示されます。',
           key: Key('person-page-missing'),
           style: TextStyle(height: 1.7),
         )
@@ -1917,7 +1964,7 @@ class _HubViewState extends State<HubView> {
     if (next == null || !mounted) return;
     await sendPerson(
       () => c.requestPerson(personId, 'add', draft: next),
-      '「${next.name}」の登録を依頼しました。Miniで受け付けられると、次の整理から一覧が作られます。',
+      '「${next.name}」の登録を依頼しました。Mac miniで処理されると、次のAI読み取りから一覧が作られます。',
     );
   }
 
@@ -1935,7 +1982,7 @@ class _HubViewState extends State<HubView> {
         expectedHash: person.definitionHash,
         draft: next,
       ),
-      '名前と呼び名の変更を依頼しました。Miniで受け付けられると反映されます。',
+      '名前と呼び名の変更を依頼しました。Mac miniで処理されると反映されます。',
     );
   }
 
@@ -1954,7 +2001,7 @@ class _HubViewState extends State<HubView> {
         'remove',
         expectedHash: person.definitionHash,
       ),
-      '登録を外す依頼をしました。Miniで受け付けられると反映されます。',
+      '登録を外す依頼をしました。Mac miniで処理されると反映されます。',
     );
   }
 
@@ -1967,7 +2014,7 @@ class _HubViewState extends State<HubView> {
       if (mounted) {
         notice(
           context,
-          result.saved ? done : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+          result.saved ? done : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -1989,7 +2036,7 @@ class _HubViewState extends State<HubView> {
           width: 480,
           child: Text(
             '${item.display}\n\n期日 ${item.due}（${item.repeat!.label}）の回を${action == 'done' ? '完了にします' : '見送ります'}。'
-            '項目は欄に残り、Miniで受け付けられると期日が次の回へ進みます。定例をやめるときは「定例を終える」を使ってください。',
+            '項目は欄に残り、Mac miniで処理されると期日が次の回へ進みます。定例をやめるときは「…」の「定例をやめる」を使ってください。',
           ),
         ),
         actions: [
@@ -2016,8 +2063,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '${occurrenceActionLabels[action]}を依頼しました。Miniで受け付けられると、次の回の期日がNOWに反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '${occurrenceActionLabels[action]}を依頼しました。Mac miniで処理されると、次の回の期日が現状に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -2058,7 +2105,7 @@ class _HubViewState extends State<HubView> {
             padding: const EdgeInsets.all(24),
             children: [
               Text(
-                '生成: ${timeLabel(history.generatedAt)}\n読込: ${timeLabel(loadedAt)}（同期完了の確認ではありません）',
+                '生成: ${timeLabel(history.generatedAt)}\n読み込み: ${timeLabel(loadedAt)}',
                 style: const TextStyle(fontSize: 12, height: 1.6),
               ),
               const SizedBox(height: 12),
@@ -2110,8 +2157,8 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '見送りを保存しました。Miniで受け付けられるとNOWに反映されます。'
-              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+              ? '見送りを保存しました。Mac miniで処理されると現状に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -2179,7 +2226,7 @@ class _HubViewState extends State<HubView> {
                       ? null
                       : () => dismissHint(project, item, hint),
                   icon: const Icon(Icons.close, size: 15),
-                  label: const Text('違う'),
+                  label: const Text('まだ終わっていない'),
                 ),
             ],
           ),
@@ -2202,7 +2249,7 @@ class _HubViewState extends State<HubView> {
       if (mounted) {
         notice(
           context,
-          result.saved ? '見送りを依頼しました。' : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+          result.saved ? '見送りを依頼しました。' : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
     } catch (e) {
@@ -2213,16 +2260,14 @@ class _HubViewState extends State<HubView> {
   bool get busy => c.loading || c.saving || c.captureWarning != null;
 
   /// 「今日やる」「今日から外す」。選んだ項目はこの端末だけに残し、Vaultには書かない。
-  Widget todayToggle(HubProject project, String key) {
+  Widget todayToggle(String projectId, String key) {
     final focus = c.today, on = focus.picked(key);
     return TextButton.icon(
       key: Key('today-${key.substring(0, 12)}'),
       // 3つ埋まっている間は、外す操作だけを受け付ける。
-      onPressed: !on && focus.full
-          ? null
-          : () => setToday(project.id, key, !on),
+      onPressed: !on && focus.full ? null : () => setToday(projectId, key, !on),
       icon: Icon(on ? Icons.wb_sunny : Icons.wb_sunny_outlined, size: 15),
-      label: Text(on ? '今日から外す' : '今日やる'),
+      label: Text(on ? '今日の3つから外す' : '今日やる'),
     );
   }
 
@@ -2259,7 +2304,7 @@ class _HubViewState extends State<HubView> {
           ? null
           : () => widget.onNavigate('project:${e.project!.id}'),
       child: Text(
-        e.project?.title ?? e.pick.projectId,
+        e.unassigned ? 'プロジェクト未定' : e.project?.title ?? e.pick.projectId,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,
@@ -2289,12 +2334,14 @@ class _HubViewState extends State<HubView> {
             ),
             if (e.missing)
               Text(
-                'NOWから見つかりません。言い換えられたか、片付いた可能性があります。',
+                '見つかりません。言い換えられたか、片付いた可能性があります。',
                 style: TextStyle(fontSize: 12, color: scheme.error),
               )
             else if (e.done)
               Text(
-                e.item!.excluded ? '誤りとして外しました' : '片付きました',
+                e.item!.excluded
+                    ? (e.unassigned ? '却下しました' : '誤りとして外しました')
+                    : '片付きました',
                 style: const TextStyle(fontSize: 12),
               )
             else if (reported)
@@ -2307,7 +2354,9 @@ class _HubViewState extends State<HubView> {
                     key: Key('today-resolve-${key.substring(0, 12)}'),
                     onPressed: busy
                         ? null
-                        : () => reportItem(e.project!, e.item!, 'resolve'),
+                        : () => e.unassigned
+                              ? reportUnassigned(e.item!, 'resolve')
+                              : reportItem(e.project!, e.item!, 'resolve'),
                     icon: const Icon(Icons.check_circle_outline, size: 15),
                     label: Text(e.item!.section == 'next' ? '完了にする' : '解決にする'),
                   ),
@@ -2315,7 +2364,7 @@ class _HubViewState extends State<HubView> {
                   key: Key('today-remove-${key.substring(0, 12)}'),
                   onPressed: () => setToday(e.pick.projectId, key, false),
                   icon: const Icon(Icons.close, size: 15),
-                  label: const Text('今日から外す'),
+                  label: const Text('今日の3つから外す'),
                 ),
               ],
             ),
@@ -2339,7 +2388,7 @@ class _HubViewState extends State<HubView> {
             Text(e.text),
             if (e.missing)
               Text(
-                'NOWから見つかりません。言い換えられたか、片付いた可能性があります。',
+                '見つかりません。言い換えられたか、片付いた可能性があります。',
                 style: TextStyle(fontSize: 12, color: scheme.error),
               )
             else if (closed)
@@ -2366,7 +2415,10 @@ class _HubViewState extends State<HubView> {
                     icon: const Icon(Icons.wb_sunny_outlined, size: 15),
                     label: const Text('今日も続ける'),
                   ),
-                if (!closed && repo.scheduleRequestIdFor(key) == null)
+                // プロジェクト未定の行には期日を付けられない（本体が受け付けない）。
+                if (!closed &&
+                    !e.unassigned &&
+                    repo.scheduleRequestIdFor(key) == null)
                   TextButton.icon(
                     key: Key('today-schedule-${key.substring(0, 12)}'),
                     onPressed: busy ? null : () => scheduleCarried(e),
@@ -2377,7 +2429,7 @@ class _HubViewState extends State<HubView> {
                   key: Key('today-drop-${key.substring(0, 12)}'),
                   onPressed: () => dropCarried(key),
                   icon: const Icon(Icons.close, size: 15),
-                  label: const Text('外す'),
+                  label: const Text('今日はやらない'),
                 ),
               ],
             ),
@@ -2408,7 +2460,7 @@ class _HubViewState extends State<HubView> {
                   Text(
                     focus.full
                         ? '今日の3つは埋まっています。続けるなら、先に今日の3つから外してください。'
-                        : '今日も続けるか、期日を付けるか、外すかを選んでください。',
+                        : '今日も続けるか、期日を付けるか、今日はやらないかを選んでください。',
                     style: const TextStyle(fontSize: 12),
                   ),
                   const SizedBox(height: 12),
@@ -2539,6 +2591,108 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 項目の操作。よく使う「完了」（定例は「今回を完了」）と「今日やる」だけを並べ、残りは「…」にまとめる。
+  List<Widget> itemButtons(
+    HubProject project,
+    String section,
+    NowEntry entry,
+    NowItemRef item,
+  ) {
+    final key = item.key, tag = key.substring(0, 12);
+    // 完了・解決の報告が反映待ちの間は、ほかの操作を出さない（本体が断るため）。
+    if (repo.itemRequestIdFor(key) != null) {
+      return const [
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        ),
+      ];
+    }
+    final scheduling = repo.scheduleRequestIdFor(key) != null,
+            // 定例の今の回を片付ける。日付の依頼が反映待ちの間は出さない。
+            rounds =
+            item.repeating && repo.intakeFeatures.occurrence && !scheduling,
+        from = !project.merged && repo.intakeFeatures.actions
+            ? actionSourceOf(project, section, entry)
+            : null,
+        calendar =
+            c.access.calendarSupported &&
+            validScheduleDate(item.due) &&
+            !item.resolved;
+    final more = <PopupMenuEntry<VoidCallback>>[
+      if (!scheduling)
+        PopupMenuItem(
+          key: Key('schedule-$tag'),
+          value: () => scheduleItem(project, item),
+          child: Text(item.scheduled ? '期日を変える' : '期日を付ける'),
+        ),
+      if (rounds)
+        PopupMenuItem(
+          key: Key('round-skip-$tag'),
+          value: () => completeRound(project, item, 'skip'),
+          child: Text(occurrenceActionLabels['skip']!),
+        ),
+      if (item.repeating)
+        PopupMenuItem(
+          key: Key('resolve-$tag'),
+          value: () => reportItem(project, item, 'resolve'),
+          child: const Text('定例をやめる'),
+        ),
+      if (from != null)
+        PopupMenuItem(
+          key: Key(
+            'take-action-${digest('${from.inputId}\n${from.text}').substring(0, 12)}',
+          ),
+          enabled: !c.composing,
+          value: () => addAction(project: project, from: from),
+          child: const Text('自分の行動にする'),
+        ),
+      // 本人が付けた期日だけを、端末のカレンダーの予定作成画面へ渡す。保存するかはカレンダーで本人が決める。
+      if (calendar)
+        PopupMenuItem(
+          key: Key('calendar-$tag'),
+          value: () => addToCalendar(project, item),
+          child: const Text('カレンダーに入れる'),
+        ),
+      PopupMenuItem(
+        key: Key('exclude-$tag'),
+        value: () => excludeItem(project, item),
+        child: const Text('誤りとして外す'),
+      ),
+    ];
+    return [
+      if (rounds)
+        TextButton.icon(
+          key: Key('round-done-$tag'),
+          onPressed: busy ? null : () => completeRound(project, item, 'done'),
+          icon: const Icon(Icons.task_alt, size: 15),
+          label: Text(occurrenceActionLabels['done']!),
+        )
+      else if (!item.repeating)
+        TextButton.icon(
+          key: Key('resolve-$tag'),
+          onPressed: busy ? null : () => reportItem(project, item, 'resolve'),
+          icon: const Icon(Icons.check_circle_outline, size: 15),
+          label: Text(section == 'next' ? '完了にする' : '解決にする'),
+        ),
+      if (scheduling)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Text('期日を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        ),
+      // 今日の3つ（この端末だけ）。
+      todayToggle(project.id, key),
+      PopupMenuButton<VoidCallback>(
+        key: Key('item-more-$tag'),
+        enabled: !busy,
+        tooltip: 'ほかの操作',
+        icon: const Icon(Icons.more_horiz, size: 18),
+        onSelected: (action) => action(),
+        itemBuilder: (_) => more,
+      ),
+    ];
+  }
+
   /// NOWの1行。プロジェクト画面と「次の一手」画面で共通に使う。
   Widget nowEntry(
     HubProject project,
@@ -2580,106 +2734,21 @@ class _HubViewState extends State<HubView> {
             for (final hint in item.hints) hintBox(project, item, hint),
         Wrap(
           spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             if (entry.itemKey case final key?)
-              repo.itemRequestIdFor(key) != null
-                  ? const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
-                    )
-                  : TextButton.icon(
-                      key: Key('resolve-${key.substring(0, 12)}'),
-                      onPressed: busy
-                          ? null
-                          : () => reportItem(
-                              project,
-                              project.nowItems.firstWhere((i) => i.key == key),
-                              'resolve',
-                            ),
-                      icon: const Icon(Icons.check_circle_outline, size: 15),
-                      label: Text(
-                        project.nowItems
-                                    .where((i) => i.key == key)
-                                    .firstOrNull
-                                    ?.repeating ==
-                                true
-                            ? '定例を終える'
-                            : section == 'next'
-                            ? '完了にする'
-                            : '解決にする',
-                      ),
-                    ),
-            // 定例の今の回を片付ける。日付の依頼・完了の報告が反映待ちの間は出さない。
-            if (entry.itemKey case final key?
-                when repo.intakeFeatures.occurrence &&
-                    repo.itemRequestIdFor(key) == null &&
-                    repo.scheduleRequestIdFor(key) == null)
               if (project.nowItems.where((i) => i.key == key).firstOrNull
-                  case final item? when item.repeating)
-                for (final action in occurrenceActions)
-                  TextButton.icon(
-                    key: Key('round-$action-${key.substring(0, 12)}'),
-                    onPressed: busy
-                        ? null
-                        : () => completeRound(project, item, action),
-                    icon: Icon(
-                      action == 'done'
-                          ? Icons.task_alt
-                          : Icons.skip_next_outlined,
-                      size: 15,
-                    ),
-                    label: Text(occurrenceActionLabels[action]!),
-                  ),
-            // 完了・解決の報告が反映待ちの間は、日付を依頼させない（本体が断るため）。
-            if (entry.itemKey case final key?
-                when repo.itemRequestIdFor(key) == null)
-              repo.scheduleRequestIdFor(key) != null
-                  ? const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Text(
-                        '日付を依頼済み（反映待ち）',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                    )
-                  : TextButton.icon(
-                      key: Key('schedule-${key.substring(0, 12)}'),
-                      onPressed: busy
-                          ? null
-                          : () => scheduleItem(
-                              project,
-                              project.nowItems.firstWhere((i) => i.key == key),
-                            ),
-                      icon: const Icon(Icons.event_outlined, size: 15),
-                      label: Text(
-                        project.nowItems
-                                    .where((i) => i.key == key)
-                                    .firstOrNull
-                                    ?.scheduled ==
-                                true
-                            ? '日付を変える'
-                            : '日付を付ける',
-                      ),
-                    ),
-            // 今日の3つ（この端末だけ）。報告が反映待ちの項目は選ばせない。
-            if (entry.itemKey case final key?
-                when repo.itemRequestIdFor(key) == null)
-              todayToggle(project, key),
-            // 報告が反映待ちの間は、重ねて依頼させない。
-            if (entry.itemKey case final key?
-                when repo.itemRequestIdFor(key) == null)
-              TextButton.icon(
-                key: Key('exclude-${key.substring(0, 12)}'),
-                onPressed: busy
-                    ? null
-                    : () => excludeItem(
-                        project,
-                        project.nowItems.firstWhere((i) => i.key == key),
-                      ),
-                icon: const Icon(Icons.report_gmailerrorred_outlined, size: 15),
-                label: const Text('誤りとして外す'),
-              ),
-            // AIが読み取った次の一手・提案を、本人の行動として引き取る（統合済みのプロジェクトでは本体が断る）。
-            if (!project.merged && repo.intakeFeatures.actions)
+                  case final item?)
+                ...itemButtons(project, section, entry, item)
+              else if (repo.itemRequestIdFor(key) != null)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  child: Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
+                ),
+            // 「提案」の行は、自分の行動にするのが主な操作なので、そのまま出す。
+            if (entry.itemKey == null &&
+                !project.merged &&
+                repo.intakeFeatures.actions)
               if (actionSourceOf(project, section, entry) case final from?)
                 TextButton.icon(
                   key: Key(
@@ -2690,17 +2759,6 @@ class _HubViewState extends State<HubView> {
                       : () => addAction(project: project, from: from),
                   icon: const Icon(Icons.person_add_alt, size: 15),
                   label: const Text('自分の行動にする'),
-                ),
-            // 本人が付けた期日だけを、端末のカレンダーの予定作成画面へ渡す。保存するかはカレンダーで本人が決める。
-            if (entry.itemKey case final key? when c.access.calendarSupported)
-              if (project.nowItems.where((i) => i.key == key).firstOrNull
-                  case final item?
-                  when validScheduleDate(item.due) && !item.resolved)
-                TextButton.icon(
-                  key: Key('calendar-${key.substring(0, 12)}'),
-                  onPressed: busy ? null : () => addToCalendar(project, item),
-                  icon: const Icon(Icons.edit_calendar_outlined, size: 15),
-                  label: const Text('カレンダーに入れる'),
                 ),
             for (final id in entry.references)
               TextButton.icon(
@@ -2809,9 +2867,8 @@ class _HubViewState extends State<HubView> {
     );
     return [
       title(
-        'NEXT ACTIONS',
         '次の一手',
-        '進行中のプロジェクトの「次の一手」と「未解決」を、ピン留めしたプロジェクトから順に、残りは最新の根拠が新しい順にまとめます。休止・完了のプロジェクトは含みません。期日が過ぎた・今日・7日以内の項目は先頭に、見直す日が先の項目は末尾にたたみます（日付は本体と同じ日本時間の暦日で判断します）。どのプロジェクトにも結び付いていないメモのタスク候補とAIの提案は、「次の一手」の後ろの「プロジェクト未定」に並べます。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        '進行中のプロジェクトの次の一手と未解決です。期日が近いものが先頭に来ます。どのプロジェクトにも結び付いていないものは「プロジェクト未定」にあります。\n読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
       ),
       ...todaySection(),
       Align(
@@ -2939,7 +2996,11 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
-      if (section == 'next' && repo.unassignedMemos.isNotEmpty)
+      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。
+      if (section == 'next' &&
+          (repo.unassignedMemos.isNotEmpty ||
+              (repo.intakeFeatures.unassignedItems &&
+                  repo.closedUnassigned.isNotEmpty)))
         ...unassignedGroup(),
       if (resting.isNotEmpty)
         Card(
@@ -3094,7 +3155,7 @@ class _HubViewState extends State<HubView> {
     try {
       final result = await c.requestInsightReaction(runId, item.key, reaction);
       if (mounted && !result.saved) {
-        notice(context, '保存結果を確認できません。受付状況から同じ操作を確認してください。');
+        notice(context, '保存結果を確認できません。保存と反映から同じ操作を確認してください。');
       }
     } catch (e) {
       if (mounted) notice(context, HubController.message(e));
@@ -3218,32 +3279,41 @@ class _HubViewState extends State<HubView> {
   }
 
   /// 「次の一手」画面の「プロジェクト未定」。どのプロジェクトにも結び付いていないメモの、
-  /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。
+  /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。本体が対応していれば、行ごとに今日やる・完了・却下ができる。
   List<Widget> unassignedGroup() {
     final memos = repo.unassignedMemos,
         listed = memos.take(unassignedShown).toList(),
-        rest = repo.unassignedTotal - memos.length;
+        rest = repo.unassignedTotal - memos.length,
+        actionable = repo.intakeFeatures.unassignedItems,
+        closed = actionable ? repo.closedUnassigned : const <NowItemRef>[];
     return [
       Text(
-        'プロジェクト未定（メモ${repo.unassignedTotal}件）',
+        repo.unassignedTotal == 0
+            ? 'プロジェクト未定'
+            : 'プロジェクト未定（メモ${repo.unassignedTotal}件）',
         key: const Key('next-unassigned'),
         style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
       ),
       const SizedBox(height: 4),
-      const Text(
-        'どのプロジェクトにも結び付いていないメモから、AIが「タスク」と分類したものと、AIが挙げた次の一手の提案を新しい順に集めています。AI生成・未検証で、完了の報告や期日の対象にはなりません。メモがプロジェクトに結び付くと、そのプロジェクトの次の一手へ移ります。',
-        style: TextStyle(fontSize: 12, height: 1.6),
+      Text(
+        actionable
+            ? 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。やるなら「今日やる」、やらないなら「却下」で一覧から外せます。'
+            : 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。メモがプロジェクトに結び付くと、そのプロジェクトへ移ります。',
+        style: const TextStyle(fontSize: 12, height: 1.6),
       ),
       const SizedBox(height: 8),
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [for (final memo in listed) unassignedEntry(memo)],
+      if (listed.isNotEmpty)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final memo in listed) unassignedEntry(memo, actionable),
+              ],
+            ),
           ),
         ),
-      ),
       if (memos.length > listed.length)
         Padding(
           padding: const EdgeInsets.only(top: 8),
@@ -3265,12 +3335,69 @@ class _HubViewState extends State<HubView> {
             style: const TextStyle(fontSize: 12),
           ),
         ),
+      if (closed.isNotEmpty)
+        ExpansionTile(
+          key: const Key('unassigned-closed'),
+          tilePadding: EdgeInsets.zero,
+          title: Text(
+            '完了・却下した行（${closed.length}件）',
+            style: const TextStyle(fontSize: 14),
+          ),
+          children: [for (final item in closed) closedUnassignedRow(item)],
+        ),
       const SizedBox(height: 24),
     ];
   }
 
-  /// プロジェクト未定のメモ1件。完了の報告や期日の対象ではないので、できる操作は元のメモを開くことだけ。
-  Widget unassignedEntry(UnassignedMemo memo) {
+  /// プロジェクト未定の1行（メモの本文か提案）の操作。本体の項目一覧に載っていない行には出さない。
+  Widget unassignedActions(String inputId, String text) {
+    final item = repo.unassignedRow(inputId, text);
+    if (item == null || item.resolved) return const SizedBox.shrink();
+    if (repo.itemRequestIdFor(item.key) != null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 6),
+        child: Text('操作済み（反映待ち）', style: TextStyle(fontSize: 12)),
+      );
+    }
+    final tag = item.key.substring(0, 12);
+    return Wrap(
+      spacing: 4,
+      children: [
+        todayToggle(unassignedScope, item.key),
+        TextButton.icon(
+          key: Key('unassigned-resolve-$tag'),
+          onPressed: busy ? null : () => reportUnassigned(item, 'resolve'),
+          icon: const Icon(Icons.check_circle_outline, size: 15),
+          label: const Text('完了'),
+        ),
+        TextButton.icon(
+          key: Key('unassigned-reject-$tag'),
+          onPressed: busy ? null : () => reportUnassigned(item, 'exclude'),
+          icon: const Icon(Icons.close, size: 15),
+          label: const Text('却下'),
+        ),
+      ],
+    );
+  }
+
+  /// 完了・却下した行。未解決へ戻せる。
+  Widget closedUnassignedRow(NowItemRef item) => ListTile(
+    key: Key('unassigned-closed-${item.key.substring(0, 12)}'),
+    dense: true,
+    contentPadding: EdgeInsets.zero,
+    title: Text(item.display, maxLines: 2, overflow: TextOverflow.ellipsis),
+    subtitle: Text(item.excluded ? '却下' : '完了'),
+    trailing: repo.itemRequestIdFor(item.key) != null
+        ? const Text('反映待ち', style: TextStyle(fontSize: 12))
+        : TextButton(
+            key: Key('unassigned-reopen-${item.key.substring(0, 12)}'),
+            onPressed: busy ? null : () => reportUnassigned(item, 'reopen'),
+            child: const Text('元に戻す'),
+          ),
+  );
+
+  /// プロジェクト未定のメモ1件。本体が対応していれば行ごとに操作を付け、いつでも元のメモを開ける。
+  Widget unassignedEntry(UnassignedMemo memo, bool actionable) {
     final record = repo.inputRecord(memo.inputId);
     return Padding(
       key: Key('unassigned-${memo.inputId}'),
@@ -3287,12 +3414,24 @@ class _HubViewState extends State<HubView> {
             memo.text,
             style: const TextStyle(fontWeight: FontWeight.w600, height: 1.5),
           ),
-          for (final suggestion in memo.suggestions)
+          if (actionable && memo.task)
+            unassignedActions(memo.inputId, memo.text),
+          // 本文と同じ提案や重なった提案は、同じ行（同じキー）なので操作を1回だけ出す。
+          for (final (index, suggestion) in memo.suggestions.indexed)
             Padding(
               padding: const EdgeInsets.only(top: 4, left: 12),
-              child: Text(
-                'AI提案: $suggestion',
-                style: const TextStyle(height: 1.5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'AI提案: $suggestion',
+                    style: const TextStyle(height: 1.5),
+                  ),
+                  if (actionable &&
+                      !(memo.task && suggestion == memo.text) &&
+                      !memo.suggestions.take(index).contains(suggestion))
+                    unassignedActions(memo.inputId, suggestion),
+                ],
               ),
             ),
           if (record != null)
@@ -3336,7 +3475,7 @@ class _HubViewState extends State<HubView> {
         added = changes?.added.map((i) => i.id).toSet() ?? const <String>{};
     return [
       title(
-        'PROJECT / ${project.lifecycleLabel}',
+        label: 'プロジェクト · ${project.lifecycleLabel}',
         project.title,
         '要約の生成: ${timeLabel(project.generatedAt)}\n最新の根拠: ${timeLabel(project.lastEvidenceAt)}\n${projectStatusLine(project, now)}',
       ),
@@ -3350,7 +3489,7 @@ class _HubViewState extends State<HubView> {
       if (requested)
         const Padding(
           padding: EdgeInsets.only(bottom: 10),
-          child: NoticeBox('状態の変更を依頼済みです。Miniで受け付けられ、同期されると反映されます。'),
+          child: NoticeBox('状態の変更を依頼済みです。Mac miniで処理されると反映されます。'),
         ),
       if (project.nowConflict case final conflict?)
         conflictPanel(project, conflict),
@@ -3403,7 +3542,7 @@ class _HubViewState extends State<HubView> {
         const Padding(
           padding: EdgeInsets.only(bottom: 10),
           child: NoticeBox(
-            '統合（または取り消し）を依頼済みです。Miniで受け付けられ、同期されると反映されます。',
+            '統合（または取り消し）を依頼済みです。Mac miniで処理されると反映されます。',
             key: Key('project-merge-requested'),
           ),
         ),
@@ -3411,14 +3550,14 @@ class _HubViewState extends State<HubView> {
         const Padding(
           padding: EdgeInsets.only(bottom: 10),
           child: NoticeBox(
-            '呼び名とキーワードの変更を依頼済みです。Miniで受け付けられ、同期されると反映されます。',
+            '呼び名とキーワードの変更を依頼済みです。Mac miniで処理されると反映されます。',
             key: Key('project-definition-requested'),
           ),
         ),
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: SelectableText(
-          '別名: ${project.aliases.isEmpty ? 'なし' : project.aliases.join('・')}\nキーワード: ${project.keywords.isEmpty ? 'なし' : project.keywords.join('・')}',
+          '呼び名: ${project.aliases.isEmpty ? 'なし' : project.aliases.join('・')}\nキーワード: ${project.keywords.isEmpty ? 'なし' : project.keywords.join('・')}\n（メモがどのプロジェクトのものかを見分ける手がかりです）',
           key: const Key('project-terms'),
           style: const TextStyle(fontSize: 12, height: 1.7),
         ),
@@ -3448,18 +3587,6 @@ class _HubViewState extends State<HubView> {
         runSpacing: 12,
         children: [
           OutlinedButton.icon(
-            key: const Key('project-status'),
-            onPressed: editable ? () => changeStatus(project) : null,
-            icon: const Icon(Icons.flag_outlined, size: 18),
-            label: const Text('状態を変更'),
-          ),
-          OutlinedButton.icon(
-            key: const Key('project-definition'),
-            onPressed: editable ? () => changeDefinition(project) : null,
-            icon: const Icon(Icons.label_outline, size: 18),
-            label: const Text('呼び名とキーワード'),
-          ),
-          OutlinedButton.icon(
             key: const Key('project-pin'),
             onPressed: () => togglePin(project),
             icon: Icon(
@@ -3487,24 +3614,13 @@ class _HubViewState extends State<HubView> {
               icon: const Icon(Icons.bookmarks_outlined, size: 18),
               label: Text(mergeTarget == null ? '資料' : '資料（統合先）'),
             ),
-          // 手で書いた統合先が見つからない・循環している定義は、直すまで統合を依頼できない（本体が断る）。
-          if (!project.merged && project.mergedInto == null)
-            OutlinedButton.icon(
-              key: const Key('project-merge'),
-              // ほかのプロジェクトの統合先になっているプロジェクトは、統合元にできない（本体と同じ）。
-              onPressed: mergeable && sources.isEmpty
-                  ? () => mergeProject(project)
-                  : null,
-              icon: const Icon(Icons.merge, size: 18),
-              label: const Text('ほかのプロジェクトへ統合'),
-            ),
           OutlinedButton.icon(
             key: const Key('project-guided'),
             onPressed: c.loading || c.captureWarning != null
                 ? null
                 : () => showGuided(context, c, project: project.id),
             icon: const Icon(Icons.checklist, size: 18),
-            label: const Text('このプロジェクトで深掘り'),
+            label: const Text('このプロジェクトで質問に答える'),
           ),
           OutlinedButton.icon(
             key: const Key('copy-context'),
@@ -3515,7 +3631,7 @@ class _HubViewState extends State<HubView> {
                       final text = await c.context(project.id);
                       await Clipboard.setData(ClipboardData(text: text));
                       if (mounted) {
-                        notice(context, '出典付きcontextをコピーしました');
+                        notice(context, '別のAIに渡す文章をコピーしました');
                       }
                     } catch (e) {
                       if (mounted) {
@@ -3524,7 +3640,37 @@ class _HubViewState extends State<HubView> {
                     }
                   },
             icon: const Icon(Icons.copy, size: 18),
-            label: const Text('出典付きcontextをコピー'),
+            label: const Text('別のAIに渡す文章をコピー'),
+          ),
+          // ふだん使わない変更は「…」にまとめる。
+          PopupMenuButton<VoidCallback>(
+            key: const Key('project-more'),
+            tooltip: 'ほかの操作',
+            icon: const Icon(Icons.more_horiz),
+            onSelected: (action) => action(),
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                key: const Key('project-status'),
+                enabled: editable,
+                value: () => changeStatus(project),
+                child: const Text('状態を変える（休止・完了など）'),
+              ),
+              PopupMenuItem(
+                key: const Key('project-definition'),
+                enabled: editable,
+                value: () => changeDefinition(project),
+                child: const Text('呼び名とキーワードを変える'),
+              ),
+              // 手で書いた統合先が見つからない・循環している定義は、直すまで統合を依頼できない（本体が断る）。
+              if (!project.merged && project.mergedInto == null)
+                PopupMenuItem(
+                  key: const Key('project-merge'),
+                  // ほかのプロジェクトの統合先になっているプロジェクトは、統合元にできない（本体と同じ）。
+                  enabled: mergeable && sources.isEmpty,
+                  value: () => mergeProject(project),
+                  child: const Text('ほかのプロジェクトへ統合'),
+                ),
+            ],
           ),
         ],
       ),
@@ -3572,7 +3718,7 @@ class _HubViewState extends State<HubView> {
                     pendingActionRow(action),
                 if (project.sections[section.$1]!.isEmpty &&
                     (section.$1 != 'next' || project.pendingActions.isEmpty))
-                  const Text('まだ整理されていません。'),
+                  const Text('まだAIが読み取っていません。'),
                 for (final entry in project.sections[section.$1]!)
                   nowEntry(project, section.$1, entry, added),
               ],
@@ -3629,7 +3775,7 @@ class _HubViewState extends State<HubView> {
         ),
         const SizedBox(height: 4),
         const Text(
-          '完了・解決には数えません。理由と一言は、次からの整理でAIへ渡します。',
+          '完了・解決には数えません。理由と一言は、次からのAI読み取りでAIへ渡します。',
           style: TextStyle(fontSize: 12),
         ),
         const SizedBox(height: 12),
@@ -3675,7 +3821,7 @@ class _HubViewState extends State<HubView> {
         ),
         const SizedBox(height: 4),
         const Text(
-          '設定したリポジトリのコミット件名から作った下書きです。本文を確認・編集して入力にするか、見送ってください。',
+          '設定したリポジトリのコミット件名から作った下書きです。本文を確かめて直し、メモとして保存するか、見送ってください。',
           style: TextStyle(fontSize: 12),
         ),
         const SizedBox(height: 12),
@@ -3705,7 +3851,7 @@ class _HubViewState extends State<HubView> {
                           onPressed: busy || c.composing
                               ? null
                               : () => showCapture(context, c, draft: draft),
-                          child: const Text('入力にする'),
+                          child: const Text('メモとして保存'),
                         ),
                         TextButton(
                           key: Key('draft-dismiss-${draft.id}'),
@@ -3737,7 +3883,7 @@ class _HubViewState extends State<HubView> {
       if (project.nowRecordId != null)
         TextButton(
           onPressed: () => open(project.nowRecordId!),
-          child: const Text('NOW本文と出典・日時を開く'),
+          child: const Text('現状の本文と出典・日時を開く'),
         ),
     ];
   }
@@ -3839,8 +3985,8 @@ class RecordView extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 12),
               child: NoticeBox(
                 chain.first.kind == 'action'
-                    ? '行動の文面の訂正を送りました。Miniに届くまで、NOWの次の一手は直す前の文面のままです（$requestId）。'
-                    : '訂正を送りました。Miniに届いて整理されるまで、要約は訂正前の内容のままです（$requestId）。',
+                    ? '行動の文面の訂正を送りました。Mac miniに届くまで、現状の次の一手は直す前の文面のままです（$requestId）。'
+                    : '訂正を送りました。Mac miniに届いてAIが読み取るまで、要約は訂正前の内容のままです（$requestId）。',
               ),
             ),
           Wrap(
@@ -3890,7 +4036,7 @@ class RecordView extends StatelessWidget {
       final requestId = repo.ideaLinkRequestIdFor(me, other);
       if (requestId != null) {
         return Text(
-          '依頼済み（$requestId）。Miniで受け付けられると反映されます。',
+          '依頼済み（$requestId）。Mac miniで処理されると反映されます。',
           style: const TextStyle(fontSize: 12),
         );
       }
@@ -4067,7 +4213,7 @@ class RecordView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             SelectableText(
-              '${record.sourceId}\n${record.path}\n入力元: ${record.source}\n${recordTimeLines(record)}\n受領: ${timeLabel(record.receivedAt)}\n生成: ${timeLabel(record.generatedAt)}',
+              '${record.sourceId}\n${record.path}\n入力元: ${record.source}\n${recordTimeLines(record)}\nMac miniが受け取った時刻: ${timeLabel(record.receivedAt)}\n生成: ${timeLabel(record.generatedAt)}',
               style: const TextStyle(fontSize: 12, height: 1.9),
             ),
             for (final id in record.references)
@@ -4112,7 +4258,7 @@ Future<void> sendIdeaLink(
     context: context,
     builder: (dialog) => AlertDialog(
       title: Text(heading),
-      content: Text('$body依頼はInputへ保存され、Miniで受け付けられると反映されます。'),
+      content: Text('$body依頼は保存され、Mac miniで処理されると反映されます。'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialog, false),
@@ -4139,8 +4285,8 @@ Future<void> sendIdeaLink(
       notice(
         context,
         result.saved
-            ? '依頼を保存しました。Miniで受け付けられると反映されます。'
-            : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+            ? '依頼を保存しました。Mac miniで処理されると反映されます。'
+            : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
       );
     }
   } catch (e) {
@@ -4184,16 +4330,38 @@ String originLabel(String origin) => switch (origin) {
   _ => origin,
 };
 String stateLabel(String state) => switch (state) {
-  'waiting' => 'Mini受領待ち',
-  'accepted' => 'Mini受領',
-  'organized' => '整理済み',
-  'failed' => '整理失敗',
-  'rejected' => '受付失敗',
+  'waiting' => 'Mac miniの受け取り待ち',
+  'accepted' => 'Mac miniが受け取り',
+  'organized' => '読み取り済み',
+  'failed' => '読み取り失敗',
+  'rejected' => '受け付けられず',
   'conflict' => '競合',
   'uncertain' => '保存確認待ち',
   'unknown' => '整合性未確認',
-  'action' => '本人が追加した行動（整理しません）',
+  'action' => '本人が追加した行動（AIは書き換えません）',
   _ => state,
+};
+
+/// 「保存と反映」の段階。保存済み → Mac miniが受け取り済み → 反映済み／失敗。
+String intakeStateLabel(String state) => switch (state) {
+  'waiting' => '保存済み · Mac miniの受け取り待ち',
+  'accepted' => 'Mac miniが受け取り済み',
+  'organized' => '反映済み',
+  'failed' => '失敗 · AIの読み取りがうまくいきませんでした',
+  'rejected' => '失敗 · 受け付けられませんでした',
+  'conflict' => '失敗 · 同期が競合しています',
+  'uncertain' => '保存確認待ち',
+  'unknown' => '状態を確認できません',
+  _ => stateLabel(state),
+};
+
+/// 失敗したときに次にすること。
+String? intakeNextStep(String state) => switch (state) {
+  'rejected' => '次に: 理由を読み、必要なら元の画面から操作し直してください。',
+  'conflict' ||
+  'unknown' => '次に: 同期が終わるのを待って再読込してください。続くときはMac miniの同期を確認してください。',
+  'failed' => '次に: Mac miniの本体が動いているか確認してください。元のメモは残っています。',
+  _ => null,
 };
 
 Future<void> showCapture(
@@ -4384,8 +4552,8 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
                     const SizedBox(height: 12),
                     Text(
                       action
-                          ? '直した後の文面を1行で書いてください。元の文面は原文に残ります。Miniで受け付けられるとNOWの次の一手が直した文面になります。付けた日付は直した後の行動に引き継がれます。'
-                          : '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
+                          ? '直した後の文面を1行で書いてください。元の文面は原文に残ります。Mac miniで処理されると現状の次の一手が直した文面になります。付けた日付は直した後の行動に引き継がれます。'
+                          : '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Mac miniのAIが読み取るまで、要約や現状は訂正前の内容のままです。',
                       style: const TextStyle(fontSize: 12, height: 1.6),
                     ),
                     const SizedBox(height: 16),
@@ -4417,7 +4585,7 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
                         padding: const EdgeInsets.only(top: 12),
                         child: NoticeBox(
                           result!.saved
-                              ? 'この端末のInputに訂正を保存しました'
+                              ? 'この端末に訂正を保存しました'
                               : '保存確認待ちです。再送せず同じ操作を確認してください。',
                         ),
                       ),
@@ -5246,28 +5414,51 @@ class _CaptureDialogState extends State<CaptureDialog> {
                         if (_related.isNotEmpty && _showRelated && !locked)
                           _relatedBox(),
                         // 問いへの答えは本人のメモとして残すので、種類を選ばせない。
+                        // 種類はふだん変えないので、たたんでおく（作業要約のときは開く）。
                         if (widget.answer == null) ...[
-                          const SizedBox(height: 16),
-                          DropdownButtonFormField<String>(
-                            key: ValueKey('memo-kind-$_formGeneration'),
-                            initialValue: kind,
-                            decoration: const InputDecoration(labelText: '種類'),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'memo',
-                                child: Text('メモ'),
+                          const SizedBox(height: 8),
+                          Theme(
+                            data: Theme.of(
+                              context,
+                            ).copyWith(dividerColor: Colors.transparent),
+                            child: ExpansionTile(
+                              key: ValueKey('memo-kind-more-$_formGeneration'),
+                              tilePadding: EdgeInsets.zero,
+                              initiallyExpanded: kind != 'memo',
+                              title: Text(
+                                '種類: ${kind == 'memo' ? 'メモ' : 'AIの作業要約・未検証'}',
+                                style: const TextStyle(fontSize: 13),
                               ),
-                              DropdownMenuItem(
-                                value: 'work-summary',
-                                child: Text('AIの作業要約・未検証'),
+                              subtitle: const Text(
+                                'AIの作業の報告を貼るときだけ変えます',
+                                style: TextStyle(fontSize: 11),
                               ),
-                            ],
-                            onChanged: locked
-                                ? null
-                                : (v) {
-                                    setState(() => kind = v!);
-                                    _schedulePersist();
-                                  },
+                              children: [
+                                DropdownButtonFormField<String>(
+                                  key: ValueKey('memo-kind-$_formGeneration'),
+                                  initialValue: kind,
+                                  decoration: const InputDecoration(
+                                    labelText: '種類',
+                                  ),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: 'memo',
+                                      child: Text('メモ'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'work-summary',
+                                      child: Text('AIの作業要約・未検証'),
+                                    ),
+                                  ],
+                                  onChanged: locked
+                                      ? null
+                                      : (v) {
+                                          setState(() => kind = v!);
+                                          _schedulePersist();
+                                        },
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                         const SizedBox(height: 16),
@@ -5317,12 +5508,12 @@ class _CaptureDialogState extends State<CaptureDialog> {
                           const Padding(
                             padding: EdgeInsets.only(top: 12),
                             child: NoticeBox(
-                              '作業要約として保存すると、NOWの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
+                              '作業要約として保存すると、プロジェクトの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
                             ),
                           ),
                         const SizedBox(height: 16),
                         const Text(
-                          'Inputへ追加します。同期後のMini受領・整理は受付状況で確認できます。',
+                          '保存すると、同期の後にMac miniが受け取り、AIが読み取ります。進み具合は「保存と反映」で見られます。',
                           style: TextStyle(fontSize: 12, height: 1.6),
                         ),
                         if (_draftKey != null)
@@ -5369,7 +5560,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             padding: const EdgeInsets.only(top: 12),
                             child: NoticeBox(
                               result!.saved
-                                  ? 'この端末のInputに保存しました'
+                                  ? 'この端末に保存しました'
                                   : '保存確認待ちです。再送せず同じ操作を確認してください。',
                             ),
                           ),
@@ -5394,7 +5585,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
               FilledButton(
                 key: const Key('save-memo'),
                 onPressed: busy || !_ready ? null : submit,
-                child: const Text('Inputへ保存'),
+                child: const Text('メモとして保存'),
               ),
             if (locked && result?.saved != true)
               FilledButton(
@@ -5550,7 +5741,7 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
 
   String effect(String reason) => switch (reason) {
     'outdated' when widget.item.action => 'もうやらない。項目を外すだけです。完了には数えません。',
-    'misread' => 'メモはそう言っていない。Miniが次の整理で、このメモを読み直します。',
+    'misread' => 'メモはそう言っていない。Mac miniが次のAI読み取りで、このメモを読み直します。',
     'wrong-project' =>
       widget.owned
           ? 'このプロジェクトの話ではない。プロジェクトを指定して保存したメモなので、関連付けは変えず、この項目だけを外します。'
@@ -5613,7 +5804,7 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
               ),
               const SizedBox(height: 8),
               const Text(
-                '完了・解決には数えません。原文は変わりません。外した項目の本文・理由・一言は、同じ読み違いを減らすために、次からの整理でAIへ渡します。Miniが受け付けるとNOWに反映され、プロジェクトの画面から未解決に戻せます。',
+                '完了・解決には数えません。原文は変わりません。外した項目の本文・理由・一言は、同じ読み違いを減らすために、次からのAI読み取りでAIへ渡します。Mac miniが処理すると現状に反映され、プロジェクトの画面から未解決に戻せます。',
                 style: TextStyle(fontSize: 12, height: 1.6),
               ),
             ],
@@ -5726,8 +5917,8 @@ class _ActionDialogState extends State<ActionDialog> {
               const SizedBox(height: 8),
               Text(
                 widget.from == null
-                    ? '本人が追加した行動として、そのまま次の一手に載ります。AIは整理せず、完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Miniで受け付けられ、同期されるとNOWに反映されます。'
-                    : '本人が追加した行動として次の一手に載り、元の行はAIの読み取りの欄から外れます。完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Miniで受け付けられ、同期されるとNOWに反映されます。',
+                    ? '本人が追加した行動として、そのまま次の一手に載ります。AIは書き換えず、完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Mac miniで処理されると現状に反映されます。'
+                    : '本人が追加した行動として次の一手に載り、元の行はAIの読み取りの欄から外れます。完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Mac miniで処理されると現状に反映されます。',
                 style: const TextStyle(fontSize: 12, height: 1.6),
               ),
             ],
@@ -5911,7 +6102,7 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
               ),
               const SizedBox(height: 14),
               const Text(
-                '日付はMiniが受け付けるとNOWとHOMEに反映されます。原文と整理結果は変わりません。',
+                '日付はMac miniが処理すると現状とHOMEに反映されます。原文とAIの読み取り結果は変わりません。',
                 style: TextStyle(fontSize: 12),
               ),
             ],
@@ -5973,7 +6164,7 @@ class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
               ),
           const SizedBox(height: 8),
           const Text(
-            '休止・完了にすると、ホームの後ろにまとめて表示し、AIの帰属候補から外します。メモで明示したプロジェクトは引き続き使えます。依頼はInputへ保存され、Miniで受け付けられると反映されます。',
+            '休止・完了にすると、ホームの後ろにまとめて表示し、AIの帰属候補から外します。メモで明示したプロジェクトは引き続き使えます。依頼は保存され、Mac miniで処理されると反映されます。',
             style: TextStyle(fontSize: 12, height: 1.6),
           ),
         ],
@@ -6081,7 +6272,7 @@ class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
               ),
             ],
             const Text(
-              '依頼はInputへ保存され、Miniで受け付けられると反映されます。',
+              '依頼は保存され、Mac miniで処理されると反映されます。',
               style: TextStyle(fontSize: 12, height: 1.6),
             ),
           ],
@@ -6195,7 +6386,7 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
                 NoticeBox(problem, error: true)
               else
                 const Text(
-                  '依頼はInputへ保存され、Miniで受け付けられると反映されます。プロジェクトを指定せずに保存したメモのうち、まだどのプロジェクトにも結び付いていないものは、次の整理で新しい定義に合わせて見直されます（AIを使います）。',
+                  '依頼は保存され、Mac miniで処理されると反映されます。プロジェクトを指定せずに保存したメモのうち、まだどのプロジェクトにも結び付いていないものは、次のAI読み取りで新しい定義に合わせて見直されます（AIを使います）。',
                   style: TextStyle(fontSize: 12, height: 1.6),
                 ),
             ],
@@ -6381,7 +6572,7 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
                 max: 8000,
               ),
               const Text(
-                '作成の依頼をInputへ追加します。Miniで受け付けられ、同期されるとプロジェクト一覧に表示されます。名前・別名が既存のプロジェクトと重なる場合は作成されません。',
+                '作成の依頼を保存します。Mac miniで処理されるとプロジェクト一覧に表示されます。名前・別名が既存のプロジェクトと重なる場合は作成されません。',
                 style: TextStyle(fontSize: 12, height: 1.6),
               ),
               if (error != null)
@@ -6394,7 +6585,7 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
                   padding: const EdgeInsets.only(top: 12),
                   child: NoticeBox(
                     result!.saved
-                        ? 'この端末のInputに作成の依頼を保存しました'
+                        ? 'この端末に作成の依頼を保存しました'
                         : '保存確認待ちです。再送せず同じ操作を確認してください。',
                   ),
                 ),
