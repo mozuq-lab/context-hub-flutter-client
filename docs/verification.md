@@ -255,6 +255,14 @@
 - 答える前に選んだプロジェクトがなくなった問い（本体の`project-missing`）は、答えを作れなかった理由を添えて示すことを単体テストで確認。
 - 未検証: Mac・Androidのビルドと実アプリでの表示と操作（この環境にXcode・Android SDKがありません）。
 
+## Mermaidの図とFlutterの更新（2026-11-21）
+
+- Flutterを3.41.5から3.47.9（Dart 3.13.7）へ更新した（図の描画に使う`mermaid_flutter`・`mermaid_core` 0.5.0がDart 3.12以上を必要とするため）。Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通521テスト成功。
+- Dart 3.13の正規表現が、本体（Node 24）と同じく一部だけの修飾子`(?i:…)`と同じ名前の捕捉グループを受け付けるようになったため、追加の伏せ字規則でそれらを使えることと、本体と同じ結果で伏せることを単体テストで確認（それまでは解釈できない規則として扱っていた）。
+- 本文の```` ```mermaid ````のコードブロックを図として表示し、ほかのコードブロックはコードのまま出すこと、リスト・引用の中や`~~~`の囲み・情報文字列付きの囲みも図にすること、図にできない原文・大きすぎる原文（文字数・文の数・描いた大きさ）は理由を添えてコードのまま出すこと、「コードを見る」「拡大して見る」（画面に収まる倍率から始まり、閉じて戻れる）、再構築と明暗の切替で描き直す回数をwidgetテストで確認。
+- 日本語のラベルのフローチャートとシーケンス図を、明るい表示・暗い表示でテスト上に描画して見た目を確認（IPAゴシックを読み込んだテスト環境での描画で、実機の書体ではない）。
+- 未検証: Mac・Androidのビルドと実アプリでの図の表示・拡大操作（この環境にXcode・Android SDKがありません）。Flutterの更新によるMac・Androidのビルド設定への影響も、ビルドしての確認はしていません。
+
 ## 制限・追加確認
 
 - MacのNSOpenPanelによるフォルダー選択、bookmarkの別プロセス再起動復元・再選択は未完了です。サンプルの実bridge検査とは区別します。
@@ -273,7 +281,7 @@
 
 ## 再検証
 
-基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.41.5を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。
+基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.47.9を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。
 
 実アプリのサンプル検査は `flutter test integration_test/app_test.dart -d <device>`、候補操作と方針は `integration_test/review_test.dart`・`integration_test/scoped_policy_test.dart` を使います。実Vaultをテストに使わないでください。
 

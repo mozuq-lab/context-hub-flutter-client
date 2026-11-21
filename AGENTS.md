@@ -32,7 +32,7 @@
 
 ## 開発環境
 
-- Flutter 3.41.5 / Dart 3.11.3、Node 24 / npm、MacはXcode、AndroidはSDKとJDK 21。
+- Flutter 3.47.9 / Dart 3.13.7、Node 24 / npm、MacはXcode、AndroidはSDKとJDK 21。
 - Nodeは上流protocolの開発時検証専用で、端末アプリには同梱しない。
 - MacはプロジェクトでSwift Package Managerを有効にしている（`pubspec.yaml` の `enable-swift-package-manager`）。現行のMac依存にCocoaPodsは不要。Xcode 27.2のSDKが対応するmacOS 12以降・arm64を明示し、Intel用ビルドは対象外。FlutterやXcodeのグローバル設定は切り替えない。
 - `FLUTTER_BIN`・`JAVA_HOME`・`DEVELOPER_DIR` はコマンド単位で指定する。スクリプトはXcode規約に自動同意せず、グローバルのXcode選択も変更しない。

@@ -132,11 +132,21 @@ void main() {
       });
     });
 
-    test('Nodeでは使えてもアプリで解釈できない規則は、直し方を示し、規則の本文は出さない', () {
-      for (final pattern in [
-        r'(?i:secretword)\d+',
-        r'(?<v>secretword1)|(?<v>secretword2)',
-      ]) {
+    test('一部だけの修飾子と同じ名前の捕捉グループは、本体（Node 24）と同じく使える', () {
+      final policy = SecretPolicy.parse(
+        patternsFile(
+          patterns: [
+            {'label': '社内鍵', 'pattern': r'(?i:secretword)\d+'},
+            {'label': '暗号名', 'pattern': r'(?<v>codeA1)|(?<v>codeB2)'},
+          ],
+        ),
+      );
+      expect(policy.usable, isTrue, reason: policy.problem);
+      expect(policy.redact('SECRETWORD12 と codeB2'), '[伏せ字:社内鍵] と [伏せ字:暗号名]');
+    });
+
+    test('アプリで解釈できない規則は、直し方を示し、規則の本文は出さない', () {
+      for (final pattern in [r'secretword[z-a]', r'secretword(?<1x>y)']) {
         final policy = SecretPolicy.parse(
           patternsFile(
             patterns: [
@@ -146,8 +156,7 @@ void main() {
         );
         expect(policy.usable, isFalse, reason: pattern);
         expect(policy.problem, contains('「社内鍵」'));
-        expect(policy.problem, contains('(?i:…)'));
-        expect(policy.problem, contains('同じ名前の捕捉グループ'));
+        expect(policy.problem, contains('このアプリで解釈できません'));
         expect(policy.problem, contains('本体の設定'));
         expect(policy.problem, isNot(contains('secretword')));
       }
