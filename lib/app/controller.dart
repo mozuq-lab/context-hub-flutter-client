@@ -12,6 +12,7 @@ import '../core/attention.dart';
 import '../core/home_widget.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
+import '../core/people.dart';
 import '../core/models.dart';
 import '../core/parser.dart' show clip;
 import '../ai/guided_services.dart';
@@ -1146,6 +1147,56 @@ class HubController extends ChangeNotifier {
           service.saveProjectDefinition(operation, project, next),
     );
   }
+
+  /// 人の登録（[personId]がまだない人）・名前と呼び名の変更・外す依頼。
+  /// 変更と外すは、表示中の定義hash（[expectedHash]）に結び付ける。[draft]は外すときだけnull。
+  Future<CaptureResult> requestPerson(
+    String personId,
+    String action, {
+    String? expectedHash,
+    PersonDraft? draft,
+  }) => _confirmedRequest(
+    (parsed) {
+      final found = parsed.people[personId];
+      if (action == 'add') {
+        if (found != null ||
+            parsed.pendingPersonAdds.any((p) => p.personId == personId)) {
+          // 同じ登録の保存結果が不明だった場合の確認は、同じ操作IDで受け付ける。
+          if (!parsed.pendingPersonAdds.any(
+            (p) => p.personId == personId && p.name == draft?.name,
+          )) {
+            throw StateError('同じIDの人が既にいます。画面を開き直してください。');
+          }
+        }
+      } else {
+        if (found == null || found.definitionHash != expectedHash) {
+          throw StateError('人の定義が変更されています。表示を確認してから操作してください。');
+        }
+        if (parsed.personRequestIdFor(personId) != null) {
+          throw StateError('この人への依頼が反映待ちです。受付状況を確認してください。');
+        }
+      }
+      if (draft != null) {
+        final problem = draft.problem;
+        if (problem != null) throw StateError(problem);
+        final other = draft.overlap(parsed.peopleForOverlap, except: personId);
+        if (other != null) {
+          throw StateError('名前か呼び名が「${other.name}」と重なります。別の呼び名にしてください。');
+        }
+        if (found != null && action == 'edit' && draft.sameAs(found)) {
+          throw StateError('名前・呼び名に変更がありません。');
+        }
+      }
+      return 'person-definition/$personId/$action/${expectedHash ?? '-'}/${digest(jsonEncode([draft?.name, draft?.aliases]))}/${parsed.latestPersonChangeId(personId) ?? '-'}';
+    },
+    (service, parsed, operation) => service.savePersonDefinition(
+      operation,
+      personId: personId,
+      action: action,
+      expectedHash: expectedHash,
+      draft: draft,
+    ),
+  );
 
   /// 最新のVaultを読み直して確認し、同じ確認内容には同じ操作IDを使って依頼を保存する。
   Future<CaptureResult> _confirmedRequest(

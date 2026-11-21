@@ -7,7 +7,7 @@ final class VaultBridge {
   private let fm = FileManager.default
   private let queue = DispatchQueue(label: "context-hub.vault")
   private var channel: FlutterMethodChannel!
-  private let folders = ["00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system"]
+  private let folders = ["00_inbox", "10_projects", "20_ideas", "30_knowledge", "40_people", "Input", "90_system"]
   /// Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
   private let rootFiles = ["POLICY.md", "REVIEW.md"]
   /// 操作journal以外の状態ファイル。保存先の設定、端末に残す書きかけのメモ、選んで深掘りの途中の状態。
