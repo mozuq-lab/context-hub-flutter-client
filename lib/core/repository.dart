@@ -7,6 +7,7 @@ import 'models.dart';
 import 'secrets.dart';
 import 'intake_features.dart';
 import 'parser.dart';
+import 'preferences.dart';
 
 /// 元の入力と訂正のチェーン、有効な処理記録、関連するプロジェクト。
 typedef _Unit = ({
@@ -53,6 +54,13 @@ class HubRepository {
   final Map<String, String> _latestSchedules = {};
   final Map<String, String> _outstandingSchedules = {};
   final Map<String, String> _outstandingHintDismissals = {};
+
+  /// 「記録に聞く」の問いと答え（新しい順）。この端末から送った問いと、CLIなどほかから聞いた問いの答え。
+  final List<AskThread> asks = [];
+  final Map<String, AskAnswer> _answers = {};
+
+  /// 端末間でそろえる好み（`90_system/client-preferences.json`）。まとまり名 → 記録。ないか読めなければ空。
+  final Map<String, SharedPreference> sharedPreferences = {};
   final Map<String, String> _outstandingDrafts = {};
 
   /// プロジェクトID → 反映待ちの「NOWを生成版に戻す」依頼のREQ ID。
@@ -397,6 +405,8 @@ class HubRepository {
     _readIdeaIndex();
     _readUnassignedActions();
     _readInsights();
+    _readAnswers();
+    _readSharedPreferences();
     _readIntake();
     _readDigest();
     _readBackupChecks();
@@ -590,9 +600,13 @@ class HubRepository {
                       (sc['due'] != null && !validScheduleDate(sc['due'])) ||
                       (sc['review_after'] != null &&
                           !validScheduleDate(sc['review_after'])) ||
-                      (sc['due'] == null && sc['review_after'] == null)))) {
+                      (sc['due'] == null && sc['review_after'] == null) ||
+                      (sc['repeat'] != null && sc['due'] == null)))) {
             throw const FormatException();
           }
+          final repeat = sc is Map && sc['repeat'] != null
+              ? RepeatRule.parse(sc['repeat'])
+              : null;
           final hints = <NowItemHint>[];
           final rawHints = i['hints'];
           if (rawHints != null) {
@@ -630,6 +644,7 @@ class HubRepository {
               scheduleId: sc is Map ? sc['id'] as String : null,
               due: sc is Map ? sc['due'] as String? : null,
               reviewAfter: sc is Map ? sc['review_after'] as String? : null,
+              repeat: repeat,
               hints: r == null ? hints : const [],
             ),
           );
@@ -1873,6 +1888,7 @@ class HubRepository {
               'project-definition',
               'item-resolution',
               'item-schedule',
+              'item-occurrence',
               'item-hint-dismiss',
               'git-draft-dismiss',
               'project-create',
@@ -1882,6 +1898,8 @@ class HubRepository {
               'project-unmerge',
               'insight-reaction',
               'person-definition',
+              'ask',
+              'client-preferences',
               'policy-keep',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
@@ -1982,7 +2000,35 @@ class HubRepository {
                 !m.containsKey('review_after') ||
                 (m['due'] != null && !validScheduleDate(m['due'])) ||
                 (m['review_after'] != null &&
-                    !validScheduleDate(m['review_after'])))) {
+                    !validScheduleDate(m['review_after'])) ||
+                (m['repeat'] != null &&
+                    (m['due'] == null || !_validRepeatRequest(m['repeat']))))) {
+          throw const FormatException();
+        }
+        final occurrence = m['operation'] == 'item-occurrence';
+        if (occurrence &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !occurrenceActions.contains(m['action']) ||
+                !validScheduleDate(m['due']))) {
+          throw const FormatException();
+        }
+        final asking = m['operation'] == 'ask';
+        if (asking &&
+            (doc.body.trim().isEmpty ||
+                doc.body.length > askQuestionChars ||
+                (m['project'] != null &&
+                    (m['project'] is! String ||
+                        !projectIdPattern.hasMatch(m['project']))))) {
+          throw const FormatException();
+        }
+        final preferring = m['operation'] == 'client-preferences';
+        if (preferring &&
+            (m['confirmed'] != true || preferenceGroupsOf(doc.body) == null)) {
           throw const FormatException();
         }
         final hintDismiss = m['operation'] == 'item-hint-dismiss';
@@ -2082,7 +2128,8 @@ class HubRepository {
         final usedDraft = m['operation'] == 'capture' && m['meta'] is Map
             ? (m['meta'] as Map)['git_draft']
             : null;
-        String? resolutionId, scheduleId, ideaLinkId;
+        String? resolutionId, scheduleId, ideaLinkId, occurrenceNext, askId;
+        DateTime? occurrenceAt, askReceived;
         final decision = [
           'project-approve',
           'project-reject',
@@ -2165,7 +2212,13 @@ class HubRepository {
         final item = IntakeStatus(
           id: id,
           path: e.key,
-          title: reacting
+          title: occurrence
+              ? '定例の「${occurrenceActionLabels[m['action']]}」（期日 ${m['due']}）: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : asking
+              ? '記録に聞く: ${clip(doc.body.trim().replaceAll(RegExp(r'\s+'), ' '), 60)}'
+              : preferring
+              ? '好みをほかの端末とそろえる（${preferenceGroupsOf(doc.body)!.map((g) => preferenceGroupLabels[g]).join('・')}）'
+              : reacting
               ? '今週の気づきへの反応（${insightReactionLabels[m['reaction']] ?? '反応を外す'}）: ${_insightTitle(m['run_id'], m['item_key'])}'
               : ideaLink
               ? '${m['action'] == 'link' ? 'アイデアを束ねる依頼' : 'アイデアを別の話とする依頼'}: ${_ideaTitle((m['idea_ids'] as List)[0])} / ${_ideaTitle((m['idea_ids'] as List)[1])}'
@@ -2192,7 +2245,7 @@ class HubRepository {
                     ? '誤りとして外す（${exclusionReasonLabels[m['reason']]}）'
                     : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemSchedule
-              ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}${m['repeat'] is Map ? '・${_repeatLabelOf(m['repeat'])}' : ''}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : hintDismiss
               ? '「片付いたかも」の見送り: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
@@ -2330,6 +2383,45 @@ class HubRepository {
                 throw const FormatException();
               }
               scheduleId = r['scheduleId'] as String;
+            }
+            if (occurrence) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['action'] != m['action'] ||
+                  r['occurrenceId'] is! String ||
+                  !RegExp(
+                    r'^OCC-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['occurrenceId']) ||
+                  !validScheduleDate(r['nextDue']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              occurrenceNext = r['nextDue'] as String;
+              occurrenceAt = timestamp(ack['received_at']);
+            }
+            if (asking) {
+              final r = ack['result'] as Map;
+              if (r['askId'] is! String ||
+                  !RegExp(
+                    r'^ASK-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['askId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              askId = r['askId'] as String;
+              askReceived = timestamp(ack['received_at']);
+            }
+            if (preferring) {
+              final r = ack['result'] as Map, applied = r['applied'];
+              if (applied is! List ||
+                  !applied.every(preferenceGroups.contains) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              item.detail = applied.isEmpty
+                  ? 'Mini受領済み。ほかの端末の変更の方が新しいか、同じ内容のため、記録は変わりませんでした。'
+                  : 'Miniが記録しました（${applied.map((g) => preferenceGroupLabels[g]).join('・')}）。';
             }
             if (creation) {
               final r = ack['result'] as Map, memo = r['firstMemoInputId'];
@@ -2570,6 +2662,10 @@ class HubRepository {
           );
         }
         if (hintDismiss) _hintDismissRequest(item, m);
+        if (occurrence) {
+          _occurrenceRequest(item, m, occurrenceNext, occurrenceAt);
+        }
+        if (asking) _askRequest(item, m, doc.body, askId, askReceived);
         if (draftDismiss &&
             ['waiting', 'accepted'].contains(item.state) &&
             gitDrafts.containsKey(m['draft_id'])) {
@@ -2606,6 +2702,200 @@ class HubRepository {
       }
     }
     _insightReactionRequests(reactionItems);
+    // CLIなど、この端末の受付ファイルからではない問いの答えも並べる。
+    final shown = asks.map((a) => a.answer?.id).whereType<String>().toSet();
+    for (final answer in _answers.values) {
+      if (shown.contains(answer.id)) continue;
+      asks.add(
+        AskThread(
+          question: answer.question,
+          project: answer.project,
+          at: answer.askedAt,
+          answer: answer,
+        ),
+      );
+    }
+    asks.sort((a, b) => b.at.compareTo(a.at));
+  }
+
+  static bool _validRepeatRequest(Object? value) {
+    try {
+      RepeatRule.parse(value);
+      return value is Map && !value.containsKey('day');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _repeatLabelOf(Object? value) {
+    try {
+      return RepeatRule.parse(value).label;
+    } catch (_) {
+      return '繰り返し';
+    }
+  }
+
+  /// 定例の回を片付ける依頼の反映状況。本体は次の回の期日を付けるので、NOWの項目の期日が依頼した回から動いたら反映済みとする。
+  /// 受け付けた後に作られたNOWが同じ期日のまま（後から同じ期日を付け直した）なら、待たない。
+  void _occurrenceRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String? next,
+    DateTime? receivedAt,
+  ) {
+    final key = m['item_key'] as String, project = projects[m['project_id']];
+    final current = project?.nowItems.where((i) => i.key == key).firstOrNull;
+    if (item.state == 'waiting') {
+      _outstandingSchedules[key] = item.id;
+    } else if (item.state == 'accepted') {
+      final generated = project?.nowItemsGeneratedAt;
+      if (current != null &&
+          current.due == m['due'] &&
+          (generated == null ||
+              receivedAt == null ||
+              generated.isBefore(receivedAt))) {
+        _outstandingSchedules[key] = item.id;
+        item.detail = 'Mini受領済み。NOWの同期を待っています。';
+      } else {
+        item.detail =
+            '定例の回をMiniが反映しました。${next == null ? '' : '次の期日は $next です。'}';
+      }
+    }
+  }
+
+  /// 問いの受付と答えを結び付ける。答えは受付のaskIdか、答えの記録の受付ID（source_event_id）で探す。
+  void _askRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String body,
+    String? askId,
+    DateTime? receivedAt,
+  ) {
+    final answer =
+        _answers[askId] ??
+        _answers.values.where((a) => a.requestId == item.id).firstOrNull;
+    if (item.state == 'accepted') {
+      // 本体は答えた記録を保存期間の後に片付ける（問いの受付ファイルと受領記録は残る）。
+      final expired =
+          receivedAt != null &&
+          snapshot.loadedAt.difference(receivedAt) >
+              const Duration(days: askRetentionDays);
+      item.detail = answer != null
+          ? askStatusLabels[answer.status] ?? ''
+          : expired
+          ? '答えは保存期間（$askRetentionDays日）を過ぎたため、本体が片付けました。'
+          : 'Mini受領済み。答えは次の整理のときに作ります。';
+    }
+    asks.add(
+      AskThread(
+        question: body.trim(),
+        project: m['project'] as String?,
+        at: item.at ?? answer?.askedAt ?? DateTime(0),
+        request: item,
+        answer: answer,
+      ),
+    );
+  }
+
+  /// 「記録に聞く」の答え（`90_system/answers/ASK-*.json`）。形式の合わない記録は問題として示し、使わない。
+  void _readAnswers() {
+    final name = RegExp(
+      r'^90_system/answers/(ASK-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    final evidenceId = inputIdPattern;
+    for (final e in _files.entries) {
+      final id = name.firstMatch(e.key)?.group(1);
+      if (id == null) continue;
+      try {
+        final j = jsonDecode(e.value);
+        if (newerSchema(j)) {
+          _noteNewer(e.key);
+          continue;
+        }
+        final asked = j is Map ? timestamp(j['asked_at']) : null;
+        if (j is! Map ||
+            j['schema_version'] != 1 ||
+            j['id'] != id ||
+            !askStatusLabels.containsKey(j['status']) ||
+            j['question'] is! String ||
+            (j['question'] as String).trim().isEmpty ||
+            (j['project'] != null &&
+                (j['project'] is! String ||
+                    !projectIdPattern.hasMatch(j['project']))) ||
+            asked == null ||
+            j['sentences'] is! List ||
+            j['candidates'] is! List) {
+          throw const FormatException();
+        }
+        final sentences = <AskSentence>[];
+        for (final s in j['sentences'] as List) {
+          if (s is! Map ||
+              s['text'] is! String ||
+              (s['text'] as String).isEmpty ||
+              s['evidence'] is! List ||
+              (s['evidence'] as List).isEmpty) {
+            throw const FormatException();
+          }
+          final evidence = <({String inputId, String quote})>[];
+          for (final v in s['evidence'] as List) {
+            if (v is! Map ||
+                v['input_id'] is! String ||
+                !evidenceId.hasMatch(v['input_id']) ||
+                v['quote'] is! String ||
+                (v['quote'] as String).isEmpty) {
+              throw const FormatException();
+            }
+            evidence.add((
+              inputId: v['input_id'] as String,
+              quote: v['quote'] as String,
+            ));
+          }
+          sentences.add(AskSentence(s['text'] as String, evidence));
+        }
+        final candidates = <String>[];
+        for (final c in j['candidates'] as List) {
+          if (c is! Map ||
+              c['input_id'] is! String ||
+              !evidenceId.hasMatch(c['input_id'])) {
+            throw const FormatException();
+          }
+          candidates.add(c['input_id'] as String);
+        }
+        _answers[id] = AskAnswer(
+          id: id,
+          status: j['status'] as String,
+          question: j['question'] as String,
+          project: j['project'] as String?,
+          requestId: j['source_event_id'] is String
+              ? j['source_event_id'] as String
+              : null,
+          askedAt: asked,
+          answeredAt: timestamp(j['answered_at']),
+          sentences: sentences,
+          candidates: candidates,
+          dropped: j['dropped'] is int ? j['dropped'] as int : 0,
+          error: j['error'] is String ? j['error'] as String : null,
+        );
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+  }
+
+  /// 端末間でそろえる好み。壊れたファイルは問題として示し、どのまとまりも取り込まない。
+  void _readSharedPreferences() {
+    final raw = snapshot.files[clientPreferencesPath];
+    if (raw == null) return;
+    try {
+      final j = jsonDecode(raw);
+      if (newerSchema(j)) {
+        _noteNewer(clientPreferencesPath);
+        return;
+      }
+      sharedPreferences.addAll(parseSharedPreferences(j));
+    } catch (_) {
+      _problem(clientPreferencesPath);
+    }
   }
 
   String _insightTitle(Object? runId, Object? key) {
@@ -2797,6 +3087,18 @@ class HubRepository {
     }
     if (reason is Map && reason['code'] == 'person-invalid') {
       return '名前・呼び名を受け付けられませんでした（${error['code'] ?? '2〜100文字、呼び名は20件まで'}）。';
+    }
+    if (reason is Map && reason['code'] == 'occurrence-changed') {
+      final due = reason['due'];
+      return '確認した回の期日が変わっていました（別の端末で先に片付けたか、日付が変わった可能性があります）。'
+          '${validScheduleDate(due) ? '今の期日は $due です。' : ''}再読込して確認してください。';
+    }
+    if (reason is Map && reason['code'] == 'not-repeating') {
+      return 'この項目には繰り返しが付いていませんでした。繰り返しが外されたか、日付が変わった可能性があります。再読込して確認してください。';
+    }
+    if (reason is Map && reason['code'] == 'preferences-secret') {
+      final labels = reason['labels'];
+      return 'ひな形に秘密情報らしい文字列${labels is List && labels.every((l) => l is String) && labels.isNotEmpty ? '（${labels.join('・')}）' : ''}があるため、ほかの端末とそろえませんでした。ひな形から取り除いてから、もう一度そろえてください。';
     }
     if (reason is Map && reason['code'] == 'happened-on-invalid') {
       final max = reason['max_days'];
