@@ -536,4 +536,40 @@ void main() {
     );
     expect(access.requests, isEmpty);
   });
+
+  test('日付の依頼が反映待ちの項目は、行動にしない（先に行動になると依頼が断られるため）', () async {
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = fixtureFiles();
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    final next = c.repository!.projects[projectId]!.nowItems.first;
+    final from = ActionSource(
+      inputId: next.inputId,
+      text: next.text,
+      key: next.key,
+    );
+    final schedule = await c.requestItemSchedule(
+      projectId,
+      next.key,
+      '2026-12-01',
+      null,
+    );
+    expect(schedule.saved, isTrue);
+    access.current = VaultSnapshot({
+      ...files,
+      'Input/${schedule.requestId}.md': access.requests[schedule.requestId]!,
+    });
+    await c.reload();
+    expect(c.repository!.scheduleRequestIdFor(next.key), schedule.requestId);
+    await expectLater(
+      c.requestAction(projectId, next.text, from: from),
+      throwsA(
+        isA<StateError>().having((e) => e.message, 'message', contains('日付の依頼')),
+      ),
+    );
+    expect(access.requests, hasLength(1));
+  });
 }

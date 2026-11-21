@@ -2002,6 +2002,10 @@ class HubController extends ChangeNotifier {
           if (parsed.itemRequestIdFor(key) != null) {
             throw StateError('この項目への報告が反映待ちです。受付状況を確認してください。');
           }
+          // 日付・定例の回の依頼が反映待ちの項目も、先に行動になると依頼が断られるため、反映を待つ。
+          if (parsed.scheduleRequestIdFor(key) != null) {
+            throw StateError('この項目の日付の依頼が反映待ちです。受付状況を確認してください。');
+          }
         } else if (from != null &&
             !owner.sections['proposals']!.any((e) {
               final shown = parsed.proposalSource(e);

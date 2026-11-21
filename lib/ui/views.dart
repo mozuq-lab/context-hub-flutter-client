@@ -2271,7 +2271,11 @@ class _HubViewState extends State<HubView> {
   ) {
     if (section == 'proposals') return repo.proposalSource(entry);
     if (section != 'next' || entry.itemKey == null) return null;
-    if (repo.itemRequestIdFor(entry.itemKey!) != null) return null;
+    // 完了などの報告・日付や定例の回の依頼が反映待ちの項目は、行動にしない（受付の順で依頼が断られるため）。
+    if (repo.itemRequestIdFor(entry.itemKey!) != null ||
+        repo.scheduleRequestIdFor(entry.itemKey!) != null) {
+      return null;
+    }
     final item = project.nowItems
         .where((i) => i.key == entry.itemKey)
         .firstOrNull;
