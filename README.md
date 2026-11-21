@@ -163,7 +163,7 @@ Macでは⌘、Androidの物理キーボードではCtrlを使います。Macで
 
 | 対象 | 必要なもの |
 |---|---|
-| 共通 | Flutter 3.41.5（Dart 3.11.3） |
+| 共通 | Flutter 3.41.5（Dart 3.11.3）、Makefileを使う場合はmake |
 | Mac | Xcode |
 | Android | Android SDK、JDK 21 |
 | 動作確認（`scripts/verify.sh`） | 上記に加えてNode 24とnpm、ネットワーク接続（依存の取得）。Macではpython3も使います |
@@ -175,25 +175,42 @@ Nodeはビルド前の検証にだけ使います。端末でアプリを使う�
 ```sh
 git clone --recurse-submodules https://github.com/mozuq-lab/context-hub-flutter-client.git
 cd context-hub-flutter-client
-scripts/verify.sh            # 静的解析とテスト（任意）
-scripts/build.sh android     # → artifacts/context-hub-flutter-android.apk
-scripts/build.sh macos       # → artifacts/ContextHub Flutter.app（Macでのみ実行可）
+make verify                 # 静的解析とテスト（任意）
+make android                # → artifacts/context-hub-flutter-android.apk
+make macos                  # → artifacts/ContextHub Flutter.app とMac版ZIP（Macでのみ実行可）
 ```
 
-`scripts/build.sh` を引数なしで実行すると、AndroidとMacの両方をビルドします（Macでのみ実行できます）。
+`make` または `make help` でコマンド一覧を表示します。既存の `scripts/verify.sh`・`scripts/build.sh [all|macos|android]` も利用できます。`scripts/build.sh` を引数なしで実行すると、AndroidとMacの両方をビルドします（Macでのみ実行できます）。
+
+通常のMac版ZIPは `artifacts/context-hub-flutter-macos.zip` に保存します。
+
+### MacのDeveloper ID署名
+
+通常の `make macos` はad-hoc署名です。Developer ID Application証明書がキーチェーンにある場合は、証明書の名前またはhashを実行時の環境変数 `MACOS_SIGN_IDENTITY` に指定して `make macos-signed` を実行します。証明書は `security find-identity -v -p codesigning` で確認できます。
+
+```sh
+MACOS_SIGN_IDENTITY='署名証明書のhash' make macos-signed
+```
+
+署名検証後のアプリは `artifacts/ContextHub Flutter.app`、ZIPは `artifacts/context-hub-flutter-macos-developer-id.zip` に保存します。証明書名・Team ID・個人の絶対パスをMakefileや設定ファイルへ記載する必要はありません。署名済みアプリ自体には証明書の名義などが含まれます。名義を含めたくない場合は、通常の `make macos` を使ってください。
+
+署名時はAppleのタイムスタンプサーバーへ接続し、取得失敗時は停止します。ローカル確認用にタイムスタンプを付けない場合だけ、明示的に `MACOS_TIMESTAMP=none` を追加します。公証や公開は実行しません。
+
+署名検証とZIPの作成が成功してから、`artifacts/` のMac版を更新します。
 
 ### うまくいかないとき
 
 - FlutterがPATHにない場合は、`FLUTTER_BIN=/path/to/flutter scripts/build.sh android` のように指定します。
 - AndroidでJDKが見つからない場合は、`JAVA_HOME` をAndroid Studio内のJDKへ指定します。
 - Macで使うXcodeを指定したい場合は、`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` を指定します。グローバルのXcode設定を切り替える必要はありません。
+- Xcodeがworkspaceを認識しない場合は、`MACOS_BUILD_METHOD=project make macos` で同じRelease設定のprojectビルドを使えます。署名付きビルドにも同じ変数を指定できます。
 - Xcodeの利用規約が未承諾というエラーが出た場合は、ターミナルで `sudo env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -license` を実行し、内容を確認して同意してください。スクリプトは規約に自動で同意しません。
 
 ### Androidの署名鍵について
 
 Androidのビルドでは、このclone（取得したフォルダー）専用の検証用の鍵を `.local-signing/` に作ります。同じアプリを上書き更新し続けるには、この鍵を残しておいてください。鍵を作り直すと、インストール済みのアプリを上書きできなくなります。この鍵は公開配布用ではなく、Gitにも含めません。
 
-Playストアでの配布、MacのDeveloper ID署名・公証には対応していません。
+Playストアでの配布とMacの公証には対応していません。
 
 ## もっと詳しく
 
