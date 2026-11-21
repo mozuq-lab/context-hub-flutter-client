@@ -44,6 +44,9 @@ class IntakeFeatures {
   bool get actions => captureKinds.contains('action');
   bool get policyKeep => operations.contains('policy-keep');
 
+  /// 人の登録・名前と呼び名の変更・外す依頼（人ごとの見返し）。
+  bool get people => operations.contains('person-definition');
+
   /// 期日に繰り返しを付けられ、定例の今の回を完了・見送りにできる。
   bool get repeat => itemScheduleFields.contains('repeat') && occurrence;
   bool get occurrence => operations.contains('item-occurrence');

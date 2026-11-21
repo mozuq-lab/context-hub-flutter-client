@@ -575,6 +575,7 @@ class _HubShellState extends State<HubShell> {
                   ('digest', 'ふりかえり', Icons.event_note_outlined),
                   ('recent', '最近のメモ', Icons.notes_outlined),
                   ('ideas', 'アイデア', Icons.lightbulb_outline),
+                  ('people', '人', Icons.people_outline),
                   ('review', '確認待ち', Icons.fact_check_outlined),
                   ('search', '検索', Icons.search),
                   // 記録に聞くは、本体が対応しているとき（または問いがあるとき）だけメニューに出す。
@@ -601,7 +602,9 @@ class _HubShellState extends State<HubShell> {
                       'intake' => countBadge('intake', c.pending.length),
                       _ => null,
                     },
-                    selected: page == item.$1,
+                    selected:
+                        page == item.$1 ||
+                        (item.$1 == 'people' && page.startsWith('person:')),
                     onTap: () {
                       show(item.$1);
                       if (drawer) {
@@ -899,6 +902,8 @@ class _HubShellState extends State<HubShell> {
                 'search' => '検索',
                 'ask' => '記録に聞く',
                 'basket' => '文脈かご',
+                'people' => '人',
+                _ when page.startsWith('person:') => '人',
                 'intake' => '受付状況',
                 _ when openProject != null => 'プロジェクト',
                 _ => 'ホーム',

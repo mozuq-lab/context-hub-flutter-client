@@ -1,3 +1,4 @@
+import 'people.dart';
 import 'policies.dart';
 import 'dart:convert';
 import 'review_candidates.dart';
@@ -67,6 +68,54 @@ class HubRepository {
 
   /// 依頼済みで、まだ定義が届いていない新しいプロジェクト。
   final List<PendingProjectCreation> pendingProjectCreations = [];
+
+  /// 本人が登録した人（`40_people/<id>/person.md`）と、本体が作った人ごとの一覧。
+  /// 読めない定義の注意が、人の画面を開く前からそろうよう、読み込み時に読む。
+  late final Map<String, HubPerson> people;
+
+  /// まだ反映されていない、登録済みの人への変更・外す依頼（人のID→REQ ID）。
+  final Map<String, String> _outstandingPeople = {};
+
+  /// Miniでの受付・定義の同期を待っている人の登録依頼。
+  final List<PendingPersonAdd> pendingPersonAdds = [];
+
+  /// 本体が記録した人の定義の変更（`90_system/people/`）。
+  final Map<String, Map<String, dynamic>> _personChanges = {};
+
+  /// まだ反映されていない、この人への変更・外す依頼のREQ ID。
+  String? personRequestIdFor(String personId) => _outstandingPeople[personId];
+
+  /// 本体が記録した、この人の最新の変更記録ID。
+  String? latestPersonChangeId(String personId) {
+    final ids =
+        _personChanges.values
+            .where((c) => c['person_id'] == personId)
+            .map((c) => c['id'] as String)
+            .toList()
+          ..sort();
+    return ids.lastOrNull;
+  }
+
+  /// 最後に出てきた日の新しい順（まだ出てきていない人は後ろ、名前順）。
+  /// 名前・呼び名の重なりを確かめる相手。反映待ちの登録依頼の人も含める（本体は後の依頼を受け付けないため）。
+  List<HubPerson> get peopleForOverlap => [
+    ...people.values,
+    for (final p in pendingPersonAdds)
+      HubPerson(
+        id: p.personId,
+        name: p.name,
+        aliases: p.aliases,
+        definitionHash: '',
+      ),
+  ];
+
+  List<HubPerson> get orderedPeople => people.values.toList()
+    ..sort((a, b) {
+      final at = a.lastSeen, bt = b.lastSeen;
+      if (at != null && bt != null && at != bt) return bt.compareTo(at);
+      if ((at == null) != (bt == null)) return at == null ? 1 : -1;
+      return a.name.compareTo(b.name);
+    });
 
   /// 訂正対象の入力ID → 反映待ちの訂正依頼のREQ ID。
   final Map<String, String> _outstandingCorrections = {};
@@ -352,6 +401,8 @@ class HubRepository {
     _corrections();
     _readStatusChanges();
     _readDefinitionChanges();
+    people = readPeople(snapshot.files, _problem);
+    _readPersonChanges();
     _readMergeChanges();
     _readNowItems();
     _readHistories();
@@ -1275,6 +1326,28 @@ class HubRepository {
     }
   }
 
+  void _readPersonChanges() {
+    final pattern = RegExp(
+      r'^90_system/people/(PPL-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['person_id'] is! String ||
+            !['add', 'edit', 'remove'].contains(j['action'])) {
+          throw const FormatException();
+        }
+        _personChanges[j['id'] as String] = j;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+  }
+
   void _readStatusChanges() {
     final pattern = RegExp(
       r'^90_system/project-status/(PST-[0-9A-HJKMNP-TV-Z]{26})\.json$',
@@ -1387,6 +1460,8 @@ class HubRepository {
     for (final path in problemPaths) {
       if (path.startsWith('Input/') ||
           path.startsWith('20_ideas/') ||
+          // 人の定義と一覧は、別のAIへ渡す文脈に含めない。
+          path.startsWith('40_people/') ||
           path == unassignedActionsPath ||
           path == insightsPath) {
         continue;
@@ -1871,6 +1946,7 @@ class HubRepository {
               'project-merge',
               'project-unmerge',
               'insight-reaction',
+              'person-definition',
               'ask',
               'client-preferences',
               'policy-keep',
@@ -1923,6 +1999,27 @@ class HubRepository {
                 !terms(m['keywords']))) {
           throw const FormatException();
         }
+        final personChange = m['operation'] == 'person-definition';
+        if (personChange &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['person_id'] is! String ||
+                !personIdPattern.hasMatch(m['person_id']) ||
+                !['add', 'edit', 'remove'].contains(m['action']) ||
+                (m['action'] == 'add'
+                    ? m.containsKey('person_hash')
+                    : m['person_hash'] is! String ||
+                          !RegExp(
+                            r'^[a-f0-9]{64}$',
+                          ).hasMatch(m['person_hash'])) ||
+                (m['action'] == 'remove'
+                    ? m.containsKey('name') || m.containsKey('aliases')
+                    : m['name'] is! String ||
+                          (m.containsKey('aliases') &&
+                              !terms(m['aliases']))))) {
+          throw const FormatException();
+        }
+        String? personChangeId;
         final itemReport = m['operation'] == 'item-resolution',
             draftDismiss = m['operation'] == 'git-draft-dismiss';
         if (itemReport &&
@@ -2196,6 +2293,12 @@ class HubRepository {
               ? '状態変更依頼: ${projects[m['project_id']]?.title ?? m['project_id']} → ${projectLifecycleLabels[m['status']]}'
               : definitionChange
               ? '呼び名とキーワードの変更依頼: ${m['title']}'
+              : personChange
+              ? '${switch (m['action']) {
+                  'add' => '人の登録依頼',
+                  'edit' => '人の名前・呼び名の変更依頼',
+                  _ => '人を外す依頼',
+                }}: ${m['name'] ?? people[m['person_id']]?.name ?? m['person_id']}'
               : itemReport
               ? '${m['action'] == 'resolve'
                     ? '完了・解決'
@@ -2303,6 +2406,19 @@ class HubRepository {
                 throw const FormatException();
               }
               changeId = r['changeId'] as String;
+            }
+            if (personChange) {
+              final r = ack['result'] as Map;
+              if (r['personId'] != m['person_id'] ||
+                  r['action'] != m['action'] ||
+                  r['changeId'] is! String ||
+                  !RegExp(
+                    r'^PPL-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['changeId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              personChangeId = r['changeId'] as String;
             }
             if (itemReport) {
               final r = ack['result'] as Map;
@@ -2546,6 +2662,7 @@ class HubRepository {
             what: '呼び名とキーワードの変更',
           );
         }
+        if (personChange) _personRequest(item, m, personChangeId);
         if (mergeChange) {
           _projectRequest(
             item,
@@ -3023,6 +3140,25 @@ class HubRepository {
         _ => '統合を受け付けられませんでした。再読込して、統合元と統合先を確認してください。',
       };
     }
+    if (reason is Map && reason['code'] == 'person-overlap') {
+      final other = reason['person_id'];
+      return '名前か呼び名が、登録済みの人${other is String && personIdPattern.hasMatch(other) ? '（$other）' : ''}と重なるため、受け付けられませんでした。別の呼び名にするか、登録済みの人の呼び名を見直してください。';
+    }
+    if (reason is Map && reason['code'] == 'person-changed') {
+      return '確認した後に人の定義が変わっていました。再読込して内容を確かめ、もう一度依頼してください。';
+    }
+    if (reason is Map && reason['code'] == 'person-missing') {
+      return '人が見つかりませんでした。既に外されている可能性があります。再読込してください。';
+    }
+    if (reason is Map && reason['code'] == 'person-exists') {
+      return '同じIDの人が既に登録されていました。再読込して一覧を確かめてください。';
+    }
+    if (reason is Map && reason['code'] == 'person-unchanged') {
+      return '名前・呼び名に変更がなかったため、受け付けられませんでした。';
+    }
+    if (reason is Map && reason['code'] == 'person-invalid') {
+      return '名前・呼び名を受け付けられませんでした（${error['code'] ?? '2〜100文字、呼び名は20件まで'}）。';
+    }
     if (reason is Map && reason['code'] == 'occurrence-changed') {
       final due = reason['due'];
       return '確認した回の期日が変わっていました（別の端末で先に片付けたか、日付が変わった可能性があります）。'
@@ -3325,6 +3461,60 @@ class HubRepository {
 
   /// 定義を書き換える依頼（状態変更・名前と別名・キーワードの変更）の反映状況を、
   /// 本体の変更記録と現在の定義hashから判断する。同じ定義へ戻る変更（休止→再開）でも、古い依頼を未反映と扱わない。
+  /// 人の登録・変更・外す依頼の状態。定義が依頼の前のままなら反映待ちとして、同じ人への依頼を重ねない。
+  void _personRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String? changeId,
+  ) {
+    final personId = m['person_id'] as String,
+        action = m['action'] as String,
+        current = people[personId]?.definitionHash,
+        record = _personChanges[changeId],
+        what = switch (action) {
+          'add' => '人の登録',
+          'edit' => '名前・呼び名の変更',
+          _ => '人を外す操作',
+        };
+    // 登録は、まだ定義がない間が反映待ち。変更・外すは、確認した定義のままの間が反映待ち。
+    final before = action == 'add' ? null : m['person_hash'] as String?;
+    var waiting = false;
+    if (item.state == 'accepted') {
+      if (record == null) {
+        waiting = current == before;
+        item.detail = waiting
+            ? 'Mini受領済み。人の定義の同期を待っています。'
+            : 'Mini受領済み。変更記録の同期を待っています。';
+      } else if (current == record['before_hash'] &&
+          latestPersonChangeId(personId) == changeId) {
+        waiting = true;
+        item.detail = 'Mini受領済み。人の定義の同期を待っています。';
+      } else {
+        item.detail = current == record['after_hash']
+            ? '$whatをMiniが反映しました。'
+            : '$whatをMiniが反映しました（その後に別の変更があります）。';
+      }
+    } else if (item.state == 'waiting') {
+      waiting = current == before;
+    }
+    if (!waiting) return;
+    if (action == 'add') {
+      pendingPersonAdds.add(
+        PendingPersonAdd(
+          requestId: item.id,
+          personId: personId,
+          name: m['name'] as String,
+          aliases: [
+            for (final a in (m['aliases'] as List?) ?? const []) a as String,
+          ],
+          state: item.state,
+        ),
+      );
+    } else {
+      _outstandingPeople[personId] = item.id;
+    }
+  }
+
   void _projectRequest(
     IntakeStatus item,
     Map<String, dynamic> m,
@@ -3405,6 +3595,26 @@ class HubRepository {
     }
     return relation;
   }
+
+  /// 原文の記録（メモ・作業要約）ごとの、最新の本文と、本人が指定したプロジェクト・AIが推定した関連先。
+  /// メモを書いている途中に関係ありそうな記録を探すときに使う。新しい順。
+  late final List<
+    ({HubRecord root, HubRecord latest, String? owner, Set<String> related})
+  >
+  relatedCandidates =
+      [
+        for (final unit in _units)
+          if (const ['memo', 'work-summary'].contains(unit.root.kind))
+            (
+              root: unit.root,
+              latest: unit.chain.last,
+              owner: unit.owner,
+              related: {for (final id in unit.related) resolveProject(id)},
+            ),
+      ]..sort(
+        (a, b) =>
+            (b.root.at ?? DateTime(0)).compareTo(a.root.at ?? DateTime(0)),
+      );
 
   /// 原文の入力ID → その入力を含む訂正チェーン。検索の帰属判定と訂正で引く。
   late final Map<String, _Unit> _unitBySource = {
