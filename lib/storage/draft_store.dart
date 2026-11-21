@@ -81,6 +81,9 @@ class DraftStore {
   Map<String, WritingDraft>? _drafts;
   Future<void>? _loading;
   bool _enabled = true;
+
+  /// メモを書いている途中に、関係ありそうな過去の記録を示すか（この端末の設定）。
+  bool _related = true;
   Future<void> _tail = Future.value();
 
   /// [answerTo]は、今週の気づきの項目へ答えるときの「実行ID/項目キー」。
@@ -105,6 +108,7 @@ class DraftStore {
       final value = raw == null ? null : jsonDecode(raw);
       if (value is Map && value['version'] == 1) {
         _enabled = value['enabled'] != false;
+        _related = value['related'] != false;
         final items = value['drafts'];
         if (items is Map) {
           for (final e in items.entries) {
@@ -123,6 +127,16 @@ class DraftStore {
     await _load();
     return _enabled;
   }
+
+  Future<bool> relatedEnabled() async {
+    await _load();
+    return _related;
+  }
+
+  Future<void> setRelatedEnabled(bool value) => _serial(() async {
+    await _load();
+    _related = value;
+  });
 
   Future<WritingDraft?> read(String key) async {
     await _load();
@@ -181,6 +195,7 @@ class DraftStore {
   String _encode() => jsonEncode({
     'version': 1,
     'enabled': _enabled,
+    'related': _related,
     'drafts': {for (final e in _drafts!.entries) e.key: e.value.toJson()},
   });
 

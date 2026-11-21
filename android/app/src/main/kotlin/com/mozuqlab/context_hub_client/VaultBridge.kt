@@ -55,7 +55,7 @@ class VaultBridge(
     private val resolver = context.contentResolver
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
-    private val folders = setOf("00_inbox", "10_projects", "20_ideas", "30_knowledge", "Input", "90_system")
+    private val folders = setOf("00_inbox", "10_projects", "20_ideas", "30_knowledge", "40_people", "Input", "90_system")
     // Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
     private val rootFiles = listOf("POLICY.md", "REVIEW.md")
     // 操作journal以外の状態ファイル。保存先の設定、端末に残す書きかけのメモ、選んで深掘りの途中の状態。

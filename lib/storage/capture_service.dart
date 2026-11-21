@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import '../core/happened.dart';
+import '../core/people.dart';
 import '../core/models.dart';
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
@@ -538,6 +539,38 @@ class CaptureService {
       'title': next.title,
       'aliases': next.aliases,
       'keywords': next.keywords,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 人の登録（add）・名前と呼び名の変更（edit）・外す（remove）の依頼。
+  /// 変更と外すは、表示中のperson.mdのhashに結び付けて送る。
+  Future<CaptureResult> savePersonDefinition(
+    String operationId, {
+    required String personId,
+    required String action,
+    String? expectedHash,
+    PersonDraft? draft,
+  }) => _serial(() async {
+    final problem = draft?.problem;
+    if (!_uuid.hasMatch(operationId) ||
+        !personIdPattern.hasMatch(personId) ||
+        !const ['add', 'edit', 'remove'].contains(action) ||
+        (action == 'add') != (expectedHash == null) ||
+        (expectedHash != null &&
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(expectedHash)) ||
+        (action == 'remove') != (draft == null) ||
+        problem != null) {
+      throw FormatException(problem ?? '人の登録・変更の内容を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'person-definition',
+      'person_id': personId,
+      'action': action,
+      'person_hash': ?expectedHash,
+      if (draft != null) 'name': draft.name,
+      if (draft != null) 'aliases': draft.aliases,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

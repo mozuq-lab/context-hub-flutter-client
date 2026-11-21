@@ -14,7 +14,10 @@ import '../core/today.dart';
 import '../storage/capture_service.dart';
 import '../storage/basket_store.dart';
 import '../storage/draft_store.dart';
+import '../core/people.dart';
+import '../core/related.dart';
 import 'markdown_view.dart';
+import 'people_view.dart';
 import 'template_view.dart';
 import 'review_view.dart';
 import 'guided_view.dart';
@@ -406,6 +409,17 @@ class _HubViewState extends State<HubView> {
         children.add(const Text('このVaultにプロジェクトがありません。'));
       } else {
         children.addAll(projectView(project));
+      }
+    } else if (page == 'people') {
+      children.addAll(peopleView());
+    } else if (page.startsWith('person:')) {
+      final person = repo.people[page.substring(7)];
+      if (person == null) {
+        children.add(
+          const Text('この人は登録されていません。外された可能性があります。', key: Key('person-missing')),
+        );
+      } else {
+        children.addAll(personView(person));
       }
     } else if (page == 'digest') {
       children.addAll(digestView());
@@ -1682,6 +1696,221 @@ class _HubViewState extends State<HubView> {
     } catch (e) {
       if (mounted) notice(context, HubController.message(e));
       return false;
+    }
+  }
+
+  /// 人の一覧。最後に出てきた日の新しい順。登録の依頼もここから送る。
+  List<Widget> peopleView() {
+    final people = repo.orderedPeople,
+        waiting = repo.pendingPersonAdds,
+        supported = repo.intakeFeatures.people;
+    return [
+      title(
+        'PEOPLE',
+        '人',
+        '登録した人ごとに、名前が出てくる記録と、プロジェクトをまたいだ未完了の次の一手・未解決をMiniが集めます。名前の一致はAIを使わずに判定し、登録した人だけを対象にします。',
+      ),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: FilledButton.tonalIcon(
+          key: const Key('person-add'),
+          onPressed:
+              !supported || c.captureWarning != null || c.loading || c.saving
+              ? null
+              : addPerson,
+          icon: const Icon(Icons.person_add_alt, size: 18),
+          label: const Text('人を登録'),
+        ),
+      ),
+      if (!supported)
+        const Padding(
+          key: Key('people-unsupported'),
+          padding: EdgeInsets.only(top: 12),
+          child: NoticeBox(
+            'Mac miniの本体がまだ人ごとの見返しに対応していません。本体を更新すると、人を登録できるようになります。',
+          ),
+        ),
+      const SizedBox(height: 16),
+      if (people.isEmpty && waiting.isEmpty)
+        const Text(
+          'まだ登録した人はいません。よく一緒に仕事をする人や、返事を待っている人を登録すると、その人が出てくる記録をまとめて見返せます。',
+          key: Key('people-empty'),
+          style: TextStyle(height: 1.7),
+        ),
+      for (final person in people)
+        Card(
+          child: ListTile(
+            key: Key('person-${person.id}'),
+            leading: const Icon(Icons.person_outline),
+            title: Text(person.name),
+            subtitle: Text(
+              [
+                if (person.aliases.isNotEmpty)
+                  '呼び名: ${person.aliases.join('、')}',
+                person.page == null
+                    ? '一覧はまだ作られていません（次の整理で作られます）'
+                    : '最後に出てきた日: ${person.lastSeen == null ? 'まだありません' : displayTime(person.lastSeen).substring(0, 10)} · 記録 ${person.records}件 · 未完了の項目 ${person.openItems}件',
+              ].join('\n'),
+              style: const TextStyle(height: 1.6),
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => widget.onNavigate('person:${person.id}'),
+          ),
+        ),
+      for (final pending in waiting)
+        Card(
+          child: ListTile(
+            key: Key('pending-person-${pending.personId}'),
+            enabled: false,
+            leading: const Icon(Icons.hourglass_empty),
+            title: Text(pending.name),
+            subtitle: Text(
+              pending.state == 'accepted'
+                  ? 'Mini受領済み。人の定義の同期を待っています。'
+                  : '登録を依頼済み（Miniでの受付を待っています）',
+            ),
+          ),
+        ),
+    ];
+  }
+
+  /// 1人の画面。本体が作った一覧（SUMMARY.md）を、元の記録へのリンク付きで読む。
+  List<Widget> personView(HubPerson person) {
+    final page = person.page,
+        requested = repo.personRequestIdFor(person.id) != null,
+        busy =
+            !repo.intakeFeatures.people ||
+            c.captureWarning != null ||
+            c.loading ||
+            c.saving ||
+            requested;
+    return [
+      title(
+        'PERSON',
+        person.name,
+        [
+          if (person.aliases.isNotEmpty) '呼び名: ${person.aliases.join('、')}',
+          if (page != null)
+            '生成: ${timeLabel(page.generatedAt)} · 読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        ].join('\n'),
+      ),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          OutlinedButton.icon(
+            key: const Key('person-edit'),
+            onPressed: busy ? null : () => editPerson(person),
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('名前と呼び名'),
+          ),
+          OutlinedButton.icon(
+            key: const Key('person-remove'),
+            onPressed: busy ? null : () => removePerson(person),
+            icon: const Icon(Icons.person_remove_outlined, size: 18),
+            label: const Text('登録を外す'),
+          ),
+        ],
+      ),
+      if (requested)
+        const Padding(
+          key: Key('person-requested'),
+          padding: EdgeInsets.only(top: 12),
+          child: NoticeBox('この人への依頼が反映待ちです。Miniで受け付けられると反映されます。'),
+        ),
+      const SizedBox(height: 16),
+      if (page == null)
+        const Text(
+          'まだ一覧が作られていません。Miniで次の整理が終わり、同期されると表示されます。',
+          key: Key('person-page-missing'),
+          style: TextStyle(height: 1.7),
+        )
+      else ...[
+        for (final warning in page.warnings)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: NoticeBox(warning),
+          ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: SafeMarkdown(
+              key: const Key('person-body'),
+              text: page.body,
+              sourcePath: personPagePath(person.id),
+              controller: c,
+              onRecord: open,
+            ),
+          ),
+        ),
+      ],
+    ];
+  }
+
+  Future<void> addPerson() async {
+    final personId = newPersonId();
+    final next = await showDialog<PersonDraft>(
+      context: context,
+      builder: (_) => PersonDialog(people: repo.peopleForOverlap),
+    );
+    if (next == null || !mounted) return;
+    await sendPerson(
+      () => c.requestPerson(personId, 'add', draft: next),
+      '「${next.name}」の登録を依頼しました。Miniで受け付けられると、次の整理から一覧が作られます。',
+    );
+  }
+
+  Future<void> editPerson(HubPerson person) async {
+    final next = await showDialog<PersonDraft>(
+      context: context,
+      builder: (_) =>
+          PersonDialog(person: person, people: repo.peopleForOverlap),
+    );
+    if (next == null || !mounted) return;
+    await sendPerson(
+      () => c.requestPerson(
+        person.id,
+        'edit',
+        expectedHash: person.definitionHash,
+        draft: next,
+      ),
+      '名前と呼び名の変更を依頼しました。Miniで受け付けられると反映されます。',
+    );
+  }
+
+  Future<void> removePerson(HubPerson person) async {
+    if (!await confirmAction(
+          '${person.name}の登録を外す',
+          '人の登録と、この人の一覧（SUMMARY.md）を消すよう依頼します。メモや作業要約などの記録は消えません。あとでもう一度登録できます。',
+          '登録を外す',
+        ) ||
+        !mounted) {
+      return;
+    }
+    await sendPerson(
+      () => c.requestPerson(
+        person.id,
+        'remove',
+        expectedHash: person.definitionHash,
+      ),
+      '登録を外す依頼をしました。Miniで受け付けられると反映されます。',
+    );
+  }
+
+  Future<void> sendPerson(
+    Future<CaptureResult> Function() send,
+    String done,
+  ) async {
+    try {
+      final result = await send();
+      if (mounted) {
+        notice(
+          context,
+          result.saved ? done : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
     }
   }
 
@@ -4189,6 +4418,170 @@ class _CaptureDialogState extends State<CaptureDialog> {
 
   DraftStore get _drafts => widget.controller.drafts;
 
+  // ---- 書いている途中の関係ありそうな記録（端末内の記録だけで探す） ----
+  bool _showRelated = true;
+  List<RelatedRecord> _related = const [];
+  Timer? _relatedTimer;
+
+  /// 入力が止まってから探す。比べるのは端末に読み込んだ記録だけで、ネットワークにもAIにも送らない。
+  void _scheduleRelated() {
+    _relatedTimer?.cancel();
+    _relatedTimer = Timer(const Duration(milliseconds: 600), _findRelated);
+  }
+
+  Future<void> _findRelated() async {
+    if (!mounted) return;
+    final repo = widget.controller.repository;
+    if (!_showRelated || locked || widget.answer != null || repo == null) {
+      if (_related.isNotEmpty) setState(() => _related = const []);
+      return;
+    }
+    // 記録の特徴は読み込みごとに1回だけ作る（記録が多ければ別のisolateで作り、入力を止めない）。
+    final RelatedIndex index;
+    try {
+      index = await relatedIndex(repo);
+    } catch (_) {
+      return; // 探せなくても入力は続ける。
+    }
+    // 待つ間に閉じた・読み直した・設定を止めたときは、古い結果を出さない。
+    if (!mounted || widget.controller.repository != repo || !_showRelated) {
+      return;
+    }
+    final next = relatedRecords(
+      repo,
+      text.text,
+      index: index,
+      project: project,
+    );
+    // 読み直しで点や本文が変わることがあるので、毎回置き換える。
+    if (next.isNotEmpty || _related.isNotEmpty) {
+      setState(() => _related = next);
+    }
+  }
+
+  Future<void> _setShowRelated(bool value) async {
+    setState(() {
+      _showRelated = value;
+      if (!value) _related = const [];
+    });
+    if (value) _findRelated();
+    try {
+      await _drafts.setRelatedEnabled(value);
+    } catch (_) {
+      // 設定を残せなくても入力は続ける。
+    }
+  }
+
+  /// 関係ありそうな記録の一覧。開く・文脈かごに入れる・同じプロジェクトで保存するを選べる。
+  Widget _relatedBox() {
+    final repo = widget.controller.repository,
+        scheme = Theme.of(context).colorScheme;
+    if (repo == null) return const SizedBox.shrink();
+    return Container(
+      key: const Key('related-records'),
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 6),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '前に書いた、関係ありそうな記録',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+          const Text(
+            '同じことを書いていないか、続きの話ではないかを確かめられます。この端末に読み込んだ記録だけを、文字の重なりで探しています。',
+            style: TextStyle(fontSize: 11, height: 1.5),
+          ),
+          for (final hit in _related) _relatedRow(repo, hit),
+        ],
+      ),
+    );
+  }
+
+  Widget _relatedRow(HubRepository repo, RelatedRecord hit) {
+    final owner = hit.owner == null ? null : repo.projects[hit.owner];
+    final inferred = hit.related.where((id) => id != hit.owner);
+    // 本人が指定したプロジェクトは、まだ同期されていなくてもAI推定とは書かない。
+    final where = owner != null
+        ? owner.title
+        : hit.owner != null
+        ? hit.owner!
+        : inferred.isNotEmpty
+        ? '${repo.projects[inferred.first]?.title ?? inferred.first}（AI推定）'
+        : 'プロジェクト未定';
+    final canUseProject =
+        owner != null &&
+        !owner.merged &&
+        project == null &&
+        widget.draft == null &&
+        !locked;
+    return Padding(
+      key: Key('related-${hit.root.id}'),
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  hit.latest.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13),
+                ),
+                Text(
+                  '${timeLabel(hit.root.at).split(' ').first} · $where${hit.latest.kind == 'correction' ? ' · 訂正あり' : ''}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                Text(
+                  searchSnippet(hit.latest.body, hit.shared.take(5).toList()),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, height: 1.5),
+                ),
+                if (canUseProject)
+                  TextButton(
+                    key: Key('related-project-${hit.root.id}'),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        project = owner.id;
+                        _formGeneration++;
+                      });
+                      _schedulePersist();
+                    },
+                    child: Text('「${owner.title}」で保存する'),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: Key('related-open-${hit.root.id}'),
+            tooltip: '開く（同じ内容なら、開いた画面から訂正を書けます）',
+            icon: const Icon(Icons.open_in_new, size: 18),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) =>
+                    RecordView(controller: widget.controller, record: hit.root),
+              ),
+            ),
+          ),
+          BasketToggle(controller: widget.controller, record: hit.root),
+        ],
+      ),
+    );
+  }
+
   // ---- ひな形（端末内のみ） ----
   static const _editTemplates = '\u0000edit';
   List<MemoTemplate> _templates = defaultTemplates;
@@ -4242,6 +4635,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
       answerTo: answer == null ? null : '${answer.runId}/${answer.itemKey}',
     );
     text.addListener(_schedulePersist);
+    text.addListener(_scheduleRelated);
     _lifecycle = AppLifecycleListener(
       onInactive: _persistNow,
       onHide: _persistNow,
@@ -4263,6 +4657,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
     final key = _draftKey;
     try {
       _templates = await widget.controller.templates.list();
+      _showRelated = await _drafts.relatedEnabled();
       if (key == null) return;
       _keepDrafts = await _drafts.enabled();
       final stored = await _drafts.read(key);
@@ -4381,6 +4776,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
     _debounce?.cancel();
     _lifecycle?.dispose();
     text.removeListener(_schedulePersist);
+    text.removeListener(_scheduleRelated);
+    _relatedTimer?.cancel();
     text.dispose();
     _textFocus.dispose();
     super.dispose();
@@ -4670,6 +5067,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             alignLabelWithHint: true,
                           ),
                         ),
+                        if (_related.isNotEmpty && _showRelated && !locked)
+                          _relatedBox(),
                         // 問いへの答えは本人のメモとして残すので、種類を選ばせない。
                         if (widget.answer == null) ...[
                           const SizedBox(height: 16),
@@ -4731,6 +5130,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
                               : (v) {
                                   setState(() => project = v == '' ? null : v);
                                   _schedulePersist();
+                                  _scheduleRelated();
                                 },
                         ),
                         if (_canBackdate) ...[
@@ -4763,6 +5163,23 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             ),
                             subtitle: const Text(
                               'フォームを閉じたりアプリが終了したりしても、次に開いたときに続きから書けます。保存が確かめられたら消します。Vaultには書きません。',
+                              style: TextStyle(fontSize: 11, height: 1.5),
+                            ),
+                          ),
+                        if (widget.answer == null)
+                          CheckboxListTile(
+                            key: const Key('show-related'),
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            dense: true,
+                            value: _showRelated,
+                            onChanged: (v) => _setShowRelated(v ?? true),
+                            title: const Text(
+                              '書いている途中に、関係ありそうな過去の記録を出す',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            subtitle: const Text(
+                              'この端末に読み込んだ記録だけを比べます。ネットワークにもAIにも送りません。この端末の設定です。',
                               style: TextStyle(fontSize: 11, height: 1.5),
                             ),
                           ),

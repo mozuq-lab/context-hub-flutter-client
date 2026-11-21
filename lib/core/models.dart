@@ -989,3 +989,16 @@ String ideaPairKey(String a, String b) =>
     a.compareTo(b) < 0 ? '$a/$b' : '$b/$a';
 const ideaLinkActions = ['link', 'separate'];
 final ideaIdPattern = RegExp(r'^IDEA-[0-9A-HJKMNP-TV-Z]{26}$');
+
+/// Miniでの受付・定義の同期を待っている、アプリからの人の登録依頼。
+class PendingPersonAdd {
+  PendingPersonAdd({
+    required this.requestId,
+    required this.personId,
+    required this.name,
+    required this.aliases,
+    required this.state,
+  });
+  final String requestId, personId, name, state;
+  final List<String> aliases;
+}
