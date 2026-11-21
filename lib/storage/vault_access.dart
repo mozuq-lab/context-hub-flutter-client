@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../core/calendar.dart';
 import '../core/models.dart';
 
 class VaultLocation {
@@ -59,6 +60,13 @@ abstract class VaultAccess {
 
   /// ドックのアイコンに件数を出す。0なら消す。
   Future<void> setDockBadge(int count) async {}
+
+  /// 端末のカレンダーへ予定を入れられる端末か（MacとAndroid）。
+  bool get calendarSupported => false;
+
+  /// 予定を1件、端末のカレンダーへ渡す。Androidは予定の作成画面を開き、Macは予定のファイルをカレンダーで開く。
+  /// どちらも本人が確かめて保存し、アプリはカレンダーの権限を取らない。Vaultには触れない。
+  Future<void> addToCalendar(CalendarEvent event) async {}
 
   /// アプリを閉じている間の確認待ちの通知を使える端末か（Androidだけ）。
   bool get attentionNotificationsSupported => false;
@@ -220,6 +228,24 @@ class NativeVaultAccess implements VaultAccess {
   Future<void> setDockBadge(int count) async {
     if (!dockBadgeSupported) return;
     await channel.invokeMethod('setDockBadge', {'count': count});
+  }
+
+  @override
+  bool get calendarSupported =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
+  @override
+  Future<void> addToCalendar(CalendarEvent event) async {
+    if (!calendarSupported) return;
+    await channel.invokeMethod('addToCalendar', {
+      'uid': event.uid,
+      'date': event.date,
+      'title': event.title,
+      'description': event.description,
+      'ics': event.ics,
+    });
   }
 
   @override

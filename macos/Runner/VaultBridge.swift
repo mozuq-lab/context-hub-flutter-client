@@ -47,6 +47,18 @@ final class VaultBridge {
               ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { result(error()); return }
         result(NSWorkspace.shared.open(url) ? nil : error()); return
       }
+      if call.method == "addToCalendar" {
+        // 予定1件のファイルを一時フォルダーに置き、カレンダーで開く。取り込むかは本人がカレンダーで決める。Vaultには触れない。
+        guard let ics = args["ics"] as? String, let uid = args["uid"] as? String,
+              uid.range(of: "^[0-9a-f]{32}-[a-z]+@context-hub$", options: .regularExpression) != nil else { result(error()); return }
+        let name = "contexthub-" + uid.replacingOccurrences(of: "@", with: "-") + ".ics"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+          try ics.data(using: .utf8)!.write(to: url, options: .atomic)
+          result(NSWorkspace.shared.open(url) ? nil : self.error())
+        } catch { result(self.error()) }
+        return
+      }
       if call.method == "setDockBadge" {
         // ドックのアイコンに判断待ちの件数を出す。件数だけで、Vaultには触れない。
         let count = args["count"] as? Int ?? 0

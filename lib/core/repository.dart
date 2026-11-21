@@ -5,6 +5,7 @@ import 'review_candidates.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unicode;
 import 'models.dart';
 import 'secrets.dart';
+import 'intake_features.dart';
 import 'parser.dart';
 
 /// 元の入力と訂正のチェーン、有効な処理記録、関連するプロジェクト。
@@ -134,6 +135,11 @@ class HubRepository {
 
   /// 本体が生成する直近の期間のふりかえり（REVIEW.md）。未生成ならnull。
   HubDigest? digestDocument;
+
+  /// 本体が受け付ける依頼の種類とメモの任意の欄。一覧がなければ対応前の本体として扱う。
+  late final IntakeFeatures intakeFeatures = IntakeFeatures.parse(
+    snapshot.files[intakeFeaturesPath],
+  );
 
   /// 伏せ字の規則（組み込み規則と、本体の設定で追加した規則）。
   late final SecretPolicy secretPolicy = SecretPolicy.fromSnapshot(
@@ -1876,6 +1882,7 @@ class HubRepository {
               'project-unmerge',
               'insight-reaction',
               'person-definition',
+              'policy-keep',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
           throw const FormatException();
@@ -2082,6 +2089,18 @@ class HubRepository {
           'knowledge-approve',
           'knowledge-reject',
         ].contains(m['operation']);
+        final keeping = m['operation'] == 'policy-keep';
+        if (keeping &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['knowledge_id'] is! String ||
+                !RegExp(
+                  r'^KNW-[0-9A-HJKMNP-TV-Z]{26}$',
+                ).hasMatch(m['knowledge_id']) ||
+                m['knowledge_hash'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['knowledge_hash']))) {
+          throw const FormatException();
+        }
         final retiring = m['operation'] == 'knowledge-retire';
         if (retiring &&
             (doc.body.trim().isNotEmpty ||
@@ -2180,6 +2199,8 @@ class HubRepository {
               ? '下書きの見送り: ${gitDrafts[m['draft_id']]?.repo ?? m['draft_id']}'
               : retiring
               ? '適用停止依頼: ${m['target_id']}'
+              : keeping
+              ? '方針を「まだ有効」と確かめた: ${m['knowledge_id']}'
               : decision
               ? '${(m['operation'] as String).endsWith('approve') ? '採用' : '却下'}依頼: ${m['candidate_id']}${m['cover_ids'] is List ? '（同じ対象の案${(m['cover_ids'] as List).length}件をまとめて判断）' : ''}'
               : correction
@@ -2214,6 +2235,18 @@ class HubRepository {
                 throw const FormatException();
               }
               item.detail = '適用停止をMiniが受領しました。本文と採用履歴は保持されます。';
+            }
+            if (keeping) {
+              final r = ack['result'] as Map;
+              if (r['knowledgeId'] != m['knowledge_id'] ||
+                  r['reviewId'] is! String ||
+                  !RegExp(
+                    r'^PREV-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['reviewId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              item.detail = '「まだ有効」をMiniが記録しました。見直しの日数はここから数え直します。';
             }
             if (statusChange) {
               final r = ack['result'] as Map;
@@ -2764,6 +2797,19 @@ class HubRepository {
     }
     if (reason is Map && reason['code'] == 'person-invalid') {
       return '名前・呼び名を受け付けられませんでした（${error['code'] ?? '2〜100文字、呼び名は20件まで'}）。';
+    }
+    if (reason is Map && reason['code'] == 'happened-on-invalid') {
+      final max = reason['max_days'];
+      return reason['cause'] == 'future'
+          ? '出来事の日付が、記録した日（日本時間）より後でした。日付を選び直して、もう一度保存してください。'
+          : '出来事の日付が古すぎました（${max is int ? '$max日' : '本体の設定の日数'}より前は記録できません）。本文に日付を書いて保存してください。';
+    }
+    if (reason is Map && reason['code'] == 'policy-review-refused') {
+      return switch (reason['cause']) {
+        'changed' => '確かめた後に方針の内容が変わっていました。再読込して、採用履歴で確かめ直してください。',
+        'inactive' => 'この方針はもう有効ではありませんでした（適用停止・置き換えなど）。再読込して確かめてください。',
+        _ => '確かめた方針が見つかりませんでした。同期を確認してください。',
+      };
     }
     if (reason is Map && reason['code'] == 'conflict-missing') {
       return '戻す必要のある競合がありませんでした。既に生成版に戻っている可能性があります。';

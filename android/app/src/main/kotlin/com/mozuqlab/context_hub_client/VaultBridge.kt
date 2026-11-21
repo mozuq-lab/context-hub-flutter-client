@@ -90,6 +90,24 @@ class VaultBridge(
                     requireNotNull(activity).startActivity(Intent(Intent.ACTION_VIEW, uri))
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
+            } else if (call.method == "addToCalendar") {
+                // 端末のカレンダーの予定作成画面を開くだけ。保存するかは本人が決め、アプリはカレンダーの権限を取らない。
+                try {
+                    val date = Regex("^(\\d{4})-(\\d{2})-(\\d{2})$").matchEntire(args["date"] as String)!!.groupValues
+                    // 終日の予定は、その日の0時（UTC）から翌日の0時（UTC）として渡す。
+                    val begin = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                        clear(); set(date[1].toInt(), date[2].toInt() - 1, date[3].toInt())
+                    }.timeInMillis
+                    requireNotNull(activity).startActivity(Intent(Intent.ACTION_INSERT)
+                        .setData(android.provider.CalendarContract.Events.CONTENT_URI)
+                        .putExtra(android.provider.CalendarContract.EXTRA_EVENT_ALL_DAY, true)
+                        .putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, begin)
+                        .putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, begin + 86_400_000L)
+                        .putExtra(android.provider.CalendarContract.Events.TITLE, args["title"] as String)
+                        .putExtra(android.provider.CalendarContract.Events.DESCRIPTION, args["description"] as String)
+                        .putExtra(android.provider.CalendarContract.Events.AVAILABILITY, android.provider.CalendarContract.Events.AVAILABILITY_FREE))
+                    result.success(null)
+                } catch (_: Exception) { fail(result) }
             } else if (call.method == "takeLaunchAction") {
                 result.success(takeLaunchAction())
             } else if (call.method == "updateHomeWidget") {

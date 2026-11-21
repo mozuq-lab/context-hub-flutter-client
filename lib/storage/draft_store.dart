@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+
+import '../core/happened.dart';
 import 'vault_access.dart';
 
 /// 書きかけの入力。Vaultには書かず、アプリ専用領域の`drafts.json`だけに残す。
@@ -10,10 +12,14 @@ class WritingDraft {
     this.project,
     this.gitDraftHash,
     this.operationId,
+    this.happenedOn,
     required this.updatedAt,
   });
   final String text, kind;
   final String? project;
+
+  /// 本人が選んだ出来事の日付（YYYY-MM-DD）。今日のことならnull。
+  final String? happenedOn;
 
   /// 作業記録の下書きから書いている場合、書き始めたときの下書きhash。
   final String? gitDraftHash;
@@ -28,6 +34,7 @@ class WritingDraft {
     if (project != null) 'p': project,
     if (gitDraftHash != null) 'g': gitDraftHash,
     if (operationId != null) 'o': operationId,
+    if (happenedOn != null) 'h': happenedOn,
     'at': updatedAt.toUtc().toIso8601String(),
   };
 
@@ -35,6 +42,7 @@ class WritingDraft {
     if (value is! Map) return null;
     final text = value['t'], kind = value['k'], at = value['at'];
     final project = value['p'], hash = value['g'], op = value['o'];
+    final happened = value['h'];
     if (text is! String ||
         text.length > DraftStore.maxChars ||
         !['memo', 'work-summary'].contains(kind) ||
@@ -42,7 +50,9 @@ class WritingDraft {
         DateTime.tryParse(at) == null ||
         (project != null && project is! String) ||
         (hash != null && hash is! String) ||
-        (op != null && op is! String)) {
+        (op != null && op is! String) ||
+        (happened != null &&
+            (happened is! String || !happenedOnPattern.hasMatch(happened)))) {
       return null;
     }
     return WritingDraft(
@@ -51,6 +61,7 @@ class WritingDraft {
       project: project as String?,
       gitDraftHash: hash as String?,
       operationId: op as String?,
+      happenedOn: happened as String?,
       updatedAt: DateTime.parse(at),
     );
   }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import '../core/happened.dart';
 import '../core/people.dart';
 import '../core/models.dart';
 import '../core/review_candidates.dart';
@@ -15,8 +16,12 @@ class CaptureDraft {
     this.gitDraftId,
     this.gitDraftHash,
     this.meta,
+    this.happenedOn,
   });
   final String operationId;
+
+  /// 本人が選んだ出来事の日付（YYYY-MM-DD）。今日のことならnull。対応した本体にだけ送る。
+  final String? happenedOn;
   final String text;
   final String kind;
   final String? project;
@@ -228,6 +233,9 @@ class CaptureService {
         (draft.meta != null && !_validMeta(draft.meta!, draft.gitDraftId))) {
       throw const FormatException('本文は1〜8000文字、種別とprojectは有効な値を指定してください。');
     }
+    if (draft.happenedOn != null && !validHappenedOn(draft.happenedOn)) {
+      throw const FormatException('出来事の日付は、今日より前の365日以内の日を選んでください。');
+    }
     // 本体の入力形式と同じく、キーの順を固定して記録とfingerprintを決める。
     final meta = draft.meta == null
         ? null
@@ -248,6 +256,7 @@ class CaptureService {
             [
               for (final e in meta.entries) [e.key, e.value],
             ],
+          if (draft.happenedOn != null) ['happened_on', draft.happenedOn],
         ]),
       ),
       {
@@ -262,6 +271,7 @@ class CaptureService {
           }
         else
           'meta': ?meta,
+        'happened_on': ?draft.happenedOn,
       },
       draft.text,
     );
@@ -385,6 +395,28 @@ class CaptureService {
       'operation': 'knowledge-retire',
       'target_id': 'KNW-${candidate.id.substring(4)}',
       'target_hash': targetHash,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 採用した方針を「まだ有効」と確かめた依頼。確かめた内容のhashに結び付け、内容が変わっていれば本体が断る。
+  Future<CaptureResult> savePolicyKeep(
+    String operationId,
+    ReviewCandidate candidate,
+  ) => _serial(() async {
+    final targetHash = candidate.dependencies[candidate.targetPath];
+    if (!_uuid.hasMatch(operationId) ||
+        !candidate.keepable ||
+        !RegExp(r'^CAN-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(candidate.id) ||
+        targetHash is! String ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(targetHash)) {
+      throw const FormatException('確かめる方針を再確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'policy-keep',
+      'knowledge_id': 'KNW-${candidate.id.substring(4)}',
+      'knowledge_hash': targetHash,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

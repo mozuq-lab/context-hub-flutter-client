@@ -291,6 +291,54 @@ void main() {
     }
   });
 
+  testWidgets('人の登録に対応していない本体では、登録・変更・外すを押せない', (tester) async {
+    tester.view.physicalSize = const Size(1280, 1000);
+    tester.view.devicePixelRatio = 1;
+    final access = MemoryUIAccess();
+    await access.init();
+    access.current = VaultSnapshot(
+      {...fixture().files, ...personFiles()}
+        ..remove('90_system/intake-features.json'),
+    );
+    final c = HubController(access, sampleLoader: () async => fixture().files);
+    addTearDown(() async {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('nav-people')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('people-unsupported')), findsOneWidget);
+    expect(
+      tester
+          .widget<ButtonStyleButton>(find.byKey(const Key('person-add')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(find.byKey(const Key('person-tanaka')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ButtonStyleButton>(find.byKey(const Key('person-edit')))
+          .onPressed,
+      isNull,
+    );
+    await expectLater(
+      c.requestPerson(
+        'tanaka',
+        'remove',
+        expectedHash: c.repository!.people['tanaka']!.definitionHash,
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect(access.requests, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('メニューの「人」から登録を依頼し、一覧から人ごとの画面を開ける', (tester) async {
     tester.view.physicalSize = const Size(1280, 1000);
     tester.view.devicePixelRatio = 1;

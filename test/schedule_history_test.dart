@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
+import 'package:context_hub_client/core/calendar.dart';
 import 'package:context_hub_client/core/models.dart';
 import 'package:context_hub_client/core/parser.dart';
 import 'package:context_hub_client/core/repository.dart';
@@ -318,6 +319,66 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('期日のある項目だけをカレンダーへ渡し、伏せ字の規則を確かめられないときは渡さない', (tester) async {
+    tester.view.physicalSize = const Size(1280, 2600);
+    tester.view.devicePixelRatio = 1;
+    final today = hubToday(), due = addScheduleDays(today, 3);
+    var files = withSchedule(multiProjectFiles(), 'side-app', 0, due: due);
+    files = withSchedule(
+      files,
+      projectId,
+      0,
+      reviewAfter: addScheduleDays(today, -1),
+    );
+    final access = CalendarAccess();
+    await access.init();
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(() async {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('home-next')));
+    await tester.pumpAndSettle();
+    final repo = HubRepository(fixture(files)),
+        item = repo.projects['side-app']!.nowItems.firstWhere(
+          (i) => i.section == 'next',
+        ),
+        undated = repo.projects[projectId]!.nowItems.firstWhere(
+          (i) => i.section == 'next',
+        );
+    // 見直す日だけの項目には出さない。
+    expect(
+      find.byKey(Key('calendar-${undated.key.substring(0, 12)}')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(Key('calendar-${item.key.substring(0, 12)}')));
+    await tester.pumpAndSettle();
+    final event = access.events.single;
+    expect(event.date, due);
+    expect(event.uid, endsWith('-due@context-hub'));
+    expect(event.title, startsWith('[期日] '));
+    expect(access.writes, 0);
+
+    // 伏せ字の規則が読めない間は、カレンダーへ渡さず理由を示す。
+    access.current = VaultSnapshot({
+      ...files,
+      '90_system/privacy/patterns.json': '{',
+    });
+    await c.reload();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('calendar-${item.key.substring(0, 12)}')));
+    await tester.pumpAndSettle();
+    expect(access.events, hasLength(1));
+    expect(find.textContaining('伏せ字の追加規則'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('プロジェクト画面から経緯を開く', (tester) async {
     tester.view.physicalSize = const Size(1280, 2400);
     tester.view.devicePixelRatio = 1;
@@ -432,4 +493,13 @@ void main() {
     );
     expect(access.requests, hasLength(1));
   });
+}
+
+/// カレンダーへ渡した予定を記録する端末。
+class CalendarAccess extends MemoryUIAccess {
+  final events = <CalendarEvent>[];
+  @override
+  bool get calendarSupported => true;
+  @override
+  Future<void> addToCalendar(CalendarEvent event) async => events.add(event);
 }
