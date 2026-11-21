@@ -149,6 +149,7 @@ class HubController extends ChangeNotifier {
       _pins.remove(_pins.keys.first);
     }
     _applyPins();
+    final syncing = _markPreference('pins');
     try {
       await _writeSettings();
     } catch (_) {
@@ -163,7 +164,7 @@ class HubController extends ChangeNotifier {
       throw StateError('ピン留めを保存できませんでした。もう一度お試しください。');
     }
     _changed();
-    await _preferenceChanged('pins');
+    if (syncing) _schedulePreferenceSend();
   }
 
   /// プロジェクトをピン留めする、または外す。新しいピン留めは末尾に加える。
@@ -208,19 +209,28 @@ class HubController extends ChangeNotifier {
   }
 
   // ---- 好みを端末間でそろえる（ピン留めと並び順・ひな形・かごの上限） ----
-  // settings.jsonの`preferenceSync`に、この端末の名前（device）と、Vaultのidentityごとの
-  // まとまりの変更日時（times）と、まだ送れていないまとまり（dirty）を残す。Vaultごとに本人が有効にする。
+  // settings.jsonの`preferenceSync`に、この端末の名前（device）と、Vaultのidentityごとに
+  // まとまりごとの「この端末が持っている版の日時」（times）、まだ送れていないまとまり（dirty）、
+  // 最後に送った受付ID（sent）を残す。Vaultごとに本人が有効にする。
+  //
+  // どちらが新しいかは、本体が記録した日時（受け付けた時刻より先の日時は丸められる）で決める。
+  // - 本人の変更には、端末の時計と、知っている版の日時の1ミリ秒後の遅い方を付ける（時計の遅れた端末の変更が負けないように）。
+  // - 自分が送った版がVaultに記録されたら、その日時（丸めた後）を持っている版の日時にする（時計の進んだ端末が、ほかの端末の後の変更を取りこぼさないように）。
+  // - まとまりごとに別の受付ファイルで送る（1つが断られても、ほかのまとまりは届く）。
   Map<String, dynamic> _preferenceSync = {};
   Timer? _preferenceTimer;
+  bool _sendingPreferences = false;
 
   /// 送らなかった・送れなかったときの知らせ（ひな形の秘密情報らしい文字列など）。なければnull。
   String? preferenceNotice;
 
-  Map<String, dynamic>? get _syncVault {
+  Map<String, dynamic>? _syncFor(String? identity) {
     final vaults = _preferenceSync['vaults'];
-    final value = vaults is Map ? vaults[location?.identity] : null;
+    final value = vaults is Map ? vaults[identity] : null;
     return value is Map<String, dynamic> ? value : null;
   }
+
+  Map<String, dynamic>? get _syncVault => _syncFor(location?.identity);
 
   /// このVaultで好みをほかの端末とそろえているか。
   bool get preferenceSyncEnabled => _syncVault != null;
@@ -242,13 +252,20 @@ class HubController extends ChangeNotifier {
     return name;
   }
 
-  DateTime? _preferenceTime(String group) {
-    final times = _syncVault?['times'];
-    return times is Map ? DateTime.tryParse('${times[group]}') : null;
+  static Map<String, dynamic> _mapOf(Map<String, dynamic> vault, String key) =>
+      vault[key] is Map
+      ? Map<String, dynamic>.from(vault[key] as Map)
+      : <String, dynamic>{};
+
+  DateTime? _preferenceTime(String group, [String? identity]) {
+    final vault = _syncFor(identity ?? location?.identity);
+    return vault == null
+        ? null
+        : DateTime.tryParse('${_mapOf(vault, 'times')[group]}');
   }
 
-  Set<String> get _dirtyPreferences {
-    final dirty = _syncVault?['dirty'];
+  Set<String> _dirtyOf(String? identity) {
+    final dirty = _syncFor(identity)?['dirty'];
     return {
       if (dirty is List)
         for (final g in dirty)
@@ -256,32 +273,59 @@ class HubController extends ChangeNotifier {
     };
   }
 
-  void _setPreferenceState(String group, DateTime at, {required bool dirty}) {
-    final vault = _syncVault;
+  /// まとまりの状態を変える。[sent]を渡すと、最後に送った受付IDも記録する。
+  void _setPreferenceState(
+    String identity,
+    String group,
+    DateTime at, {
+    required bool dirty,
+    String? sent,
+  }) {
+    final vault = _syncFor(identity);
     if (vault == null) return;
-    final times = vault['times'] is Map
-        ? Map<String, dynamic>.from(vault['times'] as Map)
-        : <String, dynamic>{};
+    final times = _mapOf(vault, 'times'), pending = _dirtyOf(identity);
     times[group] = at.toUtc().toIso8601String();
-    final pending = _dirtyPreferences;
     dirty ? pending.add(group) : pending.remove(group);
     vault['times'] = times;
     vault['dirty'] = [
       for (final g in preferenceGroups)
         if (pending.contains(g)) g,
     ];
+    if (sent != null) vault['sent'] = _mapOf(vault, 'sent')..[group] = sent;
   }
 
-  /// 好みのまとまりを本人が変えた。そろえていれば日時を記録し、少し待ってからまとめて送る。
-  Future<void> _preferenceChanged(String group) async {
-    if (!preferenceSyncEnabled) return;
-    _setPreferenceState(group, DateTime.now(), dirty: true);
-    try {
-      await _writeSettings();
-    } catch (_) {
-      // 記録できなくても、この起動中は送る。
+  /// 本人の変更に付ける日時。知っている版（この端末の版とVaultの版）より必ず後にする。
+  DateTime _stamp(String identity, String group) {
+    var known = _preferenceTime(group, identity);
+    if (identity == location?.identity) {
+      final shared = repository?.sharedPreferences[group]?.updatedAt;
+      if (shared != null && (known == null || shared.isAfter(known))) {
+        known = shared;
+      }
     }
-    _schedulePreferenceSend();
+    final now = DateTime.now().toUtc(),
+        after = known?.add(const Duration(milliseconds: 1));
+    return after != null && after.isAfter(now) ? after : now;
+  }
+
+  /// 本人が変えたまとまりを、待たずに「送っていない変更」として記録する（記録の前に読込が割り込んで、Vaultの版で上書きしないように）。
+  /// ひな形は端末で1つなので、そろえているほかのVaultにも、次に開いたときに送る。そろえていなければfalse。
+  bool _markPreference(String group) {
+    final identity = location?.identity;
+    final targets = group == 'templates'
+        ? [
+            if (_preferenceSync['vaults'] case final Map vaults)
+              for (final k in vaults.keys)
+                if (k is String) k,
+          ]
+        : [?identity];
+    var marked = false;
+    for (final id in targets) {
+      if (_syncFor(id) == null) continue;
+      _setPreferenceState(id, group, _stamp(id, group), dirty: true);
+      marked = true;
+    }
+    return marked;
   }
 
   void _schedulePreferenceSend() {
@@ -291,83 +335,101 @@ class HubController extends ChangeNotifier {
     });
   }
 
-  /// まだ送っていないまとまりを、受付ファイルで送る。本体が受け付けていないときは何もしない。
+  /// まだ送っていないまとまりを、まとまりごとの受付ファイルで送る。本体が受け付けていないときは何もしない。
   Future<void> sendPreferences() async {
     final target = location, repo = repository;
     if (target == null ||
         repo == null ||
         _disposed ||
+        _sendingPreferences ||
         !preferenceSyncEnabled ||
         !repo.capabilities.preferences) {
       return;
     }
-    final dirty = _dirtyPreferences;
-    if (dirty.isEmpty) return;
-    final groups = <String, ({DateTime at, Map<String, Object?> value})>{};
-    String? notice;
-    for (final group in dirty) {
-      final at = _preferenceTime(group) ?? DateTime.now();
-      switch (group) {
-        case 'pins':
-          final ids = _storedPins()
-              .where(projectIdPattern.hasMatch)
-              .take(maxPins)
-              .toList();
-          groups[group] = (at: at, value: {'ids': ids});
-        case 'templates':
-          final list = await templates.list();
-          if (templates.unreadable) continue;
-          final policy = repo.secretPolicy.usable
-              ? repo.secretPolicy
-              : SecretPolicy.builtin;
-          final found = list.any(
-            (t) => policy.find('${t.name}\n${t.body}').isNotEmpty,
-          );
-          if (found) {
-            // 秘密情報らしい文字列を、同期するファイルへ広げない（本体も断る）。
-            notice = 'ひな形に秘密情報らしい文字列があるため、ひな形はほかの端末とそろえていません。ひな形から取り除くと、そろえます。';
-            continue;
-          }
-          groups[group] = (
-            at: at,
-            value: {
+    final identity = target.identity;
+    bool still() => !_disposed && location?.identity == identity;
+    _sendingPreferences = true;
+    final notices = <String>[];
+    try {
+      for (final group in _dirtyOf(identity)) {
+        final at = _preferenceTime(group, identity) ?? _stamp(identity, group);
+        Map<String, Object?>? value;
+        switch (group) {
+          case 'pins':
+            value = {
+              'ids': _storedPins()
+                  .where(projectIdPattern.hasMatch)
+                  .take(maxPins)
+                  .toList(),
+            };
+          case 'basket':
+            // 読み込んだかごがこのVaultのものでなければ、次の機会に送る（別のVaultの上限を送らない）。
+            if (_basketFor == identity) {
+              value = {'max_chars': basket.maxChars};
+            }
+          case 'templates':
+            final list = await templates.list();
+            if (!still()) return;
+            if (templates.unreadable) continue;
+            final policy = repo.secretPolicy.usable
+                ? repo.secretPolicy
+                : SecretPolicy.builtin;
+            if (list.any(
+              (t) => policy.find('${t.name}\n${t.body}').isNotEmpty,
+            )) {
+              // 秘密情報らしい文字列を、同期するファイルへ広げない（本体も断る）。
+              notices.add(
+                'ひな形に秘密情報らしい文字列があるため、ひな形はほかの端末とそろえていません。ひな形から取り除くと、そろえます。',
+              );
+              continue;
+            }
+            value = {
               'items': [
                 for (final t in list)
                   {
                     'id': t.id,
                     'name': t.name.trim(),
                     'body': t.body,
-                    'project': ?_templateProject(t, target.identity),
+                    'project': ?_templateProject(t, identity),
                   },
               ],
-            },
+            };
+        }
+        if (value == null) continue;
+        final payload = encodePreferencesPayload(_deviceName, {
+          group: (at: at, value: value),
+        });
+        if (preferenceGroupsOf(payload) == null) {
+          // 本体の受付ファイルの上限（32KiB）を超えるなど、送れない形。
+          notices.add(
+            '${preferenceGroupLabels[group]}が大きすぎるため、ほかの端末とそろえていません。短くすると、そろえます。',
           );
-        case 'basket':
-          await _ensureBasket(target);
-          groups[group] = (at: at, value: {'max_chars': basket.maxChars});
-      }
-    }
-    preferenceNotice = notice;
-    if (groups.isEmpty) {
-      _changed();
-      return;
-    }
-    final payload = encodePreferencesPayload(_deviceName, groups);
-    final result = await CaptureService(
-      access,
-      target,
-    ).savePreferences(const Uuid().v4(), payload);
-    if (location?.identity != target.identity) return;
-    if (result.saved) {
-      for (final g in groups.keys) {
+          continue;
+        }
+        final result = await CaptureService(
+          access,
+          target,
+        ).savePreferences(const Uuid().v4(), payload);
+        if (!still()) return;
         // 送っている間に本人がもう一度変えたまとまりは、次にまた送る。
-        if (_preferenceTime(g) == groups[g]!.at) {
-          _setPreferenceState(g, groups[g]!.at, dirty: false);
+        if (result.saved && _preferenceTime(group, identity) == at) {
+          _setPreferenceState(
+            identity,
+            group,
+            at,
+            dirty: false,
+            sent: result.requestId,
+          );
         }
       }
-      await _writeSettings();
+      preferenceNotice = notices.isEmpty ? null : notices.join('\n');
+      try {
+        await _writeSettings();
+      } catch (_) {}
+    } finally {
+      _sendingPreferences = false;
+      _changed();
     }
-    _changed();
   }
 
   /// このVaultで好みをそろえ始める。[useVault]がtrueなら、Vaultにある好みをこの端末へ取り込み、
@@ -379,6 +441,7 @@ class HubController extends ChangeNotifier {
       throw StateError('Mac miniの本体が好みの共有に対応していません。本体を更新してください。');
     }
     await _loadSeen();
+    if (location?.identity != target.identity) return;
     _deviceName;
     final vaults = _preferenceSync['vaults'] is Map
         ? Map<String, dynamic>.from(_preferenceSync['vaults'] as Map)
@@ -388,13 +451,17 @@ class HubController extends ChangeNotifier {
       'dirty': <String>[],
     };
     _preferenceSync['vaults'] = vaults;
-    final now = DateTime.now();
     for (final group in preferenceGroups) {
       final shared = repo.sharedPreferences[group];
       if (useVault && shared != null) {
-        await _applySharedPreference(group, shared);
+        await _applySharedPreference(target.identity, group, shared);
       } else {
-        _setPreferenceState(group, now, dirty: true);
+        _setPreferenceState(
+          target.identity,
+          group,
+          _stamp(target.identity, group),
+          dirty: true,
+        );
       }
     }
     await _writeSettings();
@@ -412,45 +479,69 @@ class HubController extends ChangeNotifier {
     _changed();
   }
 
-  /// 読み込んだVaultにある、この端末より新しい好みを取り込む。まだ送っていない変更より新しいものも取り込む（後の変更が勝つ）。
+  /// 読み込んだVaultの好みと、この端末の版を比べる。
+  /// - 自分が送った版が記録されていれば、記録の日時を持っている版の日時にする（取り込み直さない）。
+  /// - この端末の版より新しい版は取り込む（まだ送っていない変更より新しくても、後の変更が勝つ）。
+  /// - 送った依頼が断られていれば、理由を知らせる。
   Future<void> _syncPreferences() async {
-    final repo = repository;
-    if (repo == null || !preferenceSyncEnabled) return;
+    final repo = repository, identity = location?.identity;
+    if (repo == null || identity == null || !preferenceSyncEnabled) return;
     var changed = false;
+    final notices = <String>[];
     for (final group in preferenceGroups) {
+      final vault = _syncFor(identity);
+      if (vault == null) return;
+      final sent = _mapOf(vault, 'sent')[group];
+      final dirty = _dirtyOf(identity).contains(group);
+      if (sent is String) {
+        final request = repo.intake.where((i) => i.id == sent).firstOrNull;
+        if (request != null &&
+            const ['rejected', 'conflict'].contains(request.state)) {
+          notices.add(
+            '${preferenceGroupLabels[group]}をそろえられませんでした: ${request.detail}',
+          );
+        }
+      }
       final shared = repo.sharedPreferences[group],
-          local = _preferenceTime(group);
-      if (shared == null ||
-          (local != null && !shared.updatedAt.isAfter(local))) {
+          local = _preferenceTime(group, identity);
+      if (shared == null) continue;
+      if (sent is String && shared.requestId == sent) {
+        if (!dirty && local != shared.updatedAt) {
+          _setPreferenceState(identity, group, shared.updatedAt, dirty: false);
+          changed = true;
+        }
         continue;
       }
+      if (local != null && !shared.updatedAt.isAfter(local)) continue;
       try {
-        await _applySharedPreference(group, shared);
+        await _applySharedPreference(identity, group, shared);
         changed = true;
       } catch (_) {
         // 取り込めなかったまとまりは、次の読込で試し直す。
       }
+      if (location?.identity != identity) return;
     }
+    if (notices.isNotEmpty) preferenceNotice = notices.join('\n');
     if (changed) {
       try {
         await _writeSettings();
       } catch (_) {}
     }
-    if (_dirtyPreferences.isNotEmpty) _schedulePreferenceSend();
+    if (_dirtyOf(identity).isNotEmpty) _schedulePreferenceSend();
   }
 
   Future<void> _applySharedPreference(
+    String identity,
     String group,
     SharedPreference shared,
   ) async {
-    final target = location;
-    if (target == null) return;
+    if (location?.identity != identity) return;
     switch (group) {
       case 'pins':
         final ids = pinsValue(shared.value);
         if (ids == null) return;
-        _pins.remove(target.identity);
-        if (ids.isNotEmpty) _pins[target.identity] = ids;
+        _pins.remove(identity);
+        if (ids.isNotEmpty) _pins[identity] = ids;
         while (_pins.length > _maxPinVaults) {
           _pins.remove(_pins.keys.first);
         }
@@ -459,7 +550,7 @@ class HubController extends ChangeNotifier {
         final items = templatesValue(shared.value);
         if (items == null) return;
         final current = {for (final t in await templates.list()) t.id: t};
-        if (templates.unreadable) return;
+        if (templates.unreadable || location?.identity != identity) return;
         await templates.save([
           for (final i in items)
             MemoTemplate(
@@ -467,17 +558,19 @@ class HubController extends ChangeNotifier {
               name: i.template.name,
               body: i.template.body,
               projects: current[i.template.id]?.projects ?? const {},
-            ).withProject(target.identity, i.project),
+            ).withProject(identity, i.project),
         ]);
       case 'basket':
         final max = basketValue(shared.value);
         if (max == null) return;
+        final target = location!;
         await _ensureBasket(target);
-        if (_basketFor != target.identity) return;
+        if (_basketFor != identity || location?.identity != identity) return;
         basket = Basket(ids: basket.ids, maxChars: max);
-        await baskets.write(target.identity, basket);
+        await baskets.write(identity, basket);
     }
-    _setPreferenceState(group, shared.updatedAt, dirty: false);
+    if (location?.identity != identity) return;
+    _setPreferenceState(identity, group, shared.updatedAt, dirty: false);
   }
 
   static String? _templateProject(MemoTemplate t, String identity) {
@@ -487,8 +580,17 @@ class HubController extends ChangeNotifier {
 
   /// ひな形の並びを保存する。好みをそろえていれば、ほかの端末へも送る。
   Future<void> saveTemplates(List<MemoTemplate> next) async {
+    final syncing = _markPreference('templates');
     await templates.save(next);
-    await _preferenceChanged('templates');
+    if (syncing) await _preferenceChangedSaved();
+  }
+
+  /// 記録した変更を端末の設定に残し、少し待ってから送る。
+  Future<void> _preferenceChangedSaved() async {
+    try {
+      await _writeSettings();
+    } catch (_) {}
+    _schedulePreferenceSend();
   }
 
   // ---- Androidのホーム画面ウィジェット（端末の表示だけ。Vaultには書かない） ----
@@ -963,9 +1065,12 @@ class HubController extends ChangeNotifier {
     if (!Basket.limits.contains(maxChars)) {
       throw StateError('文字数上限を選び直してください。');
     }
+    final syncing = _markPreference('basket');
     return _setBasket(
       (current) => Basket(ids: current.ids, maxChars: maxChars),
-    ).then((_) => _preferenceChanged('basket'));
+    ).then((_) {
+      if (syncing) _preferenceChangedSaved();
+    });
   }
 
   /// かごの記録を、コピーの直前に読み直したVaultから1つの文章にまとめる。

@@ -549,6 +549,9 @@ class IntakeStatus {
 /// 「記録に聞く」の問いの上限（本体のASK_QUESTION_CHARSと同じ）。
 const askQuestionChars = 500;
 
+/// 本体が答えた記録を残す日数（本体のASK_RETENTION_DAYSと同じ）。
+const askRetentionDays = 30;
+
 /// 「記録に聞く」の1件。この端末から送った問いは受付の状況（[request]）を持ち、答えが届けば[answer]を持つ。
 class AskThread {
   const AskThread({

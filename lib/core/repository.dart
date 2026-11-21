@@ -2028,7 +2028,7 @@ class HubRepository {
             ? (m['meta'] as Map)['git_draft']
             : null;
         String? resolutionId, scheduleId, ideaLinkId, occurrenceNext, askId;
-        DateTime? occurrenceAt;
+        DateTime? occurrenceAt, askReceived;
         final decision = [
           'project-approve',
           'project-reject',
@@ -2264,6 +2264,7 @@ class HubRepository {
                 throw const FormatException();
               }
               askId = r['askId'] as String;
+              askReceived = timestamp(ack['received_at']);
             }
             if (preferring) {
               final r = ack['result'] as Map, applied = r['applied'];
@@ -2517,7 +2518,7 @@ class HubRepository {
         if (occurrence) {
           _occurrenceRequest(item, m, occurrenceNext, occurrenceAt);
         }
-        if (asking) _askRequest(item, m, doc.body, askId);
+        if (asking) _askRequest(item, m, doc.body, askId, askReceived);
         if (draftDismiss &&
             ['waiting', 'accepted'].contains(item.state) &&
             gitDrafts.containsKey(m['draft_id'])) {
@@ -2621,14 +2622,22 @@ class HubRepository {
     Map<String, dynamic> m,
     String body,
     String? askId,
+    DateTime? receivedAt,
   ) {
     final answer =
         _answers[askId] ??
         _answers.values.where((a) => a.requestId == item.id).firstOrNull;
     if (item.state == 'accepted') {
-      item.detail = answer == null
-          ? 'Mini受領済み。答えは次の整理のときに作ります。'
-          : askStatusLabels[answer.status] ?? '';
+      // 本体は答えた記録を保存期間の後に片付ける（問いの受付ファイルと受領記録は残る）。
+      final expired =
+          receivedAt != null &&
+          snapshot.loadedAt.difference(receivedAt) >
+              const Duration(days: askRetentionDays);
+      item.detail = answer != null
+          ? askStatusLabels[answer.status] ?? ''
+          : expired
+          ? '答えは保存期間（$askRetentionDays日）を過ぎたため、本体が片付けました。'
+          : 'Mini受領済み。答えは次の整理のときに作ります。';
     }
     asks.add(
       AskThread(

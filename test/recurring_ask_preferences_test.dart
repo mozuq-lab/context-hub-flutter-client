@@ -418,10 +418,15 @@ void main() {
     await c.enablePreferenceSync(useVault: true);
     expect(c.preferenceSyncEnabled, isTrue);
     expect(c.pinnedProjectIds, ['side-app']);
-    // Vaultにないまとまり（ひな形・かごの上限）は、この端末のものを送る。
-    final first = parseMarkdown(access.requests.values.single);
-    expect(first.meta['operation'], 'client-preferences');
-    expect(preferenceGroupsOf(first.body), ['templates', 'basket']);
+    // Vaultにないまとまり（ひな形・かごの上限）は、この端末のものを、まとまりごとに送る。
+    final first = access.requests.values.map(parseMarkdown).toList();
+    expect(first.map((d) => d.meta['operation']).toSet(), {
+      'client-preferences',
+    });
+    expect(first.map((d) => preferenceGroupsOf(d.body)).toSet(), {
+      ['templates'],
+      ['basket'],
+    });
 
     await c.setBasketLimit(30000);
     await c.sendPreferences();
@@ -602,5 +607,109 @@ void main() {
     await c.reload();
     await tester.pumpAndSettle();
     expect(c.repository!.capabilities.ask, isFalse);
+  });
+
+  test('好みの新しさは本体の記録の日時で決め、時計のずれた端末でも本人の変更とほかの端末の変更を失わない', () async {
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = multiProjectFiles();
+    String entry(DateTime at, String request, List<String> ids) => jsonEncode({
+      'updated_at': at.toUtc().toIso8601String(),
+      'device': 'app-other',
+      'request_id': request,
+      'value': {'ids': ids},
+    });
+    Map<String, String> vaultWith(Map<String, Object?> groups) => {
+      ...files,
+      clientPreferencesPath: jsonEncode({
+        'schema_version': 1,
+        'groups': groups,
+      }),
+    };
+    // ほかの端末の版は、この端末の時計より先の日時で記録されている（この端末の時計が遅れている）。
+    final ahead = DateTime.now().toUtc().add(const Duration(minutes: 5));
+    access.current = fixture(
+      vaultWith({
+        'pins': jsonDecode(entry(ahead, 'REQ-${'a' * 32}', ['side-app'])),
+      }),
+    );
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    await c.enablePreferenceSync(useVault: true);
+    expect(c.pinnedProjectIds, ['side-app']);
+    await c.setPinned('context-hub', true);
+    await c.sendPreferences();
+    final sent = access.requests.entries
+        .map((e) => (id: e.key, doc: parseMarkdown(e.value)))
+        .where((r) => preferenceGroupsOf(r.doc.body)?.contains('pins') ?? false)
+        .single;
+    final body = jsonDecode(sent.doc.body) as Map;
+    final stamped = DateTime.parse(
+      (body['groups'] as Map)['pins']['updated_at'] as String,
+    );
+    // 本人の変更は、知っている版より後の日時で送る（本体に古い変更として捨てられない）。
+    expect(stamped.isAfter(ahead), isTrue);
+
+    // 本体が丸めた日時で記録した自分の版は取り込み直さず、その後のほかの端末の変更は取り込む。
+    final clamped = DateTime.now().toUtc().subtract(const Duration(hours: 1));
+    final own = jsonDecode(entry(clamped, sent.id, ['side-app', 'context-hub']))
+      ..['device'] =
+          (jsonDecode(access.states['settings.json']!)
+              as Map)['preferenceSync']['device'];
+    access.current = fixture(vaultWith({'pins': own}));
+    await c.reload();
+    expect(c.pinnedProjectIds, ['side-app', 'context-hub']);
+    final later = clamped.add(const Duration(minutes: 10));
+    access.current = fixture(
+      vaultWith({
+        'pins': jsonDecode(entry(later, 'REQ-${'b' * 32}', ['old-plan'])),
+      }),
+    );
+    await c.reload();
+    expect(c.pinnedProjectIds, ['old-plan']);
+
+    // ひな形が受付ファイルの上限を超えるときは、ひな形だけを送らずに知らせ、ほかのまとまりは送る。
+    await c.saveTemplates([
+      for (var i = 0; i < 12; i++)
+        MemoTemplate(id: 't$i', name: 'ひな形$i', body: 'あ' * 1000),
+    ]);
+    await c.setBasketLimit(12000);
+    final before = access.requests.length;
+    await c.sendPreferences();
+    final added = access.requests.values
+        .skip(before)
+        .map((r) => preferenceGroupsOf(parseMarkdown(r).body))
+        .toList();
+    expect(added, [
+      ['basket'],
+    ]);
+    expect(c.preferenceNotice, contains('大きすぎる'));
+  });
+
+  test('保存期間を過ぎて片付けられた答えを、答え待ちとして示さない', () {
+    const id = 'REQ-0123456789abcdef0123456789abcdef';
+    const raw =
+        '---\n{"schema_version":1,"request_id":"$id","source":"flutter-client/x","occurred_at":"2026-09-01T00:00:00.000Z","operation":"ask"}\n---\n前の問い';
+    Map<String, String> files(String receivedAt) => {
+      ...fixtureFiles(),
+      'Input/$id.md': raw,
+      '90_system/intake/$id.json': jsonEncode({
+        'schema_version': 1,
+        'request_id': id,
+        'request_hash': digest(raw),
+        'path': 'Input/$id.md',
+        'operation': 'ask',
+        'status': 'accepted',
+        'received_at': receivedAt,
+        'result': {'askId': 'ASK-01M7AAAAAAAAAAAAAAAAAAAA00', 'deduped': false},
+      }),
+    };
+    // fixtureの読込は2026-10-30。
+    final old = HubRepository(fixture(files('2026-09-01T00:00:00.000Z')));
+    expect(old.warnings, isEmpty);
+    expect(old.asks.single.request?.detail, contains('保存期間（30日）を過ぎた'));
+    final fresh = HubRepository(fixture(files('2026-10-29T00:00:00.000Z')));
+    expect(fresh.asks.single.request?.detail, contains('次の整理'));
   });
 }
