@@ -77,6 +77,8 @@ scripts/verify.sh
 ## release成果物
 
 - `scripts/build.sh [all|macos|android]` で `artifacts/` へ生成する。`artifacts/` はGit対象外。
+- `make macos`・`make android` は上記スクリプトを呼び、`make verify` は基本検証を行う。Macはアプリに加えてZIPも生成する。`MACOS_BUILD_METHOD=project` ではFlutterの設定生成後、同じRelease設定でXcode projectをビルドする。
 - Androidは `.local-signing/context-hub-test.jks` にcheckout専用の検証鍵を作り、APK v2で署名する。鍵はGitへ含めない（`.gitignore` 済み）。
 - Macはad-hoc署名で、`codesign --verify --deep --strict` で成果物を確認する。増分ビルドで外側の署名sealが古く残る場合は、Flutterのbuild出力をcleanしてから再生成する。署名identityやグローバル設定を変更して回避しない。
-- MacのDeveloper ID署名・公証、Intel Mac、Play公開は未対応。
+- `make macos-signed` は実行時の環境変数`MACOS_SIGN_IDENTITY`で指定した証明書を使う。名義・Team ID・証明書hash・個人の絶対パスをコードや資料へ埋め込まない。frameworkから先に署名し、Release entitlementsとhardened runtimeを適用して検証する。タイムスタンプ取得失敗時は停止し、ローカル確認で省略するときだけ`MACOS_TIMESTAMP=none`を明示する。署名済み成果物には証明書の名義などが含まれる。
+- Macの公証、Intel Mac、Play公開は未対応。
