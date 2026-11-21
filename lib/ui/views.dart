@@ -463,13 +463,8 @@ class _HubViewState extends State<HubView> {
       // 今週の気づきは、行動につながる欄（次の一手）より前に置く。
       children.addAll(insightsHome());
       final actionable = repo.actionableProjects,
-          nextCount = actionable.fold<int>(
-            0,
-            (n, p) => n + p.entriesWithSource('next').length,
-          ),
-          nextProjects = actionable
-              .where((p) => p.entriesWithSource('next').isNotEmpty)
-              .length;
+          nextCount = actionable.fold<int>(0, (n, p) => n + p.nextCount),
+          nextProjects = actionable.where((p) => p.nextCount > 0).length;
       children.add(
         Padding(
           padding: const EdgeInsets.only(bottom: 20),
@@ -623,8 +618,11 @@ class _HubViewState extends State<HubView> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        project.sections['next']?.firstOrNull?.text ??
-                            '次の一手はまだ整理されていません。',
+                        // 本人が追加して反映待ちの行動は、本体と同じく作業要約の次の一手より前に示す。
+                        project.pendingActions.firstOrNull?.text != null
+                            ? '$actionLabel${project.pendingActions.first.text}（反映待ち）'
+                            : project.sections['next']?.firstOrNull?.text ??
+                                  '次の一手はまだ整理されていません。',
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1662,6 +1660,69 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 本人が決めた行動を次の一手に追加する。[project]を渡すとそのプロジェクトに決まり、渡さないと進行中のプロジェクトから選ぶ。
+  /// [from]はAIが読み取った行（提案・作業要約の次の一手）を行動にするときの元の行。
+  Future<void> addAction({HubProject? project, ActionSource? from}) async {
+    final choices = project != null
+        ? [project]
+        : repo.actionableProjects.where((p) => !p.merged).toList();
+    if (choices.isEmpty) {
+      notice(context, '追加できる進行中のプロジェクトがありません。');
+      return;
+    }
+    final value = await showDialog<({String projectId, String text})>(
+      context: context,
+      builder: (_) => ActionDialog(projects: choices, from: from),
+    );
+    if (value == null || !mounted) return;
+    final checked = await checkSecretsBeforeSave(
+      context,
+      value.text,
+      secrets: repo.secretPolicy,
+    );
+    if (checked == null || !mounted) return;
+    if (!validActionText(checked)) {
+      notice(context, '伏せ字にすると$actionTextChars文字を超えます。文面を短くしてください。');
+      return;
+    }
+    try {
+      final result = await c.requestAction(
+        value.projectId,
+        checked,
+        from: from,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '次の一手への追加を保存しました。Miniで受け付けられるとNOWに反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 反映待ちの行動の1行。
+  Widget pendingActionRow(PendingAction action) => Padding(
+    key: Key('pending-action-${action.requestId}'),
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$actionLabel${action.text}',
+          style: const TextStyle(fontSize: 15),
+        ),
+        Text(
+          '反映待ち（${stateLabel(action.state)}）',
+          style: const TextStyle(fontSize: 12),
+        ),
+      ],
+    ),
+  );
+
   /// 期日・見直す日（と繰り返し）を依頼する。依頼を保存できたらtrue。
   Future<bool> scheduleItem(HubProject project, NowItemRef item) async {
     // 繰り返しに対応した本体にだけ、繰り返しを選ばせて送る（古い本体は知らない欄を断るため）。
@@ -2431,6 +2492,26 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 行動にできるAIの読み取りの行なら、その元の行。作業要約の次の一手（キー付きの未完了の項目）と「提案」の行が対象。
+  ActionSource? actionSourceOf(
+    HubProject project,
+    String section,
+    NowEntry entry,
+  ) {
+    if (section == 'proposals') return repo.proposalSource(entry);
+    if (section != 'next' || entry.itemKey == null) return null;
+    // 完了などの報告・日付や定例の回の依頼が反映待ちの項目は、行動にしない（受付の順で依頼が断られるため）。
+    if (repo.itemRequestIdFor(entry.itemKey!) != null ||
+        repo.scheduleRequestIdFor(entry.itemKey!) != null) {
+      return null;
+    }
+    final item = project.nowItems
+        .where((i) => i.key == entry.itemKey)
+        .firstOrNull;
+    if (item == null || item.action || item.resolved) return null;
+    return ActionSource(inputId: item.inputId, text: item.text, key: item.key);
+  }
+
   bool _calendarOpening = false;
 
   /// 期日を端末のカレンダーへ渡す。カレンダーはクラウドへ同期されることが多いため、伏せ字の規則を確かめられないときは渡さない。
@@ -2597,6 +2678,19 @@ class _HubViewState extends State<HubView> {
                 icon: const Icon(Icons.report_gmailerrorred_outlined, size: 15),
                 label: const Text('誤りとして外す'),
               ),
+            // AIが読み取った次の一手・提案を、本人の行動として引き取る（統合済みのプロジェクトでは本体が断る）。
+            if (!project.merged && repo.intakeFeatures.actions)
+              if (actionSourceOf(project, section, entry) case final from?)
+                TextButton.icon(
+                  key: Key(
+                    'take-action-${digest('${from.inputId}\n${from.text}').substring(0, 12)}',
+                  ),
+                  onPressed: busy || c.composing
+                      ? null
+                      : () => addAction(project: project, from: from),
+                  icon: const Icon(Icons.person_add_alt, size: 15),
+                  label: const Text('自分の行動にする'),
+                ),
             // 本人が付けた期日だけを、端末のカレンダーの予定作成画面へ渡す。保存するかはカレンダーで本人が決める。
             if (entry.itemKey case final key? when c.access.calendarSupported)
               if (project.nowItems.where((i) => i.key == key).firstOrNull
@@ -2632,15 +2726,20 @@ class _HubViewState extends State<HubView> {
         today = hubToday(now),
         projects = repo.actionableProjects,
         section = nextSection,
+        // 次の一手には、本人が追加して反映待ちの行動も数える。
         count = {
-          for (final s in ['next', 'open'])
-            s: projects.fold<int>(
-              0,
-              (n, p) => n + p.entriesWithSource(s).length,
-            ),
+          'next': projects.fold<int>(0, (n, p) => n + p.nextCount),
+          'open': projects.fold<int>(
+            0,
+            (n, p) => n + p.entriesWithSource('open').length,
+          ),
         },
         empty = projects
-            .where((p) => p.entriesWithSource(section).isEmpty)
+            .where(
+              (p) => section == 'next'
+                  ? p.nextCount == 0
+                  : p.entriesWithSource(section).isEmpty,
+            )
             .toList();
     // 前回見てから増えた行。この画面では既読にしない。
     final added = {
@@ -2728,6 +2827,21 @@ class _HubViewState extends State<HubView> {
           onSelectionChanged: (v) => setState(() => nextSection = v.single),
         ),
       ),
+      if (section == 'next' &&
+          c.repository?.intakeFeatures.actions == true &&
+          projects.any((p) => !p.merged))
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const Key('next-add-action'),
+              onPressed: busy || c.composing ? null : () => addAction(),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('次の一手を追加'),
+            ),
+          ),
+        ),
       const SizedBox(height: 20),
       if (projects.isEmpty)
         const Padding(
@@ -2773,7 +2887,9 @@ class _HubViewState extends State<HubView> {
           const SizedBox(height: 24),
         ],
       for (final project in projects)
-        if (listed[project.id]! case final entries when entries.isNotEmpty) ...[
+        if (listed[project.id]! case final entries
+            when entries.isNotEmpty ||
+                (section == 'next' && project.pendingActions.isNotEmpty)) ...[
           InkWell(
             key: Key('next-project-${project.id}'),
             onTap: () => widget.onNavigate('project:${project.id}'),
@@ -2812,6 +2928,9 @@ class _HubViewState extends State<HubView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (section == 'next')
+                    for (final action in project.pendingActions)
+                      pendingActionRow(action),
                   for (final entry in entries)
                     nowEntry(project, section, entry, added[project.id]!),
                 ],
@@ -3416,9 +3535,30 @@ class _HubViewState extends State<HubView> {
         ('open', '未解決'),
         ('proposals', '提案'),
       ]) ...[
-        Text(
-          section.$2,
-          style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                section.$2,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            // 本人が決めた行動を、AIの整理を待たずに次の一手へ載せる。統合済みのプロジェクトには追加しない。
+            if (section.$1 == 'next' &&
+                !project.merged &&
+                c.repository?.intakeFeatures.actions == true)
+              TextButton.icon(
+                key: const Key('project-add-action'),
+                onPressed: busy || c.composing
+                    ? null
+                    : () => addAction(project: project),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('次の一手を追加'),
+              ),
+          ],
         ),
         const SizedBox(height: 12),
         Card(
@@ -3427,7 +3567,11 @@ class _HubViewState extends State<HubView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (project.sections[section.$1]!.isEmpty)
+                if (section.$1 == 'next')
+                  for (final action in project.pendingActions)
+                    pendingActionRow(action),
+                if (project.sections[section.$1]!.isEmpty &&
+                    (section.$1 != 'next' || project.pendingActions.isEmpty))
                   const Text('まだ整理されていません。'),
                 for (final entry in project.sections[section.$1]!)
                   nowEntry(project, section.$1, entry, added),
@@ -3694,7 +3838,9 @@ class RecordView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: NoticeBox(
-                '訂正を送りました。Miniに届いて整理されるまで、要約は訂正前の内容のままです（$requestId）。',
+                chain.first.kind == 'action'
+                    ? '行動の文面の訂正を送りました。Miniに届くまで、NOWの次の一手は直す前の文面のままです（$requestId）。'
+                    : '訂正を送りました。Miniに届いて整理されるまで、要約は訂正前の内容のままです（$requestId）。',
               ),
             ),
           Wrap(
@@ -3704,7 +3850,9 @@ class RecordView extends StatelessWidget {
               OutlinedButton.icon(
                 key: const Key('write-correction'),
                 icon: const Icon(Icons.edit_note),
-                label: const Text('訂正を書く'),
+                label: Text(
+                  chain.first.kind == 'action' ? '行動の文面を直す' : '訂正を書く',
+                ),
                 onPressed:
                     requestId != null ||
                         controller.saving ||
@@ -3903,6 +4051,7 @@ class RecordView extends StatelessWidget {
             if (const [
               'memo',
               'work-summary',
+              'action',
               'correction',
             ].contains(record.kind))
               ListenableBuilder(
@@ -4043,6 +4192,7 @@ String stateLabel(String state) => switch (state) {
   'conflict' => '競合',
   'uncertain' => '保存確認待ち',
   'unknown' => '整合性未確認',
+  'action' => '本人が追加した行動（整理しません）',
   _ => state,
 };
 
@@ -4108,6 +4258,14 @@ class CorrectionDialog extends StatefulWidget {
 class _CorrectionDialogState extends State<CorrectionDialog> {
   late final text = TextEditingController(text: widget.latest.body.trimRight());
   final operation = const Uuid().v4();
+
+  /// 本人が追加した行動の文面を直す。行動と同じく1行・200文字以内にする。
+  late final bool action =
+      widget.controller.repository
+          ?.correctionChainOf(widget.recordId)
+          ?.first
+          .kind ==
+      'action';
   String? error;
   CaptureResult? result;
   bool busy = false;
@@ -4121,6 +4279,12 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
   }
 
   Future<void> submit() async {
+    if (action && !validActionText(text.text)) {
+      setState(
+        () => error = '行動の文面は1行・$actionTextChars文字以内で、前後に空白を付けずに入力してください。',
+      );
+      return;
+    }
     if (text.text.trim().isEmpty || text.text.length > 8000) {
       setState(() => error = '訂正文は1〜8000文字で入力してください。');
       return;
@@ -4134,6 +4298,10 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
     if (checked != text.text) {
       if (checked.length > 8000) {
         setState(() => error = '伏せ字にすると8000文字を超えます。訂正文を短くしてください。');
+        return;
+      }
+      if (action && !validActionText(checked)) {
+        setState(() => error = '伏せ字にすると$actionTextChars文字を超えます。文面を短くしてください。');
         return;
       }
       text.text = checked;
@@ -4201,7 +4369,7 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
         child: PopScope(
           canPop: !busy,
           child: AlertDialog(
-            title: const Text('メモを訂正する'),
+            title: Text(action ? '行動の文面を直す' : 'メモを訂正する'),
             content: SizedBox(
               width: 620,
               child: SingleChildScrollView(
@@ -4214,9 +4382,11 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
                       style: const TextStyle(fontSize: 12),
                     ),
                     const SizedBox(height: 12),
-                    const Text(
-                      '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
-                      style: TextStyle(fontSize: 12, height: 1.6),
+                    Text(
+                      action
+                          ? '直した後の文面を1行で書いてください。元の文面は原文に残ります。Miniで受け付けられるとNOWの次の一手が直した文面になります。付けた日付は直した後の行動に引き継がれます。'
+                          : '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Miniで整理されるまで、要約やNOWは訂正前の内容のままです。',
+                      style: const TextStyle(fontSize: 12, height: 1.6),
                     ),
                     const SizedBox(height: 16),
                     TextField(
@@ -4225,12 +4395,17 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
                       // Macではキーボードで開いたまま書けるよう、本文へ移る。
                       autofocus: usesCommandKey,
                       readOnly: locked || busy,
-                      minLines: 5,
-                      maxLines: 12,
-                      maxLength: 8000,
-                      decoration: const InputDecoration(
+                      minLines: action ? 1 : 5,
+                      maxLines: action ? 1 : 12,
+                      // 行動の文面は本体と同じ数え方（UTF-16の単位）で示し、保存の前に確かめる。
+                      maxLength: action ? null : 8000,
+                      decoration: InputDecoration(
                         alignLabelWithHint: true,
+                        counterText: action
+                            ? '${text.text.length} / $actionTextChars'
+                            : null,
                       ),
+                      onChanged: action ? (_) => setState(() {}) : null,
                     ),
                     if (error != null)
                       Padding(
@@ -5373,6 +5548,7 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
   }
 
   String effect(String reason) => switch (reason) {
+    'outdated' when widget.item.action => 'もうやらない。項目を外すだけです。完了には数えません。',
     'misread' => 'メモはそう言っていない。Miniが次の整理で、このメモを読み直します。',
     'wrong-project' =>
       widget.owned
@@ -5400,7 +5576,9 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 12),
-              for (final r in exclusionReasons)
+              // 本人が追加した行動はAIの読み取りではないため、「もう古い」だけを選べる（本体も同じ）。
+              for (final r
+                  in widget.item.action ? const ['outdated'] : exclusionReasons)
                 ListTile(
                   key: Key('exclude-reason-$r'),
                   contentPadding: EdgeInsets.zero,
@@ -5455,6 +5633,117 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
                   note: text.isEmpty ? null : text,
                 )),
           child: const Text('誤りとして外す'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 本人が決めた行動を「次の一手」に追加する画面。AIの読み取り（提案など）を行動にするときは、元の行を初期値にする。
+class ActionDialog extends StatefulWidget {
+  const ActionDialog({super.key, required this.projects, this.from});
+
+  /// 追加先に選べるプロジェクト。1件ならそのプロジェクトに決まっている。
+  final List<HubProject> projects;
+
+  /// AIが読み取った行を行動にするときの元の行。
+  final ActionSource? from;
+  @override
+  State<ActionDialog> createState() => _ActionDialogState();
+}
+
+class _ActionDialogState extends State<ActionDialog> {
+  late final text = TextEditingController(
+    text: widget.from?.text.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '',
+  );
+  late String project = widget.projects.first.id;
+
+  @override
+  void dispose() {
+    text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = text.text.trim(), valid = validActionText(value);
+    return AlertDialog(
+      key: const Key('action-dialog'),
+      title: Text(widget.from == null ? '次の一手を追加' : '自分の行動にする'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (widget.projects.length == 1)
+                Text(
+                  widget.projects.single.title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                )
+              else
+                DropdownButtonFormField<String>(
+                  key: const Key('action-project'),
+                  initialValue: project,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'プロジェクト'),
+                  items: [
+                    for (final p in widget.projects)
+                      DropdownMenuItem(
+                        value: p.id,
+                        child: Text(p.title, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => project = v ?? project),
+                ),
+              if (widget.from case final from?) ...[
+                const SizedBox(height: 12),
+                Text(
+                  '元の行（AIの読み取り）: ${from.text}',
+                  key: const Key('action-from'),
+                  style: const TextStyle(fontSize: 12, height: 1.6),
+                ),
+              ],
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('action-text'),
+                controller: text,
+                autofocus: true,
+                maxLines: 1,
+                decoration: InputDecoration(
+                  labelText: '次にやること（1行）',
+                  helperText: '自分の言葉で書いてください。AIは書き換えません。',
+                  // 本体の検査と同じ数え方（UTF-16の単位。絵文字などは2文字と数える）で示す。
+                  counterText: '${value.length} / $actionTextChars',
+                  errorText: value.isEmpty || valid
+                      ? null
+                      : '1行・$actionTextChars文字以内で入力してください。',
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                widget.from == null
+                    ? '本人が追加した行動として、そのまま次の一手に載ります。AIは整理せず、完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Miniで受け付けられ、同期されるとNOWに反映されます。'
+                    : '本人が追加した行動として次の一手に載り、元の行はAIの読み取りの欄から外れます。完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Miniで受け付けられ、同期されるとNOWに反映されます。',
+                style: const TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('action-submit'),
+          onPressed: valid
+              ? () => Navigator.pop(context, (projectId: project, text: value))
+              : null,
+          child: const Text('追加する'),
         ),
       ],
     );

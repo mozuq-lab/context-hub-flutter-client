@@ -71,6 +71,10 @@ Map<String, Object?> homeWidgetContent(
   final soon = <(HubProject, NowEntry, String, int)>[],
       rest = <(HubProject, NowEntry)>[];
   for (final p in projects) {
+    // 本人が追加して、まだNOWに反映されていない行動も次の一手として数える。
+    for (final a in p.pendingActions) {
+      rest.add((p, NowEntry('$actionLabel${a.text}')));
+    }
     var order = 0;
     for (final e in p.entriesWithSource('next')) {
       order++;

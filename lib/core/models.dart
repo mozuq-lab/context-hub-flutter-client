@@ -136,8 +136,18 @@ class NowItemRef {
     this.reviewAfter,
     this.repeat,
     this.hints = const [],
+    this.action = false,
+    this.fromInputId,
+    this.fromText,
+    this.fromKey,
   });
   final String key, section, label, text, inputId;
+
+  /// 本人が直接追加した行動（本体の入力の種類action）。AIの読み取りではない。
+  final bool action;
+
+  /// AIが読み取った行を行動にしたときの、元の行の根拠の入力ID・直す前の本文・項目キー（キー付きの項目だったときだけ）。
+  final String? fromInputId, fromText, fromKey;
   final String? resolutionId;
   final DateTime? resolvedAt;
 
@@ -166,6 +176,45 @@ class NowItemRef {
   /// 本体のNOWの行と同じ表示文（views.tsのplainと同じ置換）。
   String get display =>
       '$label${text.replaceAll(RegExp(r'[\r\n]+'), ' ').replaceAll('<!--', '&lt;!--')}';
+}
+
+/// 本体と同じ、本人が追加する行動の文面の上限（UTF-16の単位で数える）。
+const actionTextChars = 200;
+
+/// 行動の文面が本体の検査（1〜200文字・1行・制御文字と行区切り・段落区切り・文字の向きを変える制御なし・前後の空白なし）を通るか。
+bool validActionText(Object? value) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= actionTextChars &&
+    value.trim() == value &&
+    !RegExp(
+      r'[\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]',
+      unicode: true,
+    ).hasMatch(value);
+
+/// 本体のNOWで、本人が追加した行動に付くラベル。
+const actionLabel = '本人が追加: ';
+
+/// AIが読み取った行（NOWの提案・作業要約の次の一手）を行動にするときの、元の行。
+class ActionSource {
+  const ActionSource({required this.inputId, required this.text, this.key});
+  final String inputId, text;
+
+  /// 元の行がNOWの項目（キー付き）だったときの項目キー。
+  final String? key;
+}
+
+/// 本人が追加を依頼し、まだNOWの項目一覧に載っていない行動（端末に保存した依頼・Miniが受け付けた依頼）。
+class PendingAction {
+  const PendingAction({
+    required this.requestId,
+    required this.projectId,
+    required this.text,
+    required this.state,
+    this.from,
+  });
+  final String requestId, projectId, text, state;
+  final ActionSource? from;
 }
 
 /// 「片付いたかも」の根拠。メモのIDと、メモの原文からの引用。
@@ -322,6 +371,12 @@ class HubProject {
   /// 出典の付いた行だけ。本体が空の欄に書く定型文（「不明（…）」「残っている次の一手はありません（…）」）を除く。
   List<NowEntry> entriesWithSource(String section) =>
       sections[section]!.where((e) => e.references.isNotEmpty).toList();
+
+  /// 本人が追加を依頼し、まだNOWの項目一覧に載っていない行動。
+  final List<PendingAction> pendingActions = [];
+
+  /// 次の一手の件数（出典の付いた行と、反映待ちの行動）。
+  int get nextCount => entriesWithSource('next').length + pendingActions.length;
 
   /// 確認待ちの作業記録の下書き。
   final List<GitDraft> drafts = [];
@@ -566,6 +621,7 @@ class AskThread {
 const searchKinds = [
   'memo',
   'work-summary',
+  'action',
   'correction',
   'idea',
   'knowledge',
@@ -575,6 +631,7 @@ const searchKinds = [
 const searchKindLabels = {
   'memo': 'メモ',
   'work-summary': '作業要約',
+  'action': '行動',
   'correction': '訂正',
   'idea': 'アイデア',
   'knowledge': '知識',

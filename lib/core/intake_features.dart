@@ -17,6 +17,7 @@ class IntakeFeatures {
     this.itemScheduleFields = const {},
     this.askEnabled = false,
     this.askMaxChars = askQuestionChars,
+    this.captureKinds = const {},
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -34,7 +35,13 @@ class IntakeFeatures {
   final bool askEnabled;
   final int askMaxChars;
 
+  /// 送れる入力の種類（`capture_kinds`）。書かれていなければメモと作業要約だけ。
+  final Set<String> captureKinds;
+
   bool get happenedOn => captureFields.contains('happened_on');
+
+  /// 本人が次の一手に直接足す行動（`kind: action`）を送れる。
+  bool get actions => captureKinds.contains('action');
   bool get policyKeep => operations.contains('policy-keep');
 
   /// 人の登録・名前と呼び名の変更・外す依頼（人ごとの見返し）。
@@ -62,11 +69,17 @@ class IntakeFeatures {
       }
       final days = m['max_backdate_days'], titles = m['calendar_titles'];
       final schedule = m['item_schedule_fields'], ask = m['ask'];
+      final kinds = m['capture_kinds'];
       final askMax = ask is Map ? ask['max_question_chars'] : null;
       return IntakeFeatures._(
         itemScheduleFields: {
           if (schedule is List)
             for (final v in schedule)
+              if (v is String) v,
+        },
+        captureKinds: {
+          if (kinds is List)
+            for (final v in kinds)
               if (v is String) v,
         },
         askEnabled: ask is Map && ask['enabled'] == true,
