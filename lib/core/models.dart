@@ -654,7 +654,7 @@ const searchKindLabels = {
   'correction': '訂正',
   'idea': 'アイデア',
   'knowledge': '知識',
-  'now': 'NOW',
+  'now': '現状',
   'reference': '資料',
 };
 

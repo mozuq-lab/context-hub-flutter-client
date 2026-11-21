@@ -139,7 +139,7 @@ void main() {
       );
       expect(
         accepted.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        'Mac mini受け取り済み。現状の同期を待っています。',
+        'Mac miniが受け取り済み。現状の同期を待っています。',
       );
       final fixtureFile = File('${access.directory.path}/with-hint.json')
         ..writeAsStringSync(jsonEncode(files));

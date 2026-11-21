@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'models.dart';
 import 'parser.dart';
+import 'intake_features.dart';
 
 class AdoptionTarget {
   AdoptionTarget.global()
@@ -96,6 +97,7 @@ class ReviewCandidate {
     String? status,
     List<String>? warnings,
     bool? reflected,
+    this.staleReject = false,
   }) : status = status ?? data['status'] as String,
        warnings = warnings ?? List<String>.from(data['warnings'] as List),
        reflected = reflected ?? data['reflected'] as bool;
@@ -103,6 +105,9 @@ class ReviewCandidate {
   final String status;
   final List<String> warnings;
   final bool reflected;
+
+  /// 本体が古くなった候補の却下に対応している（intake-featuresの`review_rejects`）。
+  final bool staleReject;
   bool get retired => data['retired'] == true;
   bool get retirable =>
       status == 'approved' &&
@@ -169,7 +174,13 @@ class ReviewCandidate {
   bool get actionable => status == 'pending';
 
   /// 却下できる。確認待ちの候補と、古くなった候補（元のメモの訂正・同じ名前のプロジェクトなどで採用できないもの）。
-  bool get rejectable => actionable || status == 'stale';
+  /// プロジェクト案は、本人が確かめた内容と結び付ける確認情報がそろっているときだけ。
+  bool get rejectable =>
+      actionable ||
+      (status == 'stale' &&
+          staleReject &&
+          (kind != 'project' ||
+              RegExp(r'^[a-f0-9]{64}$').hasMatch(confirmationToken ?? '')));
   String get label => switch (kind) {
     'project' => 'プロジェクト案',
     'knowledge' => '知識',
@@ -181,6 +192,9 @@ class ReviewCandidate {
 
 class ReviewRepository {
   ReviewRepository(this.snapshot, Iterable<HubRecord> records) {
+    final staleRejects = IntakeFeatures.parse(
+      snapshot.files[intakeFeaturesPath],
+    ).staleReject;
     final raw = snapshot.files['90_system/review/index.json'];
     if (raw == null) {
       warnings.add('確認待ち一覧が未同期です。同期後、Mac miniでHOMEを更新して再読込してください。');
@@ -257,7 +271,7 @@ class ReviewRepository {
         try {
           final data = Map<String, dynamic>.from(row as Map);
           _validate(data);
-          final c = ReviewCandidate(data);
+          final c = ReviewCandidate(data, staleReject: staleRejects);
           if (!ids.add(c.id)) {
             items.removeWhere((i) => i.id == c.id);
             warnings.add('一覧に重複した候補があります。Mac miniで再生成してください。');

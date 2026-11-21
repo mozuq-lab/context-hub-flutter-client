@@ -677,11 +677,17 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         const NoticeBox('適用停止の依頼保存済み・Mac miniの判断待ちです。'),
                       // 古くなった候補は採用できない。不要なら却下して要確認から片付ける。
                       if (item.status == 'stale') ...[
-                        const NoticeBox(
-                          'この候補は古くなったため採用できません。不要なら却下すると、判断履歴へ移ります。',
-                          key: Key('review-stale'),
+                        NoticeBox(
+                          item.rejectable
+                              ? 'この候補は古くなったため採用できません。不要なら却下すると、判断履歴へ移ります。'
+                              : item.staleReject
+                              ? 'この候補は古くなったため採用できません。確認情報が同期されると、ここから却下できます。'
+                              : 'この候補は古くなったため採用できません。Mac miniの本体を更新すると、ここから却下できます。',
+                          key: const Key('review-stale'),
                         ),
                         const SizedBox(height: 12),
+                      ],
+                      if (item.status == 'stale' && item.rejectable) ...[
                         OutlinedButton(
                           key: const Key('review-reject-stale'),
                           onPressed:

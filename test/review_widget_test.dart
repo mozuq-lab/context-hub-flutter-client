@@ -1,3 +1,5 @@
+import 'package:context_hub_client/core/intake_features.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
@@ -131,4 +133,55 @@ void main() {
     await t.scrollUntilVisible(find.text('判断履歴（2件）'), 400);
     expect(t.takeException(), isNull);
   });
+
+  for (final supported in [true, false]) {
+    testWidgets(supported ? '古くなった候補を、確認のうえ却下できる' : '古い本体では、古くなった候補に却下を出さない', (
+      t,
+    ) async {
+      t.view.physicalSize = const Size(1280, 1000);
+      t.view.devicePixelRatio = 1;
+      final files = reviewFiles();
+      if (!supported) {
+        final features =
+            jsonDecode(files[intakeFeaturesPath]!) as Map<String, dynamic>;
+        features.remove('review_rejects');
+        files[intakeFeaturesPath] = jsonEncode(features);
+      }
+      final a = MemoryUIAccess();
+      a.current = VaultSnapshot(files);
+      final c = HubController(a, sampleLoader: () async => files);
+      addTearDown(() {
+        c.dispose();
+        t.view.resetPhysicalSize();
+        t.view.resetDevicePixelRatio();
+      });
+      await t.pumpWidget(ContextHubApp(controller: c));
+      await t.pumpAndSettle();
+      await c.useSample();
+      await t.pumpAndSettle();
+      final stale = c.review!.attention.firstWhere((i) => i.status == 'stale');
+      expect(stale.rejectable, supported);
+      await t.tap(find.byKey(const Key('nav-review')));
+      await t.pumpAndSettle();
+      await t.ensureVisible(find.byKey(Key('review-${stale.id}')));
+      await t.tap(find.byKey(Key('review-${stale.id}')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('review-stale')), findsOneWidget);
+      if (!supported) {
+        expect(find.byKey(const Key('review-reject-stale')), findsNothing);
+        expect(find.byKey(const Key('review-approve')), findsNothing);
+        return;
+      }
+      await t.ensureVisible(find.byKey(const Key('review-reject-stale')));
+      await t.tap(find.byKey(const Key('review-reject-stale')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('却下を依頼'));
+      await t.pumpAndSettle();
+      expect(a.requests, hasLength(1));
+      final meta = parseMarkdown(a.requests.values.single).meta;
+      expect(meta['candidate_id'], stale.id);
+      expect(meta['operation'], endsWith('-reject'));
+      expect(t.takeException(), isNull);
+    });
+  }
 }

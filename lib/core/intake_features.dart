@@ -22,6 +22,7 @@ class IntakeFeatures {
     this.askMaxChars = askQuestionChars,
     this.captureKinds = const {},
     this.itemScopes = const {},
+    this.reviewRejects = const {},
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -44,6 +45,12 @@ class IntakeFeatures {
 
   /// 完了・却下を受け付ける、プロジェクト以外の項目の置き場（`item_scopes`）。
   final Set<String> itemScopes;
+
+  /// 確認待ち以外で却下を受け付ける候補の状態（`review_rejects`）。`stale`は古くなった候補。
+  final Set<String> reviewRejects;
+
+  /// 古くなった候補を却下できる。
+  bool get staleReject => reviewRejects.contains('stale');
 
   bool get happenedOn => captureFields.contains('happened_on');
 
@@ -82,7 +89,9 @@ class IntakeFeatures {
       }
       final days = m['max_backdate_days'], titles = m['calendar_titles'];
       final schedule = m['item_schedule_fields'], ask = m['ask'];
-      final kinds = m['capture_kinds'], scopes = m['item_scopes'];
+      final kinds = m['capture_kinds'],
+          scopes = m['item_scopes'],
+          rejects = m['review_rejects'];
       final askMax = ask is Map ? ask['max_question_chars'] : null;
       return IntakeFeatures._(
         itemScheduleFields: {
@@ -98,6 +107,11 @@ class IntakeFeatures {
         itemScopes: {
           if (scopes is List)
             for (final v in scopes)
+              if (v is String) v,
+        },
+        reviewRejects: {
+          if (rejects is List)
+            for (final v in rejects)
               if (v is String) v,
         },
         askEnabled: ask is Map && ask['enabled'] == true,

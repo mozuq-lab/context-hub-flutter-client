@@ -376,7 +376,7 @@ class _GuidedPageState extends State<GuidedPage> {
       ],
       if (g.otherVaultLocked) ...[
         const NoticeBox(
-          '別のVaultで始めた問答に、保存結果を確かめていないものがあります。そのVaultの保存済みの可能性があります。そのVaultを開いてからこの画面を開くと、同じ操作を確かめられます。',
+          '別のVaultで始めた問答に、保存結果を確かめていないものがあります。そのVaultに保存済みの可能性があります。そのVaultを開いてからこの画面を開くと、同じ操作を確かめられます。',
           key: Key('guided-other-locked'),
         ),
         Align(
@@ -483,8 +483,8 @@ class _GuidedPageState extends State<GuidedPage> {
       const SizedBox(height: 12),
       Text(
         sendsMaterial
-            ? '送り先はAnthropicのClaude APIです。目的・きっかけ・回答と上の資料を、問いとまとめを作るためだけに送ります（プロジェクトを選んだときは、その名前とIDも送ります）。Vaultへは、最後に「Inputへ保存」を押したときだけ書きます。'
-            : '送り先はAnthropicのClaude APIです。目的・きっかけ・回答だけを、問いとまとめを作るためだけに送ります。プロジェクトの名前などVaultの内容は送りません。Vaultへは、最後に「Inputへ保存」を押したときだけ書きます。',
+            ? '送り先はAnthropicのClaude APIです。目的・きっかけ・回答と上の資料を、問いとまとめを作るためだけに送ります（プロジェクトを選んだときは、その名前とIDも送ります）。Vaultへは、最後に「メモとして保存」を押したときだけ書きます。'
+            : '送り先はAnthropicのClaude APIです。目的・きっかけ・回答だけを、問いとまとめを作るためだけに送ります。プロジェクトの名前などVaultの内容は送りません。Vaultへは、最後に「メモとして保存」を押したときだけ書きます。',
         key: const Key('guided-send-note'),
         style: _small,
       ),
@@ -995,7 +995,7 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                '質問に答えてまとめるは、あなたのAPIキーでAnthropicのClaude APIを端末から直接呼び出します。料金はAnthropicの契約に応じてかかります。',
+                '「質問に答えてまとめる」は、あなたのAPIキーでAnthropicのClaude APIを端末から直接呼び出します。料金はAnthropicの契約に応じてかかります。',
                 style: _small,
               ),
               const SizedBox(height: 12),

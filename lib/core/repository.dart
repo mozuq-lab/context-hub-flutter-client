@@ -2343,6 +2343,8 @@ class HubRepository {
               : itemReport
               ? '${m['action'] == 'resolve'
                     ? '完了・解決'
+                    : m['action'] == 'exclude' && m['project_id'] == unassignedScope
+                    ? '却下'
                     : m['action'] == 'exclude'
                     ? '誤りとして外す（${exclusionReasonLabels[m['reason']]}）'
                     : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
@@ -2524,7 +2526,7 @@ class HubRepository {
                 throw const FormatException();
               }
               item.detail = applied.isEmpty
-                  ? 'Mac mini受け取り済み。ほかの端末の変更の方が新しいか、同じ内容のため、記録は変わりませんでした。'
+                  ? 'Mac miniが受け取り済み。ほかの端末の変更の方が新しいか、同じ内容のため、記録は変わりませんでした。'
                   : 'Mac miniが記録しました（${applied.map((g) => preferenceGroupLabels[g]).join('・')}）。';
             }
             if (creation) {
@@ -2541,7 +2543,7 @@ class HubRepository {
               }
               item.detail = projects.containsKey(m['project_id'])
                   ? 'プロジェクトを作成しました。'
-                  : 'Mac mini受け取り済み。プロジェクト定義の同期を待っています。';
+                  : 'Mac miniが受け取り済み。プロジェクト定義の同期を待っています。';
             }
             if (conflictResolve) {
               final r = ack['result'] as Map;
@@ -2626,12 +2628,12 @@ class HubRepository {
               }
               final candidate = review.byId(m['candidate_id'] as String);
               item.detail = candidate == null
-                  ? 'Mac mini受け取り済み。判断・反映結果の同期を待っています。'
+                  ? 'Mac miniが受け取り済み。判断・反映結果の同期を待っています。'
                   : candidate.status == 'approved'
                   ? (candidate.reflected ? '承認済み・反映済み' : '承認済み・反映待ち')
                   : candidate.status == 'rejected'
                   ? '却下済み'
-                  : 'Mac mini受け取り済み。判断・反映結果を再同期してください。';
+                  : 'Mac miniが受け取り済み。判断・反映結果を再同期してください。';
             }
             final input = _inputs[(ack['result'] as Map)['inputId']];
             if (actionCapture) {
@@ -2678,7 +2680,7 @@ class HubRepository {
                 (item.state == 'accepted' && !correctionSynced))) {
           _outstandingCorrections[m['target_id'] as String] = item.id;
           if (item.state == 'accepted') {
-            item.detail = 'Mac mini受け取り済み。訂正原文の同期を待っています。';
+            item.detail = 'Mac miniが受け取り済み。訂正原文の同期を待っています。';
           }
         }
         if (statusChange) {
@@ -2727,7 +2729,7 @@ class HubRepository {
               _latestMergeIntoId(into) == changeId) {
             _outstandingMergeInto[into] = item.id;
             _outstandingMergeInto[m['project_id'] as String] = item.id;
-            item.detail = 'Mac mini受け取り済み。統合先のプロジェクト定義の同期を待っています。';
+            item.detail = 'Mac miniが受け取り済み。統合先のプロジェクト定義の同期を待っています。';
           }
         }
         if (creation &&
@@ -2751,7 +2753,7 @@ class HubRepository {
             // 確認したNOWのままなら同期待ち。片付け後に新しく止まったNOWは、別の競合として扱う。
             if (conflict != null && conflict.nowHash == m['target_hash']) {
               _outstandingConflicts[conflictProject] = item.id;
-              item.detail = 'Mac mini受け取り済み。現状の同期を待っています。';
+              item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
             } else {
               item.detail = acceptedMemo
                   ? '現状を生成版に戻しました。手で変えた行はメモとして残っています。'
@@ -2867,7 +2869,7 @@ class HubRepository {
               receivedAt == null ||
               generated.isBefore(receivedAt))) {
         _outstandingSchedules[key] = item.id;
-        item.detail = 'Mac mini受け取り済み。現状の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
       } else {
         item.detail =
             '定例の回をMac miniが反映しました。${next == null ? '' : '次の期日は $next です。'}';
@@ -2901,7 +2903,7 @@ class HubRepository {
           ? '答えは保存期間（$askRetentionDays日）を過ぎたため、本体が片付けました。'
           : askOff
           ? askDisabledWaiting
-          : 'Mac mini受け取り済み。答えは次のAI読み取りのときに作ります。';
+          : 'Mac miniが受け取り済み。答えは次のAI読み取りのときに作ります。';
     }
     asks.add(
       AskThread(
@@ -3102,7 +3104,7 @@ class HubRepository {
           // 記録より後に作られた一覧が届いていれば、一覧に従う。
           if (!current.generatedAt.isBefore(record.createdAt)) continue;
         }
-        item.detail = 'Mac mini受け取り済み。今週の気づきの一覧の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。今週の気づきの一覧の同期を待っています。';
       }
       _pendingInsightReactions[key] = (requestId: item.id, reaction: wanted);
     }
@@ -3134,7 +3136,7 @@ class HubRepository {
     final created = _ideaLinkCreatedAt(linkId), indexed = _ideaIndexAt;
     if (created == null || indexed == null || indexed.isBefore(created)) {
       _outstandingIdeaLinks[key] = item.id;
-      item.detail = 'Mac mini受け取り済み。似ているアイデアの一覧の同期を待っています。';
+      item.detail = 'Mac miniが受け取り済み。似ているアイデアの一覧の同期を待っています。';
     }
   }
 
@@ -3289,7 +3291,7 @@ class HubRepository {
               : project?.nowItemsGeneratedAt;
       if (at == null || generated == null || generated.isBefore(at)) {
         waiting = true;
-        item.detail = 'Mac mini受け取り済み。現状の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
       } else {
         item.detail = '$whatをMac miniが反映しました。';
       }
@@ -3351,7 +3353,7 @@ class HubRepository {
     if (item.state == 'accepted') {
       item.detail = shown
           ? '次の一手にMac miniが追加しました。'
-          : 'Mac mini受け取り済み。現状の同期を待っています。';
+          : 'Mac miniが受け取り済み。現状の同期を待っています。';
     }
     if (project == null ||
         shown ||
@@ -3465,7 +3467,7 @@ class HubRepository {
     if (item.state == 'waiting' || (item.state == 'accepted' && shown)) {
       _outstandingHintDismissals['$key/$input'] = item.id;
       if (item.state == 'accepted') {
-        item.detail = 'Mac mini受け取り済み。現状の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
       }
     } else if (item.state == 'accepted') {
       item.detail = '見送りをMac miniが反映しました。';
@@ -3538,12 +3540,12 @@ class HubRepository {
       if (record == null) {
         waiting = current == before;
         item.detail = waiting
-            ? 'Mac mini受け取り済み。人の定義の同期を待っています。'
-            : 'Mac mini受け取り済み。変更記録の同期を待っています。';
+            ? 'Mac miniが受け取り済み。人の定義の同期を待っています。'
+            : 'Mac miniが受け取り済み。変更記録の同期を待っています。';
       } else if (current == record['before_hash'] &&
           latestPersonChangeId(personId) == changeId) {
         waiting = true;
-        item.detail = 'Mac mini受け取り済み。人の定義の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。人の定義の同期を待っています。';
       } else {
         item.detail = current == record['after_hash']
             ? '$whatをMac miniが反映しました。'
@@ -3587,12 +3589,12 @@ class HubRepository {
       if (record == null) {
         waiting = current == m['project_hash'];
         item.detail = waiting
-            ? 'Mac mini受け取り済み。プロジェクト定義の同期を待っています。'
-            : 'Mac mini受け取り済み。変更記録の同期を待っています。';
+            ? 'Mac miniが受け取り済み。プロジェクト定義の同期を待っています。'
+            : 'Mac miniが受け取り済み。変更記録の同期を待っています。';
       } else if (current == record['before_hash'] &&
           latest(projectId) == changeId) {
         waiting = true;
-        item.detail = 'Mac mini受け取り済み。プロジェクト定義の同期を待っています。';
+        item.detail = 'Mac miniが受け取り済み。プロジェクト定義の同期を待っています。';
       } else {
         item.detail = current == record['after_hash']
             ? '$whatをMac miniが反映しました。'
@@ -3779,7 +3781,7 @@ class HubRepository {
     out.writeln('未検証の要約です。出典を確認してください。');
     _writeNowSections(out, project, '##');
     for (final organized in [false, true]) {
-      out.writeln(organized ? '\n## 関連メモ' : '\n## 読み取り前・失敗');
+      out.writeln(organized ? '\n## 関連メモ' : '\n## 未整理・失敗');
       final units = _units.reversed
           .where(
             (u) =>
@@ -3804,9 +3806,7 @@ class HubRepository {
         }
         if (u.owner != id) out.writeln('  関連候補（AI推定、帰属未確定）');
         if (!organized) {
-          out.writeln(
-            '  ${u.chain.last.status == 'failed' ? '読み取り失敗' : '読み取り前'}',
-          );
+          out.writeln('  ${u.chain.last.status == 'failed' ? '整理失敗' : '未整理'}');
         }
       }
     }
@@ -3937,10 +3937,10 @@ class HubRepository {
           '## [${root.sourceId}](${root.path}) | ${displayTime(root.at)} | ${_oneLine(root.source)} / ${root.origin}${root.origin == 'ai-self-report' ? '（AI自己報告・独立検証なし）' : ''}',
         );
         final state = switch (latest.status) {
-          'organized' => '読み取り済み',
-          'failed' => '読み取り失敗',
-          'action' => '本人が追加した行動（AIは書き換えません）',
-          _ => '読み取り前',
+          'organized' => '整理済み',
+          'failed' => '整理失敗',
+          'action' => '本人が追加した行動（整理しません）',
+          _ => '未整理',
         };
         out.writeln('種類: ${_bundleKindLabels[root.kind]} / 状態: $state');
         if (owned != null) out.writeln('プロジェクト: ${projectLabel(owned)}、本人指定');
@@ -3962,7 +3962,7 @@ class HubRepository {
         }
         if (unit.summary != null) {
           out.writeln(
-            '有効解釈（AIの読み取り・未検証）: ${_oneLine(secretPolicy.redact(unit.summary!))}',
+            '有効解釈（AI整理・未検証）: ${_oneLine(secretPolicy.redact(unit.summary!))}',
           );
         }
         out.writeln(

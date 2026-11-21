@@ -843,20 +843,16 @@ class _HubViewState extends State<HubView> {
               ),
             ),
       );
-      // 受付と整理の状況は1行にまとめ、詳細は「受付状況」で見る。
-      if (repo.intake.isNotEmpty || c.pending.isNotEmpty) {
-        final waiting = repo.intake
-                .where((s) => const ['waiting', 'accepted'].contains(s.state))
-                .length,
-            failing = repo.intake
-                .where(
-                  (s) => const [
-                    'failed',
-                    'rejected',
-                    'conflict',
-                  ].contains(s.state),
-                )
-                .length;
+      // 保存と反映の状況は1行にまとめ、詳細は「保存と反映」で見る。
+      // 受け取られた依頼は記録として残り続けるので、数えるのはまだ受け取られていないものと問題だけ。
+      final waiting = repo.intake.where((s) => s.state == 'waiting').length,
+          failing = repo.intake
+              .where(
+                (s) =>
+                    const ['failed', 'rejected', 'conflict'].contains(s.state),
+              )
+              .length;
+      if (waiting + failing + c.pending.length > 0) {
         children.add(
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -869,7 +865,7 @@ class _HubViewState extends State<HubView> {
                   // 問題があるときだけ件数を並べ、なければ反映待ちの件数だけを示す。
                   failing + c.pending.length > 0
                       ? '保存と反映: 失敗 $failing件 · 保存確認待ち ${c.pending.length}件（開いて確かめる）'
-                      : '保存と反映: 反映待ち $waiting件',
+                      : '保存と反映: Mac miniの受け取り待ち $waiting件',
                   style: const TextStyle(fontSize: 12),
                 ),
               ),
@@ -1878,7 +1874,7 @@ class _HubViewState extends State<HubView> {
             title: Text(pending.name),
             subtitle: Text(
               pending.state == 'accepted'
-                  ? 'Mac mini受け取り済み。人の定義の同期を待っています。'
+                  ? 'Mac miniが受け取り済み。人の定義の同期を待っています。'
                   : '登録を依頼済み（Mac miniでの処理を待っています）',
             ),
           ),
@@ -3292,7 +3288,9 @@ class _HubViewState extends State<HubView> {
         closed = actionable ? repo.closedUnassigned : const <NowItemRef>[];
     return [
       Text(
-        'プロジェクト未定（メモ${repo.unassignedTotal}件）',
+        repo.unassignedTotal == 0
+            ? 'プロジェクト未定'
+            : 'プロジェクト未定（メモ${repo.unassignedTotal}件）',
         key: const Key('next-unassigned'),
         style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
       ),
@@ -3418,7 +3416,8 @@ class _HubViewState extends State<HubView> {
           ),
           if (actionable && memo.task)
             unassignedActions(memo.inputId, memo.text),
-          for (final suggestion in memo.suggestions)
+          // 本文と同じ提案や重なった提案は、同じ行（同じキー）なので操作を1回だけ出す。
+          for (final (index, suggestion) in memo.suggestions.indexed)
             Padding(
               padding: const EdgeInsets.only(top: 4, left: 12),
               child: Column(
@@ -3428,7 +3427,10 @@ class _HubViewState extends State<HubView> {
                     'AI提案: $suggestion',
                     style: const TextStyle(height: 1.5),
                   ),
-                  if (actionable) unassignedActions(memo.inputId, suggestion),
+                  if (actionable &&
+                      !(memo.task && suggestion == memo.text) &&
+                      !memo.suggestions.take(index).contains(suggestion))
+                    unassignedActions(memo.inputId, suggestion),
                 ],
               ),
             ),
@@ -4211,7 +4213,7 @@ class RecordView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             SelectableText(
-              '${record.sourceId}\n${record.path}\n入力元: ${record.source}\n${recordTimeLines(record)}\nMac miniが受け取り: ${timeLabel(record.receivedAt)}\n生成: ${timeLabel(record.generatedAt)}',
+              '${record.sourceId}\n${record.path}\n入力元: ${record.source}\n${recordTimeLines(record)}\nMac miniが受け取った時刻: ${timeLabel(record.receivedAt)}\n生成: ${timeLabel(record.generatedAt)}',
               style: const TextStyle(fontSize: 12, height: 1.9),
             ),
             for (final id in record.references)
@@ -4343,7 +4345,7 @@ String stateLabel(String state) => switch (state) {
 /// 「保存と反映」の段階。保存済み → Mac miniが受け取り済み → 反映済み／失敗。
 String intakeStateLabel(String state) => switch (state) {
   'waiting' => '保存済み · Mac miniの受け取り待ち',
-  'accepted' => 'Mac miniが受け取り済み · 反映待ち',
+  'accepted' => 'Mac miniが受け取り済み',
   'organized' => '反映済み',
   'failed' => '失敗 · AIの読み取りがうまくいきませんでした',
   'rejected' => '失敗 · 受け付けられませんでした',
@@ -5506,7 +5508,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
                           const Padding(
                             padding: EdgeInsets.only(top: 12),
                             child: NoticeBox(
-                              '作業要約として保存すると、現状の現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
+                              '作業要約として保存すると、プロジェクトの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
                             ),
                           ),
                         const SizedBox(height: 16),

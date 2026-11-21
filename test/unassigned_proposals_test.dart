@@ -683,7 +683,7 @@ void main() {
       await t.tap(find.byKey(const Key('nav-home')));
       await t.pumpAndSettle();
       expect(find.byKey(Key('home-proposal-${lead.id}')), findsNothing);
-      expect(find.text('保存と反映: 反映待ち 1件'), findsOneWidget);
+      expect(find.text('保存と反映: Mac miniの受け取り待ち 1件'), findsOneWidget);
       await t.tap(find.byKey(const Key('home-status')));
       await t.pumpAndSettle();
       expect(find.textContaining('同じ対象の案2件をまとめて判断'), findsOneWidget);

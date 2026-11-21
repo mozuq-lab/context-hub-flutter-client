@@ -486,8 +486,8 @@ void main() {
       repo.inputRecord(questionInput)!.id,
       repo.inputRecord(ideaInput)!.id,
     ], maxChars: 20000).text;
-    expect(bundle, contains('有効解釈（AIの読み取り・未検証）: 読み直した要約（question）'));
-    expect(bundle, contains('有効解釈（AIの読み取り・未検証）: 数日ぶりの開発再開を助ける仕組み、面白そう。'));
+    expect(bundle, contains('有効解釈（AI整理・未検証）: 読み直した要約（question）'));
+    expect(bundle, contains('有効解釈（AI整理・未検証）: 数日ぶりの開発再開を助ける仕組み、面白そう。'));
     // 読み直しでアイデアへ変わった入力も、要約は元のままにする。
     final toIdea = HubRepository(
       fixture({...files, ...rereadOf(questionInput, 'idea')}),
