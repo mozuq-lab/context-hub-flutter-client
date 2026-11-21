@@ -91,10 +91,16 @@ class _AskPanelState extends State<AskPanel> {
 
   String statusOf(AskThread thread) {
     final request = thread.request, answer = thread.answer;
-    if (answer != null) return askStatusLabels[answer.status] ?? answer.status;
+    if (answer != null) {
+      return askAnswerStatus(
+        answer,
+        askOff: c.repository?.intakeFeatures.askOff ?? false,
+      );
+    }
     if (request == null) return '';
     if (request.state == 'accepted') {
-      return request.detail.startsWith('答えは保存期間')
+      return request.detail.startsWith('答えは保存期間') ||
+              request.detail == askDisabledWaiting
           ? request.detail
           : '答え待ち（次の整理のときに作ります）';
     }

@@ -281,6 +281,59 @@ void main() {
     );
   });
 
+  testWidgets('本体が365日より長くさかのぼれるときは、その範囲の出来事の日付で保存できる', (tester) async {
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = {...fixture().files};
+    files['90_system/intake-features.json'] = jsonEncode({
+      ...jsonDecode(files['90_system/intake-features.json']!) as Map,
+      'max_backdate_days': 730,
+    });
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    await openForm(tester);
+    await tester.tap(
+      find.byKey(Key('memo-happened-${addScheduleDays(hubToday(), -1)}')),
+    );
+    await tester.enterText(find.byKey(const Key('memo-text')), '去年の打ち合わせ');
+    await tester.pump(const Duration(seconds: 1));
+    await closeForm(tester);
+    // 書きかけの日付を400日前にして開き直す（本体の範囲内なので戻る）。
+    final old = addScheduleDays(hubToday(), -400);
+    final raw = jsonDecode(access.states[DraftStore.fileName]!) as Map;
+    for (final d in (raw['drafts'] as Map).values) {
+      (d as Map)['h'] = old;
+    }
+    access.states[DraftStore.fileName] = jsonEncode(raw);
+    // 書きかけは読込のたびに読み直さないため、アプリを開き直す。
+    final again = HubController(access, sampleLoader: () async => files);
+    addTearDown(again.dispose);
+    await tester.pumpWidget(ContextHubApp(controller: again));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    await openForm(tester);
+    expect(
+      tester
+          .widget<ChoiceChip>(find.byKey(const Key('memo-happened-today')))
+          .selected,
+      isFalse,
+    );
+    await tester.tap(find.byKey(const Key('save-memo')));
+    await tester.pumpAndSettle();
+    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    final meta = parseMarkdown(access.requests.values.single).meta;
+    expect(meta['happened_on'], old);
+  });
+
   testWidgets('対応を書き出していない本体では「いつのこと」を出さない', (tester) async {
     final access = MemoryUIAccess();
     await access.init();

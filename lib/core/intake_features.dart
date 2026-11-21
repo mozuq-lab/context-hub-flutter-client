@@ -54,6 +54,9 @@ class IntakeFeatures {
   /// 「記録に聞く」の問いを送れる（本体が受け付け、設定で有効）。
   bool get ask => operations.contains('ask') && askEnabled;
 
+  /// 「記録に聞く」に対応した本体で、本人が設定で無効にしているか。受け付け済みの問いは有効に戻すまで答え待ちのまま残る。
+  bool get askOff => operations.contains('ask') && !askEnabled;
+
   /// アプリの好みを端末間でそろえられる。
   bool get preferences => operations.contains('client-preferences');
 
