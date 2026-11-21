@@ -944,14 +944,16 @@ class _HubViewState extends State<HubView> {
                   style: const TextStyle(height: 1.7),
                 ),
                 onTap: () {
-                  showDialog(
+                  showDialog<void>(
                     context: context,
-                    builder: (_) => AlertDialog(
+                    // 閉じるときは、ダイアログ自身のcontextで閉じる。画面のcontextで閉じると、
+                    // 本文の領域のNavigatorから一覧の画面を外してしまい、ダイアログは残る。
+                    builder: (dialog) => AlertDialog(
                       title: Text(intakeStateLabel(status.state)),
                       content: SelectableText('${status.id}\n${status.detail}'),
                       actions: [
                         TextButton(
-                          onPressed: () => Navigator.pop(context),
+                          onPressed: () => Navigator.pop(dialog),
                           child: const Text('閉じる'),
                         ),
                       ],
