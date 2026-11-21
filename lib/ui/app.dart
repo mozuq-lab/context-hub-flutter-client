@@ -7,6 +7,7 @@ import 'views.dart';
 import 'guided_view.dart';
 import '../core/models.dart';
 import '../core/home_widget.dart';
+import '../core/capture_progress.dart';
 import '../app_version.dart';
 import 'shortcuts.dart';
 import 'shell_scope.dart';
@@ -46,6 +47,13 @@ class _HubShellState extends State<HubShell> {
   /// 画面全体のショートカットを受けるフォーカス。入力欄が消えて画面の外へ外れたら、ここへ戻す。
   final shellFocus = FocusNode(debugLabel: 'hub-shell');
   HubController get c => widget.controller;
+
+  /// 前面に戻ったこと・前面にある間の時間の経過を受けて、同期で届いた変更を確かめる。
+  late final AppLifecycleListener _lifecycle;
+  Timer? _autoReloadTimer;
+
+  /// 前面に戻ったときは、この時間より前に読み込んでいたら確かめる（すぐ切り替えたときに読み直さない）。
+  static const _resumeAfter = Duration(seconds: 20);
   @override
   void initState() {
     super.initState();
@@ -53,6 +61,55 @@ class _HubShellState extends State<HubShell> {
     c.restore().whenComplete(_launch);
     c.access.listenLaunchActions(_launch);
     FocusManager.instance.addListener(keepFocus);
+    c.addListener(_announce);
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        final checked = c.lastCheckedAt;
+        if (checked == null ||
+            DateTime.now().difference(checked) >= _resumeAfter) {
+          _autoReload();
+        }
+        _startAutoReloadTimer();
+      },
+      onHide: () => _autoReloadTimer?.cancel(),
+    );
+    _startAutoReloadTimer();
+  }
+
+  void _startAutoReloadTimer() {
+    _autoReloadTimer?.cancel();
+    final every = c.autoReloadInterval;
+    if (every == null) return;
+    _autoReloadTimer = Timer.periodic(every, (_) => _autoReload());
+  }
+
+  /// 同期で届いた変更を、表示を止めずに読み込む。入力・確認の途中や読込中は、次の機会に回す。
+  Future<void> _autoReload() async {
+    if (!mounted || !c.autoReload || !idle) return;
+    await c.refreshQuietly();
+  }
+
+  /// この端末から保存したメモが、Miniで受け付けられた・整理された・受け付けられなかったことを知らせる。
+  void _announce() {
+    if (!mounted || !c.hasCaptureNotices) return;
+    // 入力・確認の途中は待ち、閉じた後の次の変化で知らせる。
+    if (c.saving || c.composing) return;
+    final notices = c.takeCaptureNotices();
+    final message = captureNoticeText(notices);
+    if (message.text.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      notice(
+        context,
+        message.text,
+        action: (
+          label: message.page == 'intake' ? '受付状況' : '最近のメモ',
+          onPressed: () {
+            if (idle && c.repository != null) show(message.page);
+          },
+        ),
+      );
+    });
   }
 
   /// 読込が終わるまで待つ。
@@ -128,6 +185,9 @@ class _HubShellState extends State<HubShell> {
 
   @override
   void dispose() {
+    _autoReloadTimer?.cancel();
+    _lifecycle.dispose();
+    c.removeListener(_announce);
     FocusManager.instance.removeListener(keepFocus);
     searchFocus.dispose();
     shellFocus.dispose();
@@ -689,6 +749,25 @@ class _HubShellState extends State<HubShell> {
                       size: 18,
                     ),
                     label: const Text('確認待ちの通知'),
+                  ),
+                if (c.repository != null)
+                  Row(
+                    children: [
+                      Switch(
+                        key: const Key('auto-reload'),
+                        value: c.autoReload,
+                        onChanged: c.loading
+                            ? null
+                            : (v) => run(() => c.setAutoReload(v)),
+                      ),
+                      const SizedBox(width: 4),
+                      const Expanded(
+                        child: Text(
+                          '同期した変更を自動で読み込む',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
                   ),
               ],
             ),
