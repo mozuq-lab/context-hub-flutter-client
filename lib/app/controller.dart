@@ -1258,6 +1258,57 @@ class HubController extends ChangeNotifier {
     }
   }
 
+  /// 採用した方針を「まだ有効」と確かめたことを、表示中の内容のhashに結び付けてInputへ依頼する。
+  /// 古い本体はこの依頼を知らず受け付けられないため、本体が対応を書き出しているときだけ依頼する。
+  Future<CaptureResult> requestPolicyKeep(
+    String candidateId,
+    String expectedHash,
+  ) async {
+    final target = location, epoch = _epoch;
+    if (target == null ||
+        repository == null ||
+        loading ||
+        saving ||
+        error != null ||
+        captureWarning != null) {
+      throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    saving = true;
+    _changed();
+    try {
+      final fresh = await access.readSnapshot(target);
+      if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+      final parsed = HubRepository(fresh);
+      repository = parsed;
+      _changed();
+      if (!parsed.intakeFeatures.policyKeep) {
+        throw StateError('Mac miniの本体がまだ「まだ有効」の記録に対応していません。本体を更新してください。');
+      }
+      final candidate = review?.byId(candidateId);
+      if (candidate == null ||
+          !candidate.keepable ||
+          candidate.dependencies[candidate.targetPath] != expectedHash) {
+        throw StateError('方針の内容が変更されています。表示を確認してから操作してください。');
+      }
+      if (review!.policyKeepRequestIdFor(candidateId) != null ||
+          review!.retirementRequestIdFor(candidateId) != null) {
+        throw StateError('この方針の依頼は保存済みです。受付状況を確認してください。');
+      }
+      // 確かめた内容と、前回確かめた日時を含める。保存結果が不明なまま押し直しても同じ操作として1回だけ保存する。
+      final key =
+          '${target.identity}/policy-keep/${candidate.id}/$expectedHash/${candidate.policyReview?.confirmedAt?.toIso8601String() ?? '-'}';
+      final operation = _reviewOperations.putIfAbsent(
+        key,
+        () => const Uuid().v4(),
+      );
+      return await ReviewService(access, target).keep(operation, candidate);
+    } finally {
+      saving = false;
+      if (!_disposed) await reload();
+      _changed();
+    }
+  }
+
   /// 表示中の定義hashに結び付けて、プロジェクトの状態変更をInputへ依頼する。
   Future<CaptureResult> requestProjectStatus(
     String projectId,

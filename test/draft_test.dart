@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
+import 'package:context_hub_client/core/models.dart';
+import 'package:context_hub_client/core/parser.dart';
 import 'package:context_hub_client/storage/capture_service.dart';
 import 'package:context_hub_client/storage/draft_store.dart';
 import 'package:context_hub_client/storage/vault_access.dart';
@@ -244,6 +246,55 @@ void main() {
           .text,
       isEmpty,
     );
+  });
+
+  testWidgets('「いつのこと」で昨日を選ぶと、書きかけに残し、出来事の日付を付けて保存する', (tester) async {
+    final access = MemoryUIAccess();
+    await openSample(tester, access);
+    await openForm(tester);
+    final yesterday = addScheduleDays(hubToday(), -1);
+    expect(find.byKey(const Key('memo-happened')), findsOneWidget);
+    await tester.tap(find.byKey(Key('memo-happened-$yesterday')));
+    await tester.enterText(find.byKey(const Key('memo-text')), '昨日の打ち合わせ');
+    await tester.pump(const Duration(seconds: 1));
+    await closeForm(tester);
+    await openForm(tester);
+    expect(
+      tester
+          .widget<ChoiceChip>(find.byKey(Key('memo-happened-$yesterday')))
+          .selected,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const Key('save-memo')));
+    await tester.pumpAndSettle();
+    final meta = parseMarkdown(access.requests.values.single).meta;
+    expect(meta['happened_on'], yesterday);
+    await tester.tap(find.text('閉じる'));
+    await tester.pumpAndSettle();
+    // 次に開いたときは「今日」に戻る。
+    await openForm(tester);
+    expect(
+      tester
+          .widget<ChoiceChip>(find.byKey(const Key('memo-happened-today')))
+          .selected,
+      isTrue,
+    );
+  });
+
+  testWidgets('対応を書き出していない本体では「いつのこと」を出さない', (tester) async {
+    final access = MemoryUIAccess();
+    await access.init();
+    final files = {...fixture().files}
+      ..remove('90_system/intake-features.json');
+    access.current = VaultSnapshot(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    await openForm(tester);
+    expect(find.byKey(const Key('memo-happened')), findsNothing);
   });
 
   testWidgets('アプリが一時停止したら待たずに書きかけを残す', (tester) async {

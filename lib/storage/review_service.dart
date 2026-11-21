@@ -22,6 +22,9 @@ class ReviewService {
     );
   }
 
+  Future<CaptureResult> keep(String operationId, ReviewCandidate candidate) =>
+      CaptureService(access, location).savePolicyKeep(operationId, candidate);
+
   Future<CaptureResult> retire(String operationId, ReviewCandidate candidate) =>
       CaptureService(access, location).saveRetirement(operationId, candidate);
 }
