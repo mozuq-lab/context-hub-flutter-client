@@ -489,6 +489,23 @@ const askStatusLabels = {
   'failed': '答えを作れませんでした',
 };
 
+/// 答えを作れなかった（failed）理由のうち、本人が対処できるもの（本体のASK_ERROR_KINDS）。
+const askFailureLabels = {
+  'project-missing': '選んだプロジェクトが見つからなくなりました。選び直して聞き直してください',
+};
+
+/// 答えの状態の表示。答えを作れなかったときは、本人が対処できる理由を添える。
+String askAnswerStatus(AskAnswer answer) {
+  final label = askStatusLabels[answer.status] ?? answer.status,
+      reason = answer.status == 'failed'
+          ? askFailureLabels[answer.error]
+          : null;
+  return reason == null ? label : '$label（$reason）';
+}
+
+/// 本体の設定で「記録に聞く」が無効の間、受け付け済みの問いに示す状態。本体は有効に戻すと答える。
+const askDisabledWaiting = '答え待ち（本体で「記録に聞く」が無効になっています。有効に戻すと答えます）';
+
 /// 答えの文と、その根拠（記録のIDと、記録からそのまま写した引用）。
 class AskSentence {
   const AskSentence(this.text, this.evidence);

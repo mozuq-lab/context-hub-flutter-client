@@ -2851,10 +2851,16 @@ class HubRepository {
           receivedAt != null &&
           snapshot.loadedAt.difference(receivedAt) >
               const Duration(days: askRetentionDays);
+      // 本体の設定で無効にすると、受け付け済みの問いは答え待ちのまま残る（有効に戻すと答える）。
+      final askOff =
+          intakeFeatures.operations.contains('ask') &&
+          !intakeFeatures.askEnabled;
       item.detail = answer != null
-          ? askStatusLabels[answer.status] ?? ''
+          ? askAnswerStatus(answer)
           : expired
           ? '答えは保存期間（$askRetentionDays日）を過ぎたため、本体が片付けました。'
+          : askOff
+          ? askDisabledWaiting
           : 'Mini受領済み。答えは次の整理のときに作ります。';
     }
     asks.add(

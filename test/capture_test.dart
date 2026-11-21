@@ -239,6 +239,30 @@ void main() {
     expect((await restarted.save(draft)).state, 'uncertain');
     expect(access.writes, 1);
   });
+  test('出来事の日付は、本体が示すさかのぼれる日数で確かめる', () async {
+    final old = addScheduleDays(hubToday(), -400);
+    await expectLater(
+      service.save(CaptureDraft(operationId: op, text: '本文', happenedOn: old)),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('365日前まで'),
+        ),
+      ),
+    );
+    expect(access.writes, 0);
+    await service.save(
+      CaptureDraft(
+        operationId: op,
+        text: '本文',
+        happenedOn: old,
+        maxBackdateDays: 730,
+      ),
+    );
+    expect(access.writes, 1);
+  });
+
   test('空・超過・不正project/UUIDを保存しない', () async {
     for (final bad in [
       const CaptureDraft(operationId: op, text: '  '),

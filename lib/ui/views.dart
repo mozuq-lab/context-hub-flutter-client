@@ -5020,6 +5020,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
           gitDraftHash: widget.draft?.hash,
           meta: widget.answer?.meta,
           happenedOn: _canBackdate ? happenedOn : null,
+          maxBackdateDays: _maxBackdateDays,
         ),
       );
       await _settled(r);

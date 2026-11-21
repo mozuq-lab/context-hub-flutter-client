@@ -18,8 +18,12 @@ class CaptureDraft {
     this.gitDraftHash,
     this.meta,
     this.happenedOn,
+    this.maxBackdateDays = defaultMaxBackdateDays,
   });
   final String operationId;
+
+  /// 出来事の日付をさかのぼれる日数。本体が`intake-features.json`で示す値（画面で選べる範囲と同じ）を渡す。
+  final int maxBackdateDays;
 
   /// 本人が選んだ出来事の日付（YYYY-MM-DD）。今日のことならnull。対応した本体にだけ送る。
   final String? happenedOn;
@@ -234,8 +238,11 @@ class CaptureService {
         (draft.meta != null && !_validMeta(draft.meta!, draft.gitDraftId))) {
       throw const FormatException('本文は1〜8000文字、種別とprojectは有効な値を指定してください。');
     }
-    if (draft.happenedOn != null && !validHappenedOn(draft.happenedOn)) {
-      throw const FormatException('出来事の日付は、今日より前の365日以内の日を選んでください。');
+    if (draft.happenedOn != null &&
+        !validHappenedOn(draft.happenedOn, maxDays: draft.maxBackdateDays)) {
+      throw FormatException(
+        '出来事の日付は、昨日から${draft.maxBackdateDays}日前までの日を選んでください。',
+      );
     }
     // 本体の入力形式と同じく、キーの順を固定して記録とfingerprintを決める。
     final meta = draft.meta == null
