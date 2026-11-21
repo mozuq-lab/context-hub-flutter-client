@@ -15,6 +15,7 @@ MapEntry<String, String> check(
   required String checkedAt,
   bool ok = true,
   int maxAgeDays = 7,
+  bool encrypted = false,
 }) {
   final id = 'BKC-01M9${suffix * 22}';
   return MapEntry(
@@ -22,7 +23,9 @@ MapEntry<String, String> check(
     jsonEncode({
       'schema_version': 1,
       'id': id,
-      'archive': 'vault-20261101-033000.tar.gz',
+      'archive': encrypted
+          ? 'vault-20261101-033000.tar.gz.age'
+          : 'vault-20261101-033000.tar.gz',
       'archive_created_at': archivedAt,
       'archive_bytes': 1024,
       'checked_at': checkedAt,
@@ -34,11 +37,29 @@ MapEntry<String, String> check(
       'verify_max_age_days': maxAgeDays,
       'issues': ok ? [] : ['アーカイブを最後まで読めません'],
       'notes': [],
+      if (encrypted) 'encrypted': true,
     }),
   );
 }
 
 void main() {
+  test('暗号化したバックアップを確かめた復元点は、本体のHOMEと同じく「暗号化したバックアップ」と示す', () {
+    final sealed = check(
+      'E',
+      archivedAt: '2026-10-31T18:30:00.000Z',
+      checkedAt: '2026-11-03T19:30:00.000Z',
+      encrypted: true,
+    );
+    final repo = HubRepository(
+      fixture({...fixtureFiles(), sealed.key: sealed.value}),
+    );
+    expect(repo.warnings, isEmpty);
+    expect(
+      repo.backup.line(DateTime.utc(2026, 11, 4)),
+      '最後に確かめた復元点: 2026-11-01 03:30の暗号化したバックアップ（3日前 / 今日復元できることを確認）',
+    );
+  });
+
   test('バックアップの確認結果から、最後に確かめた復元点と注意を本体と同じ決め方で示す', () {
     // 確認結果がなければ何も示さない。
     final none = HubRepository(fixture());

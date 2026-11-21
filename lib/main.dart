@@ -21,7 +21,12 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
     ContextHubApp(
-      controller: HubController(NativeVaultAccess(), sampleLoader: loadSample),
+      controller: HubController(
+        NativeVaultAccess(),
+        sampleLoader: loadSample,
+        // 前面に出している間、同期で届いた変更を1分おきに確かめる（変わっていなければ表示はそのまま）。
+        autoReloadInterval: const Duration(seconds: 60),
+      ),
     ),
   );
 }
