@@ -720,6 +720,7 @@ void main() {
     final fresh = HubRepository(fixture(files('2026-10-29T00:00:00.000Z')));
     expect(fresh.asks.single.request?.detail, contains('次の整理'));
     // 本体の設定で無効にした間は、次の整理で答えるとは示さない（本体は有効に戻すと答える）。
+    // 本体は受け付けたときに答え待ちの記録を書くので、記録が届いた後と、同期される前の両方を確かめる。
     final off = withFeatures(files('2026-10-29T00:00:00.000Z'), ['ask']);
     off[intakeFeaturesPath] = jsonEncode({
       ...jsonDecode(off[intakeFeaturesPath]!) as Map,
@@ -729,6 +730,40 @@ void main() {
       HubRepository(fixture(off)).asks.single.request?.detail,
       askDisabledWaiting,
     );
+    const askId = 'ASK-01M7AAAAAAAAAAAAAAAAAAAA00';
+    final pending = {
+      'schema_version': 1,
+      'id': askId,
+      'status': 'pending',
+      'question': '前の問い',
+      'project': null,
+      'source': 'flutter-client/x',
+      'source_event_id': id,
+      'asked_at': '2026-10-29T00:00:00.000Z',
+      'attempts': 0,
+      'last_attempt_at': null,
+      'answered_at': null,
+      'sentences': <Object>[],
+      'candidates': <Object>[],
+      'dropped': 0,
+      'model': null,
+      'error': null,
+    };
+    off['90_system/answers/$askId.json'] = jsonEncode(pending);
+    final withRecord = HubRepository(fixture(off));
+    expect(withRecord.warnings, isEmpty);
+    expect(withRecord.asks.single.answer?.status, 'pending');
+    expect(withRecord.asks.single.request?.detail, askDisabledWaiting);
+    expect(
+      askAnswerStatus(withRecord.asks.single.answer!, askOff: true),
+      askDisabledWaiting,
+    );
+    // 有効なら、答え待ちの記録はそのまま「答え待ち」と示す。
+    final on = {...off}
+      ..[intakeFeaturesPath] = withFeatures(fixtureFiles(), [
+        'ask',
+      ])[intakeFeaturesPath]!;
+    expect(HubRepository(fixture(on)).asks.single.request?.detail, '答え待ち');
   });
 
   test('答えを作れなかった理由のうち、本人が対処できるものを添える', () {

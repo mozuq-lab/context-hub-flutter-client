@@ -495,7 +495,9 @@ const askFailureLabels = {
 };
 
 /// 答えの状態の表示。答えを作れなかったときは、本人が対処できる理由を添える。
-String askAnswerStatus(AskAnswer answer) {
+/// [askOff]は本体の設定で「記録に聞く」が無効か。無効の間、答え待ちの問いは本体が有効に戻すまで答えない。
+String askAnswerStatus(AskAnswer answer, {bool askOff = false}) {
+  if (answer.status == 'pending' && askOff) return askDisabledWaiting;
   final label = askStatusLabels[answer.status] ?? answer.status,
       reason = answer.status == 'failed'
           ? askFailureLabels[answer.error]

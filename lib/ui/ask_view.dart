@@ -91,7 +91,12 @@ class _AskPanelState extends State<AskPanel> {
 
   String statusOf(AskThread thread) {
     final request = thread.request, answer = thread.answer;
-    if (answer != null) return askAnswerStatus(answer);
+    if (answer != null) {
+      return askAnswerStatus(
+        answer,
+        askOff: c.repository?.intakeFeatures.askOff ?? false,
+      );
+    }
     if (request == null) return '';
     if (request.state == 'accepted') {
       return request.detail.startsWith('答えは保存期間') ||

@@ -238,11 +238,11 @@ class CaptureService {
         (draft.meta != null && !_validMeta(draft.meta!, draft.gitDraftId))) {
       throw const FormatException('本文は1〜8000文字、種別とprojectは有効な値を指定してください。');
     }
+    // 本体の対応表と同じ範囲（1〜3650日）に収める。
+    final maxDays = draft.maxBackdateDays.clamp(1, 3650);
     if (draft.happenedOn != null &&
-        !validHappenedOn(draft.happenedOn, maxDays: draft.maxBackdateDays)) {
-      throw FormatException(
-        '出来事の日付は、昨日から${draft.maxBackdateDays}日前までの日を選んでください。',
-      );
+        !validHappenedOn(draft.happenedOn, maxDays: maxDays)) {
+      throw FormatException('出来事の日付は、昨日から$maxDays日前までの日を選んでください。');
     }
     // 本体の入力形式と同じく、キーの順を固定して記録とfingerprintを決める。
     final meta = draft.meta == null
