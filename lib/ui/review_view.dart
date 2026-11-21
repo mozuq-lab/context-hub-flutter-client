@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../app/controller.dart';
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
+import '../core/repository.dart' show displayTime;
 import 'shell_scope.dart';
 import 'views.dart';
 
@@ -27,6 +28,16 @@ String groupNote(ReviewRepository r, ReviewCandidate i) {
     return ' · 「${r.byId(lead)?.title ?? lead}」とまとめて判断';
   }
   return '';
+}
+
+/// 採用した方針の見直しの状態を、一覧の行に添える。見直す時期の方針と、「まだ有効」の依頼を保存済みの方針だけ。
+String policyNote(ReviewRepository r, ReviewCandidate i) {
+  final review = i.policyReview;
+  if (!i.keepable || review == null) return '';
+  if (r.policyKeepRequestIdFor(i.id) != null) return '\n「まだ有効」を依頼済み・Miniの記録待ち';
+  return review.due
+      ? '\n見直す時期（${review.confirmedAt == null ? '採用' : '前回確かめて'}から${review.days}日）'
+      : '';
 }
 
 /// 採用・却下の依頼の状況を、一覧の行に添える。
@@ -77,7 +88,7 @@ class ReviewView extends StatelessWidget {
                 key: Key('review-${i.id}'),
                 title: Text(i.title),
                 subtitle: Text(
-                  '${i.label} · ${reviewState(i)}${groupNote(r, i)}${requestNote(r, i)}',
+                  '${i.label} · ${reviewState(i)}${groupNote(r, i)}${requestNote(r, i)}${policyNote(r, i)}',
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.push(
@@ -261,6 +272,112 @@ class _ReviewDetailState extends State<ReviewDetail> {
       c.composing = false;
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  /// 採用した方針を「まだ有効」と確かめる。確かめた内容のhashに結び付けて依頼し、内容が変わっていれば本体が断る。
+  Future<void> keep(ReviewCandidate item) async {
+    if (busy || c.composing) return;
+    final hash = item.dependencies[item.targetPath];
+    if (hash is! String) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    c.composing = true;
+    try {
+      if (c.location?.identity != widget.identity) {
+        throw StateError('Vaultが切り替わりました。一覧へ戻ってください。');
+      }
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('この方針はまだ有効ですか？'),
+          content: SizedBox(
+            width: 650,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SelectableText(
+                    item.claim,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '今の内容のまま続けることを記録し、見直しの日数をここから数え直します。方針の本文は変わりません。'
+                    '変えたいときは適用停止するか、置き換える候補を作ってください。',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const Key('confirm-policy-keep'),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('まだ有効と記録'),
+            ),
+          ],
+        ),
+      );
+      if (yes != true) return;
+      final saved = await c.requestPolicyKeep(item.id, hash);
+      if (mounted) {
+        setState(() {
+          savedId = saved.requestId;
+          result = saved.saved
+              ? '「まだ有効」をこの端末に保存しました。同期・Miniの記録待ちです。'
+              : '保存結果が不明です。再送せず、受付状況から同じ操作の保存確認をしてください。';
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = HubController.message(e));
+    } finally {
+      c.composing = false;
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  /// 採用した方針の見直しの状態と、「まだ有効」のボタン。古い本体は依頼を受け付けないので、対応を書き出している本体のときだけボタンを出す。
+  Widget _policyReview(ReviewCandidate item) {
+    final review = item.policyReview!,
+        requested = c.review!.policyKeepRequestIdFor(item.id) != null,
+        supported = c.repository?.intakeFeatures.policyKeep == true;
+    final since = review.confirmedAt == null
+        ? '採用から${review.days}日'
+        : '前回「まだ有効」と確かめてから${review.days}日（${displayTime(review.confirmedAt!)}）';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          NoticeBox(
+            review.due
+                ? '見直す時期です（$since）。今も同じ考えか確かめてください。続けるなら「まだ有効」、やめるなら適用停止します。'
+                : '$since。${review.reviewDays}日を過ぎるとHOMEの「見直す方針」に出ます。',
+            key: const Key('policy-review-state'),
+          ),
+          const SizedBox(height: 8),
+          if (requested)
+            const NoticeBox('「まだ有効」の依頼保存済み・Miniの記録待ちです。')
+          else if (supported)
+            OutlinedButton(
+              key: const Key('policy-keep'),
+              onPressed:
+                  busy ||
+                      c.captureWarning != null ||
+                      c.review!.retirementRequestIdFor(item.id) != null
+                  ? null
+                  : () => keep(item),
+              child: const Text('まだ有効'),
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _targetPicker(ReviewCandidate item) {
@@ -534,6 +651,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         _targetPicker(item),
                         const SizedBox(height: 16),
                       ],
+                      if (item.keepable) _policyReview(item),
                       if (item.retirable)
                         FilledButton(
                           key: const Key('review-retire'),
