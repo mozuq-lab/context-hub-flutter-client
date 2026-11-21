@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'happened.dart' show defaultMaxBackdateDays;
+import 'models.dart' show askQuestionChars;
 
 /// 本体が書く、受け付ける依頼の種類とメモの任意の欄の一覧。
 const intakeFeaturesPath = '90_system/intake-features.json';
@@ -13,6 +14,9 @@ class IntakeFeatures {
     this.captureFields, {
     this.maxBackdateDays = defaultMaxBackdateDays,
     this.calendarTitles = 'item',
+    this.itemScheduleFields = const {},
+    this.askEnabled = false,
+    this.askMaxChars = askQuestionChars,
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -23,8 +27,25 @@ class IntakeFeatures {
   /// 期日のカレンダーの件名の設定（本体の`calendar.titles`）。`project`なら予定に項目の本文を入れない。
   final String calendarTitles;
 
+  /// 期日の依頼（item-schedule）に添えられる欄。`repeat`は定例の繰り返し。
+  final Set<String> itemScheduleFields;
+
+  /// 本人が本体の設定で「記録に聞く」を有効にしているか（`ask.enabled`）と、問いの上限の文字数。
+  final bool askEnabled;
+  final int askMaxChars;
+
   bool get happenedOn => captureFields.contains('happened_on');
   bool get policyKeep => operations.contains('policy-keep');
+
+  /// 期日に繰り返しを付けられ、定例の今の回を完了・見送りにできる。
+  bool get repeat => itemScheduleFields.contains('repeat') && occurrence;
+  bool get occurrence => operations.contains('item-occurrence');
+
+  /// 「記録に聞く」の問いを送れる（本体が受け付け、設定で有効）。
+  bool get ask => operations.contains('ask') && askEnabled;
+
+  /// アプリの好みを端末間でそろえられる。
+  bool get preferences => operations.contains('client-preferences');
 
   static IntakeFeatures parse(String? raw) {
     if (raw == null) return none;
@@ -37,7 +58,18 @@ class IntakeFeatures {
         return none;
       }
       final days = m['max_backdate_days'], titles = m['calendar_titles'];
+      final schedule = m['item_schedule_fields'], ask = m['ask'];
+      final askMax = ask is Map ? ask['max_question_chars'] : null;
       return IntakeFeatures._(
+        itemScheduleFields: {
+          if (schedule is List)
+            for (final v in schedule)
+              if (v is String) v,
+        },
+        askEnabled: ask is Map && ask['enabled'] == true,
+        askMaxChars: askMax is int && askMax > 0 && askMax <= askQuestionChars
+            ? askMax
+            : askQuestionChars,
         maxBackdateDays: days is int && days >= 1 && days <= 3650
             ? days
             : defaultMaxBackdateDays,
