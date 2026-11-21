@@ -231,7 +231,7 @@ void main() {
     expect(find.text('書きかけの思いつき'), findsOneWidget);
     await tester.tap(find.byKey(const Key('save-memo')));
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    expect(find.text('この端末に保存しました'), findsOneWidget);
     expect(access.writes, 1);
     expect(access.states[DraftStore.fileName], isNot(contains('書きかけの思いつき')));
     await tester.tap(find.text('閉じる'));
@@ -329,7 +329,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('save-memo')));
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    expect(find.text('この端末に保存しました'), findsOneWidget);
     final meta = parseMarkdown(access.requests.values.single).meta;
     expect(meta['happened_on'], old);
   });
@@ -400,7 +400,7 @@ void main() {
     expect(find.byKey(const Key('confirm-same')), findsOneWidget);
     await tester.tap(find.byKey(const Key('confirm-same')));
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    expect(find.text('この端末に保存しました'), findsOneWidget);
     expect(access.writes, 1);
     expect(access.states[DraftStore.fileName], isNot(contains('結果不明のメモ')));
   });
@@ -419,7 +419,7 @@ void main() {
     expect(stored['o'], isA<String>());
     access.gate!.complete();
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    expect(find.text('この端末に保存しました'), findsOneWidget);
   });
 
   testWidgets('書きかけを残さない設定でも、保存を始める前に操作IDだけを残す', (tester) async {
@@ -440,7 +440,7 @@ void main() {
     expect(stored['t'], isEmpty);
     access.gate!.complete();
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+    expect(find.text('この端末に保存しました'), findsOneWidget);
     // 保存を確かめたら操作IDも消す。
     expect(
       ((jsonDecode(access.states[DraftStore.fileName]!) as Map)['drafts']
@@ -472,7 +472,7 @@ void main() {
     expect(access.writes, 1);
   });
 
-  testWidgets('受付状況で保存が確かめられた書きかけは戻さない', (tester) async {
+  testWidgets('保存と反映で保存が確かめられた書きかけは戻さない', (tester) async {
     final access = LosingAccess()..lose = true;
     final c = await openSample(tester, access);
     await openForm(tester);

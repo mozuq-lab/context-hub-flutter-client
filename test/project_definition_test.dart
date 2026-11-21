@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/models.dart';
@@ -13,6 +14,28 @@ import 'widget_test.dart' show MemoryUIAccess;
 import 'fixtures.dart';
 
 const definitionOp = '41111111-2222-4333-8444-555555555555';
+
+/// プロジェクト画面の「…」を開く。
+Future<void> openProjectMore(WidgetTester tester) async {
+  await tester.ensureVisible(find.byKey(const Key('project-more')));
+  await tester.tap(find.byKey(const Key('project-more')));
+  await tester.pumpAndSettle();
+}
+
+/// 「…」の中の操作が押せるか。開いて確かめ、閉じる。
+Future<bool> projectMenuEnabled(WidgetTester tester, String key) async {
+  await openProjectMore(tester);
+  final enabled = tester.widget<PopupMenuItem>(find.byKey(Key(key))).enabled;
+  await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+  await tester.pumpAndSettle();
+  return enabled;
+}
+
+/// 画面の先頭へ戻る。
+Future<void> scrollToTop(WidgetTester tester) async {
+  await tester.drag(find.byType(ListView).last, const Offset(0, 3000));
+  await tester.pumpAndSettle();
+}
 
 void main() {
   test('編集内容を整え、本体と同じ上限で止める', () {
@@ -111,7 +134,7 @@ void main() {
       expect(synced.projectDefinitionRequestIdFor('context-hub'), isNull);
       final item = synced.intake.firstWhere((i) => i.id == saved.requestId);
       expect(item.state, 'accepted');
-      expect(item.detail, '呼び名とキーワードの変更をMiniが反映しました。');
+      expect(item.detail, '呼び名とキーワードの変更をMac miniが反映しました。');
       expect(synced.latestDefinitionChangeId('context-hub'), isNotNull);
     } finally {
       await access.directory.delete(recursive: true);
@@ -135,7 +158,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-context-hub')).first);
     await tester.pumpAndSettle();
-    expect(find.textContaining('別名: Hub'), findsOneWidget);
+    expect(find.textContaining('呼び名: Hub'), findsOneWidget);
+    await openProjectMore(tester);
     await tester.tap(find.byKey(const Key('project-definition')));
     await tester.pumpAndSettle();
     final submit = find.byKey(const Key('definition-submit'));
@@ -149,7 +173,7 @@ void main() {
     await tester.tap(submit);
     await tester.pumpAndSettle();
     expect(
-      find.text('呼び名とキーワードの変更を依頼しました。Miniで受け付けられると反映されます。'),
+      find.text('呼び名とキーワードの変更を依頼しました。Mac miniで処理されると反映されます。'),
       findsOneWidget,
     );
     expect(access.writes, 1);
@@ -163,15 +187,13 @@ void main() {
     });
     await c.reload();
     await tester.pumpAndSettle();
+    await scrollToTop(tester);
     expect(
       find.byKey(const Key('project-definition-requested')),
       findsOneWidget,
     );
     for (final key in ['project-definition', 'project-status']) {
-      expect(
-        tester.widget<OutlinedButton>(find.byKey(Key(key))).onPressed,
-        isNull,
-      );
+      expect(await projectMenuEnabled(tester, key), isFalse);
     }
     expect(tester.takeException(), isNull);
   });

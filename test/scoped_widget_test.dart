@@ -52,7 +52,7 @@ void main() {
       );
       expect(approve.onPressed == null, mode == 'unknown');
       expect(
-        find.textContaining('採用先は未定'),
+        find.textContaining('使う場所は未定'),
         mode == 'unknown' ? findsOneWidget : findsNothing,
       );
       if (mode == 'unknown') {
@@ -63,7 +63,7 @@ void main() {
         await t.tap(find.text('取消'));
       } else {
         expect(
-          find.textContaining(mode == 'explicit' ? '元メモで指定' : 'AIの推定'),
+          find.textContaining(mode == 'explicit' ? '元のメモで指定' : 'AIの推定'),
           findsWidgets,
         );
       }

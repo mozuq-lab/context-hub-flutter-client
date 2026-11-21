@@ -188,7 +188,7 @@ void main() {
       }
     });
 
-    test('Miniに届くまでの訂正は反映待ちとして重ねて送らない', () {
+    test('Mac miniに届くまでの訂正は反映待ちとして重ねて送らない', () {
       final files = fixtureFiles();
       files['Input/REQ-${op1.replaceAll('-', '')}.md'] = encodePacket({
         'schema_version': 1,
@@ -336,7 +336,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('save-correction')));
     await tester.pumpAndSettle();
-    expect(find.text('この端末のInputに訂正を保存しました'), findsOneWidget);
+    expect(find.text('この端末に訂正を保存しました'), findsOneWidget);
     expect(access.requests.values.single, contains('"operation":"correct"'));
     expect(
       access.requests.values.single,

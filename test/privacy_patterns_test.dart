@@ -260,7 +260,7 @@ void main() {
     });
   });
 
-  group('選んで深掘り', () {
+  group('質問に答えてまとめる', () {
     final secrets = SecretPolicy.parse(patternsFile());
     GuidedSession session() => GuidedSession(
       id: '11111111-2222-4333-8444-555555555555',

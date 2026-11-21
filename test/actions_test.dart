@@ -27,6 +27,13 @@ Future<HubRepository> withRequest(
   }),
 );
 
+/// 項目の「…」を開く。
+Future<void> openMore(WidgetTester tester, String tag) async {
+  await tester.ensureVisible(find.byKey(Key('item-more-$tag')));
+  await tester.tap(find.byKey(Key('item-more-$tag')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   test('行動の文面は本体と同じ決まり（1行・200文字以内・前後の空白なし）で確かめる', () {
     expect(validActionText('資料を読む'), isTrue);
@@ -117,14 +124,14 @@ void main() {
       expect(p.nextCount, 2);
       expect(
         synced.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        '次の一手にMiniが追加しました。',
+        '次の一手にMac miniが追加しました。',
       );
       // 行動の原文は、整理しない行動として読み、検索の種類で絞れる。
       final record = synced.records.values.firstWhere(
         (r) => r.sourceId == item.inputId,
       );
       expect(record.kind, 'action');
-      expect(stateLabel(record.status), '本人が追加した行動（整理しません）');
+      expect(stateLabel(record.status), '本人が追加した行動（AIは書き換えません）');
       // 行動の文面の訂正は、行動と同じく1行・200文字以内に限る（本体が断るため）。
       final ui = MemoryUIAccess();
       await ui.init();
@@ -191,10 +198,7 @@ void main() {
         'action_from_key': next.key,
       });
       final pending = await withRequest(access, files, saved.requestId);
-      expect(
-        pending.pendingActionFrom(next.inputId, next.text),
-        isTrue,
-      );
+      expect(pending.pendingActionFrom(next.inputId, next.text), isTrue);
       final out = await protocol(
         access,
         saved.requestId,
@@ -232,10 +236,10 @@ void main() {
         after.sections['proposals']!.map((e) => e.text),
         isNot(contains(contains('同期導入は後日検討する。'))),
       );
-      expect(
-        after.nowItems.where((i) => i.action).map((i) => i.text),
-        ['検索を自分で試す', '同期の導入を来月に決める'],
-      );
+      expect(after.nowItems.where((i) => i.action).map((i) => i.text), [
+        '検索を自分で試す',
+        '同期の導入を来月に決める',
+      ]);
     } finally {
       await access.directory.delete(recursive: true);
     }
@@ -293,10 +297,14 @@ void main() {
       c.requestAction(
         projectId,
         '行動',
-        from: ActionSource(inputId: next.inputId, text: next.text, key: 'f' * 64),
+        from: ActionSource(
+          inputId: next.inputId,
+          text: next.text,
+          key: 'f' * 64,
+        ),
       ),
       throwsA(
-        isA<StateError>().having((e) => e.message, 'message', contains('NOW')),
+        isA<StateError>().having((e) => e.message, 'message', contains('現状')),
       ),
     );
     // 今のNOWに載っていない「提案」の行は断る。
@@ -310,7 +318,7 @@ void main() {
         ),
       ),
       throwsA(
-        isA<StateError>().having((e) => e.message, 'message', contains('NOW')),
+        isA<StateError>().having((e) => e.message, 'message', contains('現状')),
       ),
     );
     final first = await c.requestAction(projectId, '検索を自分で試す', from: from);
@@ -384,6 +392,7 @@ void main() {
     // 作業要約の次の一手を行動にする。元の行を初期値にし、本人が直してから保存する。
     final next = c.repository!.projects[projectId]!.nowItems.first;
     final short = digest('${next.inputId}\n${next.text}').substring(0, 12);
+    await openMore(tester, next.key.substring(0, 12));
     await tester.tap(find.byKey(Key('take-action-$short')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('action-from')), findsOneWidget);
@@ -466,6 +475,7 @@ void main() {
     final item = c.repository!.projects[projectId]!.nowItems.firstWhere(
       (i) => i.action,
     );
+    await openMore(tester, item.key.substring(0, 12));
     await tester.tap(find.byKey(Key('exclude-${item.key.substring(0, 12)}')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('exclude-reason-outdated')), findsOneWidget);
@@ -480,7 +490,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('本人が追加した行動（整理しません）'), findsWidgets);
+    expect(find.textContaining('本人が追加した行動（AIは書き換えません）'), findsWidgets);
     await tester.tap(find.byKey(const Key('write-correction')));
     await tester.pumpAndSettle();
     expect(find.text('行動の文面を直す'), findsWidgets);
@@ -509,7 +519,7 @@ void main() {
     final files = fixtureFiles();
     final features =
         jsonDecode(files['90_system/intake-features.json']!)
-            as Map<String, dynamic>
+              as Map<String, dynamic>
           ..remove('capture_kinds');
     files['90_system/intake-features.json'] = jsonEncode(features);
     access.current = VaultSnapshot(files);
@@ -531,7 +541,11 @@ void main() {
     await expectLater(
       c.requestAction(projectId, '発表資料を作る'),
       throwsA(
-        isA<StateError>().having((e) => e.message, 'message', contains('対応していません')),
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('対応していません'),
+        ),
       ),
     );
     expect(access.requests, isEmpty);
@@ -567,7 +581,11 @@ void main() {
     await expectLater(
       c.requestAction(projectId, next.text, from: from),
       throwsA(
-        isA<StateError>().having((e) => e.message, 'message', contains('日付の依頼')),
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('日付の依頼'),
+        ),
       ),
     );
     expect(access.requests, hasLength(1));

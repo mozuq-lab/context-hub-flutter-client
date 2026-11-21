@@ -107,7 +107,7 @@ void main() {
         pending: false,
       ));
       expect(repo.intake.single.state, 'accepted');
-      expect(repo.intake.single.detail, 'Miniが反応を記録しました。');
+      expect(repo.intake.single.detail, 'Mac miniが反応を記録しました。');
 
       // 受け付けた後、一覧がまだ届いていない間は、反映待ちのまま示す。
       final stale = {
@@ -176,7 +176,7 @@ void main() {
       });
     });
 
-    test('知らない項目への反応は、本体が断った理由を受付状況に示す', () async {
+    test('知らない項目への反応は、本体が断った理由を保存と反映に示す', () async {
       final prepared = await runNode(['prepare'], access.directory);
       final runId = HubRepository(
         VaultSnapshot(synced(prepared)),

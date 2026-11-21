@@ -1831,7 +1831,7 @@ void main() {
       expect(access.writes, 1);
     });
 
-    test('まとめる案の欄が不正な依頼は、受付状況で形式の不備として扱う', () async {
+    test('まとめる案の欄が不正な依頼は、保存と反映で形式の不備として扱う', () async {
       final files = inboxFiles(),
           r = HubRepository(VaultSnapshot(files)).review,
           lead = leadOf(r),

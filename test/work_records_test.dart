@@ -218,7 +218,7 @@ void main() {
       expect(synced.itemRequestIdFor(item.key), isNull);
       expect(
         synced.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        '報告をMiniが反映しました。',
+        '報告をMac miniが反映しました。',
       );
       final reopened = await service.saveItemResolution(
         '51111111-2222-4333-8444-555555555555',
@@ -369,7 +369,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('confirm-action')));
     await tester.pumpAndSettle();
-    expect(find.text('報告を保存しました。Miniで受け付けられるとNOWに反映されます。'), findsOneWidget);
+    expect(find.text('報告を保存しました。Mac miniで処理されると現状に反映されます。'), findsOneWidget);
     final request = access.requests.values.single;
     expect(parseMarkdown(request).meta['item_key'], key);
     access.current = VaultSnapshot({

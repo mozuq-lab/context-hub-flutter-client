@@ -62,7 +62,7 @@ class _PersonDialogState extends State<PersonDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'メモに書く呼び方で登録すると、その名前が出てくる記録と、名前が出てくる未完了の次の一手・未解決を、Miniが人ごとに集めます（AIは使いません）。同じ名前の別人や、名前を含む別の語も拾うことがあるため、呼び名は2文字以上にしてください。',
+                'メモに書く呼び方で登録すると、その名前が出てくる記録と、名前が出てくる未完了の次の一手・未解決を、Mac miniが人ごとに集めます（AIは使いません）。同じ名前の別人や、名前を含む別の語も拾うことがあるため、呼び名は2文字以上にしてください。',
                 style: TextStyle(fontSize: 12, height: 1.6),
               ),
               const SizedBox(height: 12),
@@ -93,7 +93,7 @@ class _PersonDialogState extends State<PersonDialog> {
                 NoticeBox(problem, error: true)
               else
                 const Text(
-                  '依頼はInputへ保存され、Miniで受け付けられると、次の整理から一覧が作られます。人の名前はこの端末と同期先のVaultにだけ残り、別のAIへ渡す文脈には含めません。',
+                  '依頼は保存され、Mac miniで処理されると、次のAI読み取りから一覧が作られます。人の名前はこの端末と同期先のVaultにだけ残り、別のAIへ渡す文脈には含めません。',
                   style: TextStyle(fontSize: 12, height: 1.6),
                 ),
             ],

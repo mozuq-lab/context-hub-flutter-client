@@ -78,6 +78,9 @@ void main() {
     expect(find.text('出典・日時'), findsOneWidget);
     await t.pageBack();
     await t.pumpAndSettle();
+    // 採用したときに起きることを、操作の前に示す。
+    expect(find.byKey(const Key('review-meaning')), findsOneWidget);
+    expect(find.text('今は決めない'), findsOneWidget);
     await t.ensureVisible(find.byKey(const Key('review-target')));
     await t.tap(
       find
@@ -88,7 +91,7 @@ void main() {
           .first,
     );
     await t.pumpAndSettle();
-    await t.tap(find.text('全ての作業に共通（明示選択）').last);
+    await t.tap(find.text('すべての作業（共通）').last);
     await t.pumpAndSettle();
     await t.ensureVisible(find.byKey(const Key('review-approve')));
     await t.tap(find.byKey(const Key('review-approve')));
@@ -103,7 +106,7 @@ void main() {
     await t.tap(find.byKey(const Key('confirm-review')));
     await t.pumpAndSettle();
     expect(a.writes, 1);
-    expect(find.textContaining('Miniの判断待ち'), findsWidgets);
+    expect(find.textContaining('Mac miniの判断待ち'), findsWidgets);
     expect(t.takeException(), isNull);
   });
   testWidgets('モバイル幅の一覧と履歴がoverflowしない', (t) async {

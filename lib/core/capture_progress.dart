@@ -31,9 +31,9 @@ class CaptureNotice {
       failed = count(CaptureStage.failed);
   String n(int c) => c == 1 ? '' : '$c件の';
   final parts = [
-    if (organized > 0) '${n(organized)}メモが整理されました',
-    if (accepted > 0) '${n(accepted)}メモをMiniが受け付けました（整理はこれから）',
-    if (failed > 0) '${n(failed)}メモの受付か整理がうまくいきませんでした',
+    if (organized > 0) '${n(organized)}メモをAIが読み取りました',
+    if (accepted > 0) '${n(accepted)}メモをMac miniが受け取りました（AIの読み取りはこれから）',
+    if (failed > 0) '${n(failed)}メモの受け取りかAIの読み取りがうまくいきませんでした',
   ];
   return (
     text: parts.join('。'),

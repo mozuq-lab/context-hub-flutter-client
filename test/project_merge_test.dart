@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/models.dart';
@@ -58,6 +59,22 @@ mergeStates() async {
     }
   }
   return (before: Map.of(_before!), merged: Map.of(_merged!));
+}
+
+/// プロジェクト画面の「…」を開く。
+Future<void> openProjectMore(WidgetTester tester) async {
+  await tester.ensureVisible(find.byKey(const Key('project-more')));
+  await tester.tap(find.byKey(const Key('project-more')));
+  await tester.pumpAndSettle();
+}
+
+/// 「…」の中の操作が押せるか。開いて確かめ、閉じる。
+Future<bool> projectMenuEnabled(WidgetTester tester, String key) async {
+  await openProjectMore(tester);
+  final enabled = tester.widget<PopupMenuItem>(find.byKey(Key(key))).enabled;
+  await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+  await tester.pumpAndSettle();
+  return enabled;
 }
 
 void main() {
@@ -474,6 +491,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 統合先を選び、同じものだと確認するまで依頼できない。
+    await openProjectMore(tester);
     await tester.tap(find.byKey(const Key('project-merge')));
     await tester.pumpAndSettle();
     final submit = find.byKey(const Key('project-merge-submit'));
@@ -488,7 +506,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(submit);
     await tester.pumpAndSettle();
-    expect(find.text('統合を依頼しました。Miniで受け付けられると反映されます。'), findsOneWidget);
+    expect(find.text('統合を依頼しました。Mac miniで処理されると反映されます。'), findsOneWidget);
     final raw = access.requests.values.single;
     final meta = parseMarkdown(raw).meta;
     expect(meta['operation'], 'project-merge');
@@ -503,12 +521,7 @@ void main() {
     await c.reload();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('project-merge-requested')), findsOneWidget);
-    expect(
-      tester
-          .widget<OutlinedButton>(find.byKey(const Key('project-merge')))
-          .onPressed,
-      isNull,
-    );
+    expect(await projectMenuEnabled(tester, 'project-merge'), isFalse);
 
     // 本体が反映すると、統合済みとして統合先を案内する。
     final merged = (await tester.runAsync(() async {
@@ -532,7 +545,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('取り消しを依頼'));
     await tester.pumpAndSettle();
-    expect(find.text('統合の取り消しを依頼しました。Miniで受け付けられると反映されます。'), findsOneWidget);
+    expect(find.text('統合の取り消しを依頼しました。Mac miniで処理されると反映されます。'), findsOneWidget);
     expect(
       parseMarkdown(access.requests.values.last).meta['operation'],
       'project-unmerge',
@@ -541,12 +554,7 @@ void main() {
     await tester.tap(find.byKey(const Key('project-merge-target')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('project-merge-sources')), findsOneWidget);
-    expect(
-      tester
-          .widget<OutlinedButton>(find.byKey(const Key('project-merge')))
-          .onPressed,
-      isNull,
-    );
+    expect(await projectMenuEnabled(tester, 'project-merge'), isFalse);
     await tester.tap(find.byKey(const Key('project-shelf')));
     await tester.pumpAndSettle();
     expect(find.textContaining('https://example.com/spec'), findsWidgets);

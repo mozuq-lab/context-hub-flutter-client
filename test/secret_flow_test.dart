@@ -17,7 +17,7 @@ const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123';
 const header = '-----BEGIN RSA PRIVATE KEY-----';
 
 void main() {
-  group('選んで深掘りでClaude APIへ送る内容', () {
+  group('質問に答えてまとめるでClaude APIへ送る内容', () {
     GuidedSession secretSession() => GuidedSession(
       id: 'GS-01M2DSFVQMH65989604KSVE1PV',
       vault: 'vault-identity',
@@ -187,7 +187,7 @@ void main() {
       expect(access.requests, isEmpty);
       await tapKey(tester, 'save-memo');
       await tapKey(tester, 'secret-redact');
-      expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+      expect(find.text('この端末に保存しました'), findsOneWidget);
       final body = parseMarkdown(access.requests.values.single).body;
       expect(body, '本番のキーは [伏せ字:APIキー] です');
     });
@@ -210,7 +210,7 @@ void main() {
       expect(access.requests, hasLength(1));
     });
 
-    testWidgets('選んで深掘りの保存でも、自分の言葉に紛れた値を知らせて伏せ字にできる', (tester) async {
+    testWidgets('質問に答えてまとめるの保存でも、自分の言葉に紛れた値を知らせて伏せ字にできる', (tester) async {
       await openApp(tester);
       await tapKey(tester, 'open-guided');
       await tester.enterText(find.byKey(const Key('guided-seed')), '今日の作業');

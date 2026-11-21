@@ -290,7 +290,7 @@ void main() {
       );
       await tester.tap(find.byKey(const Key('save-memo')));
       await tester.pumpAndSettle();
-      expect(find.text('この端末のInputに保存しました'), findsOneWidget);
+      expect(find.text('この端末に保存しました'), findsOneWidget);
       final raw = access.requests.values.single;
       expect(raw, contains('## 決まったこと\n- 月末に出す\n'));
       expect(raw, isNot(contains('## 次にやること')));

@@ -562,7 +562,7 @@ class CaptureService {
         !projectIdPattern.hasMatch(project.id) ||
         conflict == null ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(conflict.nowHash)) {
-      throw const FormatException('戻す対象のNOWを確認してください。');
+      throw const FormatException('戻す対象の現状を確認してください。');
     }
     final fields = <String, dynamic>{
       'operation': 'conflict-resolve',

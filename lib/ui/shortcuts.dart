@@ -43,7 +43,7 @@ const shortcutPages = [
   ('ideas', 'アイデア'),
   ('review', '確認待ち'),
   ('search', '検索'),
-  ('intake', '受付状況'),
+  ('intake', '保存と反映'),
 ];
 const _digits = [
   LogicalKeyboardKey.digit1,
@@ -59,7 +59,7 @@ const _digits = [
 /// アプリ全体の操作。
 enum HubCommand {
   newMemo('メモを追加'),
-  guided('選んで深掘り'),
+  guided('質問に答えてまとめる'),
   search('検索'),
   reload('再読込'),
   copyContext('表示中のプロジェクトの文脈をコピー'),

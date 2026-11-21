@@ -34,7 +34,9 @@ String groupNote(ReviewRepository r, ReviewCandidate i) {
 String policyNote(ReviewRepository r, ReviewCandidate i) {
   final review = i.policyReview;
   if (!i.keepable || review == null) return '';
-  if (r.policyKeepRequestIdFor(i.id) != null) return '\n「まだ有効」を依頼済み・Miniの記録待ち';
+  if (r.policyKeepRequestIdFor(i.id) != null) {
+    return '\n「まだ有効」を依頼済み・Mac miniの記録待ち';
+  }
   return review.due
       ? '\n見直す時期（${review.confirmedAt == null ? '採用' : '前回確かめて'}から${review.days}日）'
       : '';
@@ -44,7 +46,7 @@ String policyNote(ReviewRepository r, ReviewCandidate i) {
 String requestNote(ReviewRepository r, ReviewCandidate i) => !i.rejectable
     ? ''
     : r.requestIdFor(i.id) != null
-    ? '\n依頼保存済み・Miniの判断待ち'
+    ? '\n依頼保存済み・Mac miniの判断待ち'
     : r.failedRequestIdFor(i.id) != null
     ? '\n前の依頼は受け付けられませんでした'
     : r.groupMembers(i).any((m) => r.failedRequestIdFor(m.id) != null)
@@ -118,7 +120,7 @@ class ReviewView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              '内容と元のメモを確認し、採用・却下を選べます。保留は閉じるだけです。依頼保存後、Miniが最新状態を再検証します。',
+              'AIが見つけた方針・知識・プロジェクト案です。採用すると、AIが以後の作業で使います。内容と元のメモを見て決めてください。',
             ),
             for (final w in r.warnings)
               Padding(
@@ -198,7 +200,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                 children: [
                   if (ticket.target != null)
                     Text(
-                      '採用先: ${ticket.target!.label}',
+                      '使う場所: ${ticket.target!.label}',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   if (action == 'retire')
@@ -232,7 +234,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                     ReviewContent(controller: c, item: cover, links: false),
                   ],
                   const SizedBox(height: 20),
-                  const Text('これは依頼の保存です。Miniで判断が確定し反映されるまで、正式データは変わりません。'),
+                  const Text('これは依頼の保存です。Mac miniで判断が確定し反映されるまで、正式データは変わりません。'),
                 ],
               ),
             ),
@@ -262,8 +264,8 @@ class _ReviewDetailState extends State<ReviewDetail> {
         setState(() {
           savedId = saved.requestId;
           result = saved.saved
-              ? '依頼をこの端末に保存しました。同期・Miniの判断待ちです。'
-              : '保存結果が不明です。再送せず、受付状況から同じ操作の保存確認をしてください。';
+              ? '依頼をこの端末に保存しました。同期・Mac miniの判断待ちです。'
+              : '保存結果が不明です。再送せず、保存と反映から同じ操作の保存確認をしてください。';
         });
       }
     } catch (e) {
@@ -330,8 +332,8 @@ class _ReviewDetailState extends State<ReviewDetail> {
         setState(() {
           savedId = saved.requestId;
           result = saved.saved
-              ? '「まだ有効」をこの端末に保存しました。同期・Miniの記録待ちです。'
-              : '保存結果が不明です。再送せず、受付状況から同じ操作の保存確認をしてください。';
+              ? '「まだ有効」をこの端末に保存しました。同期・Mac miniの記録待ちです。'
+              : '保存結果が不明です。再送せず、保存と反映から同じ操作の保存確認をしてください。';
         });
       }
     } catch (e) {
@@ -363,7 +365,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
           ),
           const SizedBox(height: 8),
           if (requested)
-            const NoticeBox('「まだ有効」の依頼保存済み・Miniの記録待ちです。')
+            const NoticeBox('「まだ有効」の依頼保存済み・Mac miniの記録待ちです。')
           else if (supported)
             OutlinedButton(
               key: const Key('policy-keep'),
@@ -411,8 +413,8 @@ class _ReviewDetailState extends State<ReviewDetail> {
       children: [
         Text(
           item.kind == 'knowledge'
-              ? '採用先（参考知識として必要時に参照）'
-              : '採用先（有効な方針としてAI作業へ適用）',
+              ? 'どこで使うか（必要なときにAIが参照します）'
+              : 'どこで使うか（AIが作業で守ります）',
         ),
         const SizedBox(height: 8),
         DropdownMenu<String>(
@@ -423,7 +425,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
           initialSelection: selectedTarget == null
               ? null
               : keyFor(selectedTarget!),
-          hintText: '採用先を選択してください。未定なら保留できます。',
+          hintText: '使う場所を選んでください',
           enableFilter: true,
           enableSearch: true,
           enabled: !busy,
@@ -439,16 +441,19 @@ class _ReviewDetailState extends State<ReviewDetail> {
             return DropdownMenuEntry(
               value: e.key,
               label: t.scope == 'global'
-                  ? '全ての作業に共通（明示選択）'
+                  ? 'すべての作業（共通）'
                   : '${p?['title'] ?? t.projectId}${s == null
                         ? ''
                         : s['source'] == 'explicit'
-                        ? ' / 元メモで指定'
-                        : ' / AIの推定・確認が必要'}',
+                        ? ' · 元のメモで指定'
+                        : ' · AIの推定'}',
             );
           }).toList(),
         ),
-        if (selectedTarget == null) const Text('採用先は未定です。却下・保留はそのまま行えます。'),
+        if (selectedTarget == null)
+          const Text(
+            '使う場所は未定です。新しいプロジェクトはここでは作れないので、必要なら先に作ってください。却下は選ばずにできます。',
+          ),
       ],
     );
   }
@@ -580,12 +585,14 @@ class _ReviewDetailState extends State<ReviewDetail> {
                       if (error != null) NoticeBox(error!, error: true),
                       if (notice != null) NoticeBox(notice),
                       if (item.rejectable && requested)
-                        const NoticeBox('依頼保存済み・Miniの判断待ちです。受付状況で結果を確認してください。'),
+                        const NoticeBox(
+                          '依頼保存済み・Mac miniの判断待ちです。保存と反映で結果を確認してください。',
+                        ),
                       if (item.rejectable &&
                           notice == null &&
                           failed.isNotEmpty)
                         const NoticeBox(
-                          '前の依頼は、Miniが受け付けられませんでした。確認した後に、候補・採用先・まとめた案の状況が変わった可能性があります（受付状況に理由が出ることがあります）。内容を確かめて、もう一度判断できます。',
+                          '前の依頼は、Mac miniが受け付けませんでした。確認した後に、候補・採用先・まとめた案の状況が変わった可能性があります（保存と反映に理由が出ることがあります）。内容を確かめて、もう一度判断できます。',
                           key: Key('review-failed'),
                           error: true,
                         ),
@@ -606,7 +613,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           Padding(
                             padding: const EdgeInsets.only(top: 8),
                             child: NoticeBox(
-                              'この案の前の依頼は、Miniが受け付けられませんでした。',
+                              'この案の前の依頼は、Mac miniが受け付けませんでした。',
                               key: Key('review-member-failed-${member.id}'),
                               error: true,
                             ),
@@ -667,7 +674,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         ),
                       if (item.status == 'approved' &&
                           c.review!.retirementRequestIdFor(item.id) != null)
-                        const NoticeBox('適用停止の依頼保存済み・Miniの判断待ちです。'),
+                        const NoticeBox('適用停止の依頼保存済み・Mac miniの判断待ちです。'),
                       // 古くなった候補は採用できない。不要なら却下して要確認から片付ける。
                       if (item.status == 'stale') ...[
                         const NoticeBox(
@@ -687,6 +694,15 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           child: const Text('却下する'),
                         ),
                       ],
+                      if (item.actionable)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            adoptMeaning(item.kind),
+                            key: const Key('review-meaning'),
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
                       if (item.actionable)
                         Wrap(
                           spacing: 12,
@@ -731,7 +747,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                               onPressed: busy
                                   ? null
                                   : () => Navigator.pop(context),
-                              child: const Text('保留して閉じる'),
+                              child: const Text('今は決めない'),
                             ),
                           ],
                         ),
@@ -810,7 +826,7 @@ class ReviewContent extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (item.adoptedTarget != null)
-          Text('採用先: ${item.adoptedTarget!.label}'),
+          Text('使う場所: ${item.adoptedTarget!.label}'),
         if (item.retired) Text('適用停止: ${item.retiredAt ?? "記録あり"}（本文と履歴を保持）'),
         const Text(
           '主張・内容',
@@ -858,3 +874,10 @@ class ReviewContent extends StatelessWidget {
     );
   }
 }
+
+/// 採用したときに起きること（種類ごと）。
+String adoptMeaning(String kind) => switch (kind) {
+  'project' => '採用すると、このプロジェクトを作ります。',
+  'knowledge' => '採用すると、参考の知識として、必要なときにAIが参照します。',
+  _ => '採用すると、方針として、AIが作業で守ります。',
+};

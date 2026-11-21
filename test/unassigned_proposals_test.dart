@@ -607,8 +607,8 @@ void main() {
       expect(find.byKey(const Key('home-status')), findsNothing);
       // 確認待ちは1組を1件と数え、根拠のメモが多いプロジェクト案を先に出す。
       expect(find.text('確認待ち 2件'), findsOneWidget);
-      expect(find.text('「読書ノート」をプロジェクトにしますか？'), findsOneWidget);
-      expect(find.text('AIのプロジェクト案・未承認 · 根拠のメモ3件'), findsOneWidget);
+      expect(find.text('プロジェクト案: 読書ノート'), findsOneWidget);
+      expect(find.text('採用するとプロジェクトを作ります · 元のメモ3件'), findsOneWidget);
       expect(
         top('home-proposal-${lead.id}'),
         lessThan(
@@ -677,16 +677,13 @@ void main() {
       await t.pumpAndSettle();
       expect(find.text('確認待ち（2件）'), findsOneWidget);
       expect(
-        find.textContaining('根拠のメモ3件（同じ対象の案をまとめて表示）\n依頼保存済み・Miniの判断待ち'),
+        find.textContaining('根拠のメモ3件（同じ対象の案をまとめて表示）\n依頼保存済み・Mac miniの判断待ち'),
         findsOneWidget,
       );
       await t.tap(find.byKey(const Key('nav-home')));
       await t.pumpAndSettle();
       expect(find.byKey(Key('home-proposal-${lead.id}')), findsNothing);
-      expect(
-        find.text('受付状況: Mini受領待ち 1件 · 失敗・競合 0件 · 保存確認待ち 0件（詳細は「受付状況」）'),
-        findsOneWidget,
-      );
+      expect(find.text('保存と反映: 反映待ち 1件'), findsOneWidget);
       await t.tap(find.byKey(const Key('home-status')));
       await t.pumpAndSettle();
       expect(find.textContaining('同じ対象の案2件をまとめて判断'), findsOneWidget);

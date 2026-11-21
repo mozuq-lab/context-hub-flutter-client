@@ -39,7 +39,7 @@ class AdoptionTarget {
     if (scope == 'project') 'project_id': projectId,
     if (scope == 'project') 'project_hash': projectHash,
   };
-  String get label => scope == 'global' ? '全ての作業に共通' : 'プロジェクト: $projectId';
+  String get label => scope == 'global' ? 'すべての作業（共通）' : 'プロジェクト: $projectId';
 }
 
 /// 1回の判断でまとめられるプロジェクト案の上限（本体のPROJECT_COVERS_MAXと同じ）。
@@ -183,7 +183,7 @@ class ReviewRepository {
   ReviewRepository(this.snapshot, Iterable<HubRecord> records) {
     final raw = snapshot.files['90_system/review/index.json'];
     if (raw == null) {
-      warnings.add('確認待ち一覧が未同期です。同期後、MiniでHOMEを更新して再読込してください。');
+      warnings.add('確認待ち一覧が未同期です。同期後、Mac miniでHOMEを更新して再読込してください。');
       return;
     }
     try {
@@ -260,7 +260,7 @@ class ReviewRepository {
           final c = ReviewCandidate(data);
           if (!ids.add(c.id)) {
             items.removeWhere((i) => i.id == c.id);
-            warnings.add('一覧に重複した候補があります。Miniで再生成してください。');
+            warnings.add('一覧に重複した候補があります。Mac miniで再生成してください。');
             continue;
           }
           var valid = snapshot.recognized && snapshot.warnings.isEmpty;
@@ -303,14 +303,14 @@ class ReviewRepository {
                   ),
           );
         } catch (_) {
-          warnings.add('形式が不正な候補を操作対象から除外しました。Miniで一覧を再生成してください。');
+          warnings.add('形式が不正な候補を操作対象から除外しました。Mac miniで一覧を再生成してください。');
         }
       }
     } catch (_) {
       warnings.add(
         _newer(raw)
             ? '確認待ち一覧を本体が新しい形式で書いています。アプリを更新してください。'
-            : '確認待ち一覧を読み取れません。同期後、MiniでHOMEを更新してください。',
+            : '確認待ち一覧を読み取れません。同期後、Mac miniでHOMEを更新してください。',
       );
     }
   }

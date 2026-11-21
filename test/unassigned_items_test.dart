@@ -111,7 +111,7 @@ void main() {
       expect(synced.itemRequestIdFor(item.key), isNull);
       expect(
         synced.intake.firstWhere((i) => i.id == saved.requestId).detail,
-        '報告をMiniが反映しました。',
+        '報告をMac miniが反映しました。',
       );
       expect(synced.closedUnassigned.single.key, item.key);
       expect(synced.closedUnassigned.single.excluded, isTrue);
@@ -171,10 +171,7 @@ void main() {
     await t.tap(find.byKey(const Key('home-unassigned')));
     await t.pumpAndSettle();
     final row = c.repository!.unassignedItems.first;
-    expect(
-      find.byKey(Key('today-${row.key.substring(0, 12)}')),
-      findsNothing,
-    );
+    expect(find.byKey(Key('today-${row.key.substring(0, 12)}')), findsNothing);
     expect(find.text('却下'), findsNothing);
   });
 }

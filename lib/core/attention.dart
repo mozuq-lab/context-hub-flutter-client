@@ -35,7 +35,7 @@ class AttentionItem {
 const attentionKindLabels = {
   'candidate': '候補',
   'draft': '作業記録の下書き',
-  'conflict': '止まったNOW',
+  'conflict': '更新が止まった現状',
 };
 
 /// 読込済みの記録から、判断待ちの一覧を作る。

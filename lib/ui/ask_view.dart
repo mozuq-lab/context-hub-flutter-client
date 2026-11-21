@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../app/controller.dart';
 import '../core/models.dart';
-import 'views.dart' show checkSecretsBeforeSave, notice, stateLabel, timeLabel;
+import 'views.dart'
+    show checkSecretsBeforeSave, notice, intakeStateLabel, timeLabel;
 
 /// 「記録に聞く」。問いを受付ファイルで送り、本体が次の整理のときに、Vaultの記録だけを根拠に答える。
 /// 答えの文ごとに、根拠の記録と記録からそのまま写した引用を示し、元の記録を開ける。答えはAI生成・未検証。
@@ -56,8 +57,8 @@ class _AskPanelState extends State<AskPanel> {
       notice(
         context,
         result.saved
-            ? '問いを送りました。Miniの次の整理のときに答えを作り、同期で届きます。'
-            : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+            ? '問いを送りました。Mac miniの次のAI読み取りのときに答えを作り、同期で届きます。'
+            : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
       );
     } catch (e) {
       if (mounted) notice(context, HubController.message(e));
@@ -102,9 +103,9 @@ class _AskPanelState extends State<AskPanel> {
       return request.detail.startsWith('答えは保存期間') ||
               request.detail == askDisabledWaiting
           ? request.detail
-          : '答え待ち（次の整理のときに作ります）';
+          : '答え待ち（次のAI読み取りのときに作ります）';
     }
-    return stateLabel(request.state);
+    return intakeStateLabel(request.state);
   }
 
   Widget thread(AskThread t, int index) {
@@ -231,7 +232,7 @@ class _AskPanelState extends State<AskPanel> {
           const Padding(
             padding: EdgeInsets.only(bottom: 16),
             child: Text(
-              'Mac miniの本体で「記録に聞く」が使えません。本体を更新し、設定のask.enabledを確かめてください。これまでの問いと答えは下に表示します。',
+              '今は「記録に聞く」を使えません。Mac miniの本体が古いか、この機能がオフになっています。Mac miniで本体を更新するか、オンにしてください。これまでの問いと答えは下にあります。',
               key: Key('ask-unavailable'),
             ),
           )
@@ -282,7 +283,7 @@ class _AskPanelState extends State<AskPanel> {
           ),
           const SizedBox(height: 8),
           const Text(
-            '問いは受付ファイルとしてInputへ保存し、Miniが次の整理のときに、メモと作業要約（訂正があれば最新の訂正）だけを根拠に答えます。答えはメモにはなりません。',
+            '問いを保存し、Mac miniが次のAI読み取りのときに、メモと作業要約（訂正があれば最新の訂正）だけを根拠に答えます。答えはメモにはなりません。',
             style: TextStyle(fontSize: 12, height: 1.6),
           ),
           const SizedBox(height: 20),
