@@ -489,7 +489,9 @@ class ReviewRepository {
     return null;
   }
 
-  /// 表示中の内容で「まだ有効」と確かめた依頼のREQ ID。本体が受け付けるとInputから消える。
+  /// 表示中の内容で「まだ有効」と確かめた、本体の記録を待っている依頼のREQ ID。
+  /// 依頼のファイルは受け付けた後もInputに残るので、受領記録のある依頼と断られた依頼は数えない
+  /// （数えると、次に見直す時期が来ても同じ方針を確かめられなくなる）。
   String? policyKeepRequestIdFor(String candidateId) {
     final c = byId(candidateId);
     if (c == null) return null;
@@ -504,7 +506,16 @@ class ReviewRepository {
             m['confirmed'] == true &&
             m['request_id'] is String &&
             requestIdPattern.hasMatch(m['request_id']) &&
-            e.key == 'Input/${m['request_id']}.md') {
+            e.key == 'Input/${m['request_id']}.md' &&
+            !snapshot.files.containsKey(
+              '90_system/intake/${m['request_id']}.json',
+            ) &&
+            !_DecisionRequest._refused(
+              e.key,
+              e.value,
+              m['request_id'],
+              snapshot,
+            )) {
           return m['request_id'];
         }
       } catch (_) {}

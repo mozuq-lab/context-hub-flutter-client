@@ -201,6 +201,9 @@ try{
           after.review.byId(candidate.id)!.policyReview!.confirmedAt,
           isNotNull,
         );
+        // 受け付けた後もInputに依頼が残るが、記録待ちとしては数えず、次の見直しで確かめ直せる。
+        expect(after.snapshot.files['Input/${result.requestId}.md'], isNotNull);
+        expect(after.review.policyKeepRequestIdFor(candidate.id), isNull);
       }
       final policy = PolicyReader(after.snapshot).read('example').text;
       expect(policy.contains(candidate.claim), mode != 'retire');

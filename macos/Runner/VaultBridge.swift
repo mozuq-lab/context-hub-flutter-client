@@ -55,8 +55,8 @@ final class VaultBridge {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         do {
           try ics.data(using: .utf8)!.write(to: url, options: .atomic)
-          result(NSWorkspace.shared.open(url) ? nil : error())
-        } catch { result(error()) }
+          result(NSWorkspace.shared.open(url) ? nil : self.error())
+        } catch { result(self.error()) }
         return
       }
       if call.method == "setDockBadge" {

@@ -85,6 +85,7 @@ CalendarEvent? dueEvent(
   HubProject project,
   NowItemRef item, {
   required String Function(String) hide,
+  bool withText = true,
 }) {
   final due = item.due;
   if (due == null || !validScheduleDate(due) || item.resolved) return null;
@@ -93,11 +94,14 @@ CalendarEvent? dueEvent(
   return CalendarEvent(
     uid: calendarUid(project.id, item.key, 'due'),
     date: due,
-    title: hide('[期日] ${project.title}: ${_clip(body, _titleChars)}'),
+    // 本体の`calendar.titles: project`と同じく、本文を入れない設定では件名をプロジェクト名と欄の名前だけにする。
+    title: hide(
+      '[期日] ${project.title}: ${withText ? _clip(body, _titleChars) : section}',
+    ),
     description: hide(
       [
         'ContextHubの$sectionに本人が付けた期日です。',
-        _clip(body, _descriptionChars),
+        if (withText) _clip(body, _descriptionChars),
         if (item.reviewAfter != null) '見直す日: ${item.reviewAfter}',
         'プロジェクト: ${project.id}',
       ].join('\n'),

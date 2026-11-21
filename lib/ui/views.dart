@@ -330,7 +330,7 @@ class _HubViewState extends State<HubView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${words == null ? '' : '${searchKindLabels[HubRepository.searchKindOf(r)] ?? r.kind} · '}${originLabel(r.origin)} · ${stateLabel(r.status)}\n${timeLabel(r.at ?? r.generatedAt)}',
+              '${words == null ? '' : '${searchKindLabels[HubRepository.searchKindOf(r)] ?? r.kind} · '}${originLabel(r.origin)} · ${stateLabel(r.status)}\n${recordWhen(r)}',
               style: const TextStyle(fontSize: 12, height: 1.7),
             ),
             if (badge != null)
@@ -1084,7 +1084,7 @@ class _HubViewState extends State<HubView> {
               subtitle: record == null || missing.contains(id)
                   ? const Text('同期で消えたか、まだ届いていません。')
                   : Text(
-                      '${searchKindLabels[HubRepository.searchKindOf(record)] ?? record.kind} · ${originLabel(record.origin)} · ${timeLabel(record.at ?? record.generatedAt)}'
+                      '${searchKindLabels[HubRepository.searchKindOf(record)] ?? record.kind} · ${originLabel(record.origin)} · ${recordWhen(record)}'
                       '${(repo.correctionChainOf(id)?.length ?? 1) > 1 ? '\n訂正あり（最新の訂正の本文を渡します）' : ''}',
                       style: const TextStyle(fontSize: 12, height: 1.7),
                     ),
@@ -1870,6 +1870,8 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  bool _calendarOpening = false;
+
   /// 期日を端末のカレンダーへ渡す。カレンダーはクラウドへ同期されることが多いため、伏せ字の規則を確かめられないときは渡さない。
   Future<void> addToCalendar(HubProject project, NowItemRef item) async {
     final secrets = repo.secretPolicy;
@@ -1877,12 +1879,21 @@ class _HubViewState extends State<HubView> {
       notice(context, problem);
       return;
     }
-    final event = dueEvent(project, item, hide: secrets.redact);
-    if (event == null) return;
+    final event = dueEvent(
+      project,
+      item,
+      hide: secrets.redact,
+      withText: repo.intakeFeatures.calendarTitles == 'item',
+    );
+    if (event == null || _calendarOpening) return;
+    // 続けて押しても作成画面を重ねて開かない。
+    _calendarOpening = true;
     try {
       await c.access.addToCalendar(event);
     } catch (_) {
       if (mounted) notice(context, 'カレンダーを開けませんでした。端末にカレンダーのアプリがあるか確かめてください。');
+    } finally {
+      _calendarOpening = false;
     }
   }
 
@@ -1993,7 +2004,8 @@ class _HubViewState extends State<HubView> {
             // 本人が付けた期日だけを、端末のカレンダーの予定作成画面へ渡す。保存するかはカレンダーで本人が決める。
             if (entry.itemKey case final key? when c.access.calendarSupported)
               if (project.nowItems.where((i) => i.key == key).firstOrNull
-                  case final item? when item.due != null && !item.resolved)
+                  case final item?
+                  when validScheduleDate(item.due) && !item.resolved)
                 TextButton.icon(
                   key: Key('calendar-${key.substring(0, 12)}'),
                   onPressed: busy ? null : () => addToCalendar(project, item),
@@ -3403,6 +3415,14 @@ String? changeLabel(ProjectChanges? changes) {
 
 String timeLabel(DateTime? value) => value == null ? '未取得' : displayTime(value);
 
+/// 一覧に出す記録の日時。出来事の日付があれば「YYYY-MM-DDのこと（…に記録）」とし、正午に置いた時刻は出さない。
+String recordWhen(HubRecord record) {
+  final h = happenedOf(record);
+  return h == null
+      ? timeLabel(record.at ?? record.generatedAt)
+      : '${h.date}のこと（${displayTime(h.recordedAt)}に記録）';
+}
+
 /// 記録の詳細の日時。出来事の日付があれば、その日と実際に書いた日時を示す（発生日時はその日の正午に置いた値なので出さない）。
 String recordTimeLines(HubRecord record) {
   final h = happenedOf(record);
@@ -3704,15 +3724,24 @@ class _CaptureDialogState extends State<CaptureDialog> {
       widget.answer == null &&
       (widget.controller.repository?.intakeFeatures.happenedOn ?? false);
 
+  /// 本体の設定でさかのぼれる日数。
+  int get _maxBackdateDays =>
+      widget.controller.repository?.intakeFeatures.maxBackdateDays ??
+      defaultMaxBackdateDays;
+
   Future<void> _pickHappenedOn() async {
-    final today = DateTime.parse(hubToday());
+    // 暦日で数える（端末の夏時間をまたいでも1日ずれないよう、時刻の引き算にしない）。
+    final today = hubToday(),
+        last = DateTime.parse(addScheduleDays(today, -1)),
+        first = DateTime.parse(addScheduleDays(today, -_maxBackdateDays));
+    final current = happenedOn != null ? DateTime.parse(happenedOn!) : last;
     final picked = await showDatePicker(
       context: context,
-      initialDate: happenedOn != null
-          ? DateTime.parse(happenedOn!)
-          : today.subtract(const Duration(days: 1)),
-      firstDate: today.subtract(const Duration(days: maxBackdateDays)),
-      lastDate: today.subtract(const Duration(days: 1)),
+      initialDate: current.isBefore(first) || current.isAfter(last)
+          ? last
+          : current,
+      firstDate: first,
+      lastDate: last,
       helpText: 'いつのことか',
     );
     if (picked == null || !mounted) return;
@@ -3746,7 +3775,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
             for (final (label, value) in [
               ('今日', null),
               ('昨日', yesterday),
-              ('おととい', dayBefore),
+              if (_maxBackdateDays >= 2) ('おととい', dayBefore),
             ])
               ChoiceChip(
                 key: Key('memo-happened-${value ?? 'today'}'),
@@ -3895,7 +3924,9 @@ class _CaptureDialogState extends State<CaptureDialog> {
           ? stored.project
           : null;
       // 日付が古くなって選べなくなった書きかけは、今日のことに戻す。
-      happenedOn = _canBackdate && validHappenedOn(stored.happenedOn)
+      happenedOn =
+          _canBackdate &&
+              validHappenedOn(stored.happenedOn, maxDays: _maxBackdateDays)
           ? stored.happenedOn
           : null;
       _restoredAt = stored.updatedAt;
@@ -4007,6 +4038,15 @@ class _CaptureDialogState extends State<CaptureDialog> {
     }
     if (body.trim().isEmpty || body.length > 8000) {
       setState(() => error = '本文は1〜8000文字で入力してください。');
+      return;
+    }
+    // 日をまたいで開いていたなどで選べない日付になったときは、保存の前に選び直してもらう。
+    if (_canBackdate &&
+        happenedOn != null &&
+        !validHappenedOn(happenedOn, maxDays: _maxBackdateDays)) {
+      setState(
+        () => error = '「いつのこと」の日付は、昨日から$_maxBackdateDays日前までで選び直してください。',
+      );
       return;
     }
     final checked = await checkSecretsBeforeSave(
