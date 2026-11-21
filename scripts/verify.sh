@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 git submodule update --init
-test "$(git -C vendor/context-hub rev-parse HEAD)" = 28bb94ddf59bee24f5b0ee3e776011f7d55700ed
+test "$(git -C vendor/context-hub rev-parse HEAD)" = 9312015ad556640d0ce8ca17d21d9a336eafd306
 npm ci --ignore-scripts
 npm run build:protocol
 flutter_bin="${FLUTTER_BIN:-flutter}"
