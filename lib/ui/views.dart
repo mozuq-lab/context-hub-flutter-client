@@ -18,6 +18,7 @@ import 'guided_view.dart';
 import 'shortcuts.dart';
 import 'notice.dart';
 import 'shell_scope.dart';
+import 'ask_view.dart';
 
 export 'notice.dart';
 
@@ -828,6 +829,15 @@ class _HubViewState extends State<HubView> {
       }
     } else if (page == 'search') {
       children.addAll(searchView());
+    } else if (page == 'ask') {
+      children.add(
+        title(
+          'ASK YOUR RECORDS',
+          '記録に聞く',
+          '「前にこの件はどう決めたか」のような問いに、Vaultのメモと作業要約だけを根拠に答えます。答えの文ごとに根拠の記録と引用が付き、元の記録を開けます。\n読込: ${timeLabel(repo.snapshot.loadedAt)}（同期完了の確認ではありません）',
+        ),
+      );
+      children.add(AskPanel(controller: c, onRecord: open));
     } else if (page == 'basket') {
       children.addAll(basketView());
     } else if (page == 'intake') {
@@ -1634,10 +1644,16 @@ class _HubViewState extends State<HubView> {
   }
 
   Future<void> scheduleItem(HubProject project, NowItemRef item) async {
-    final value = await showDialog<({String? due, String? reviewAfter})>(
-      context: context,
-      builder: (_) => ScheduleDialog(item: item),
-    );
+    // 繰り返しに対応した本体にだけ、繰り返しを選ばせて送る（古い本体は知らない欄を断るため）。
+    final repeatable = repo.capabilities.repeat;
+    final value =
+        await showDialog<
+          ({String? due, String? reviewAfter, RepeatRule? repeat})
+        >(
+          context: context,
+          builder: (_) =>
+              ScheduleDialog(item: item, repeatSupported: repeatable),
+        );
     if (value == null || !mounted) return;
     try {
       final result = await c.requestItemSchedule(
@@ -1645,12 +1661,64 @@ class _HubViewState extends State<HubView> {
         item.key,
         value.due,
         value.reviewAfter,
+        withRepeat: repeatable,
+        repeat: value.repeat,
       );
       if (mounted) {
         notice(
           context,
           result.saved
               ? '日付を依頼しました。Miniで受け付けられるとNOWと一覧に反映されます。'
+              : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 定例の今の回を完了にする・見送る。本体が次の回の期日を付け、項目は欄に残る。
+  Future<void> completeRound(
+    HubProject project,
+    NowItemRef item,
+    String action,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text(occurrenceActionLabels[action]!),
+        content: SizedBox(
+          width: 480,
+          child: Text(
+            '${item.display}\n\n期日 ${item.due}（${item.repeat!.label}）の回を${action == 'done' ? '完了にします' : '見送ります'}。'
+            '項目は欄に残り、Miniで受け付けられると期日が次の回へ進みます。定例をやめるときは「定例を終える」を使ってください。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: const Text('やめる'),
+          ),
+          FilledButton(
+            key: Key('round-$action-confirm'),
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text(occurrenceActionLabels[action]!),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      final result = await c.requestItemOccurrence(
+        project.id,
+        item.key,
+        action,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '${occurrenceActionLabels[action]}を依頼しました。Miniで受け付けられると、次の回の期日がNOWに反映されます。'
               : '保存結果を確認できません。受付状況から同じ操作を確認してください。',
         );
       }
@@ -1926,8 +1994,39 @@ class _HubViewState extends State<HubView> {
                               'resolve',
                             ),
                       icon: const Icon(Icons.check_circle_outline, size: 15),
-                      label: Text(section == 'next' ? '完了にする' : '解決にする'),
+                      label: Text(
+                        project.nowItems
+                                    .where((i) => i.key == key)
+                                    .firstOrNull
+                                    ?.repeating ==
+                                true
+                            ? '定例を終える'
+                            : section == 'next'
+                            ? '完了にする'
+                            : '解決にする',
+                      ),
                     ),
+            // 定例の今の回を片付ける。日付の依頼・完了の報告が反映待ちの間は出さない。
+            if (entry.itemKey case final key?
+                when repo.capabilities.occurrence &&
+                    repo.itemRequestIdFor(key) == null &&
+                    repo.scheduleRequestIdFor(key) == null)
+              if (project.nowItems.where((i) => i.key == key).firstOrNull
+                  case final item? when item.repeating)
+                for (final action in occurrenceActions)
+                  TextButton.icon(
+                    key: Key('round-$action-${key.substring(0, 12)}'),
+                    onPressed: busy
+                        ? null
+                        : () => completeRound(project, item, action),
+                    icon: Icon(
+                      action == 'done'
+                          ? Icons.task_alt
+                          : Icons.skip_next_outlined,
+                      size: 15,
+                    ),
+                    label: Text(occurrenceActionLabels[action]!),
+                  ),
             // 完了・解決の報告が反映待ちの間は、日付を依頼させない（本体が断るため）。
             if (entry.itemKey case final key?
                 when repo.itemRequestIdFor(key) == null)
@@ -4502,8 +4601,15 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
 
 /// NOWの項目に期日と次に見直す日を付ける画面。日付は本人が選び、AIは推測しない。
 class ScheduleDialog extends StatefulWidget {
-  const ScheduleDialog({super.key, required this.item});
+  const ScheduleDialog({
+    super.key,
+    required this.item,
+    this.repeatSupported = false,
+  });
   final NowItemRef item;
+
+  /// 本体が繰り返し（定例）に対応している。対応していなければ選ばせない。
+  final bool repeatSupported;
   @override
   State<ScheduleDialog> createState() => _ScheduleDialogState();
 }
@@ -4511,6 +4617,7 @@ class ScheduleDialog extends StatefulWidget {
 class _ScheduleDialogState extends State<ScheduleDialog> {
   late final due = TextEditingController(text: widget.item.due ?? ''),
       review = TextEditingController(text: widget.item.reviewAfter ?? '');
+  late RepeatRule? repeat = widget.item.repeat;
 
   @override
   void dispose() {
@@ -4581,10 +4688,19 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
   @override
   Widget build(BuildContext context) {
     final nextDue = value(due), nextReview = value(review);
+    // 繰り返しは期日があるときだけ付く。期日を外すと繰り返しも外れる。
+    final nextRepeat = nextDue == null
+        ? null
+        : widget.repeatSupported
+        ? repeat
+        : widget.item.repeat;
     final valid = problem(due) == null && problem(review) == null,
         changed =
-            nextDue != widget.item.due || nextReview != widget.item.reviewAfter,
+            nextDue != widget.item.due ||
+            nextReview != widget.item.reviewAfter ||
+            nextRepeat != widget.item.repeat,
         clearing = nextDue == null && nextReview == null;
+    final choices = {...RepeatRule.choices, ?widget.item.repeat}.toList();
     return AlertDialog(
       title: const Text('期日と次に見直す日'),
       content: SizedBox(
@@ -4600,6 +4716,40 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
               ),
               const SizedBox(height: 16),
               field('due', '期日（任意）', '過ぎた・今日・7日以内になると「次の一手」の先頭に出ます。', due),
+              if (widget.repeatSupported) ...[
+                const SizedBox(height: 14),
+                const Text('繰り返し（定例）', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    ChoiceChip(
+                      key: const Key('schedule-repeat-none'),
+                      label: const Text('なし'),
+                      selected: nextRepeat == null,
+                      onSelected: (_) => setState(() => repeat = null),
+                    ),
+                    for (final r in choices)
+                      ChoiceChip(
+                        key: Key('schedule-repeat-${r.unit}-${r.every}'),
+                        label: Text(r.label),
+                        selected: nextRepeat == r,
+                        // 期日がなければ繰り返しは付けられない。
+                        onSelected: nextDue == null
+                            ? null
+                            : (_) => setState(() => repeat = r),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  nextDue == null
+                      ? '繰り返しは期日を入れると選べます。'
+                      : '繰り返しを付けると、「今回を完了」「今回は見送る」で期日が次の回へ進み、項目は欄に残ります。毎月は期日の日を覚えます（短い月は月末）。',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
               const SizedBox(height: 18),
               field(
                 'review',
@@ -4627,6 +4777,7 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
               ? () => Navigator.pop(context, (
                   due: nextDue,
                   reviewAfter: nextReview,
+                  repeat: widget.repeatSupported ? nextRepeat : null,
                 ))
               : null,
           child: Text(clearing ? '日付を外す' : '依頼する'),

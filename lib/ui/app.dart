@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../app/controller.dart';
 import 'views.dart';
+import 'preference_sync_view.dart';
 import 'guided_view.dart';
 import '../core/models.dart';
 import '../core/home_widget.dart';
@@ -516,6 +517,11 @@ class _HubShellState extends State<HubShell> {
                   ('ideas', 'アイデア', Icons.lightbulb_outline),
                   ('review', '確認待ち', Icons.fact_check_outlined),
                   ('search', '検索', Icons.search),
+                  // 記録に聞くは、本体が対応しているとき（または問いがあるとき）だけメニューに出す。
+                  if (c.repository?.capabilities.ask == true ||
+                      (c.repository?.asks.isNotEmpty ?? false) ||
+                      page == 'ask')
+                    ('ask', '記録に聞く', Icons.question_answer_outlined),
                   // 文脈かごは、記録を入れたとき（または開いている間）だけメニューに出す。
                   if (c.basket.ids.isNotEmpty || page == 'basket')
                     ('basket', '文脈かご', Icons.shopping_basket_outlined),
@@ -690,6 +696,23 @@ class _HubShellState extends State<HubShell> {
                     ),
                     label: const Text('確認待ちの通知'),
                   ),
+                if (c.repository != null &&
+                    (c.preferenceSyncSupported || c.preferenceSyncEnabled))
+                  TextButton.icon(
+                    key: const Key('preference-sync-settings'),
+                    onPressed: c.loading
+                        ? null
+                        : () async {
+                            if (drawer) Navigator.pop(context);
+                            await showPreferenceSync(context, c);
+                          },
+                    icon: const Icon(Icons.devices_outlined, size: 18),
+                    label: Text(
+                      c.preferenceSyncEnabled
+                          ? '好みを端末間でそろえています'
+                          : '好みを端末間でそろえる',
+                    ),
+                  ),
               ],
             ),
           ),
@@ -795,6 +818,7 @@ class _HubShellState extends State<HubShell> {
                 'ideas' => 'アイデア',
                 'review' => '確認待ち',
                 'search' => '検索',
+                'ask' => '記録に聞く',
                 'basket' => '文脈かご',
                 'intake' => '受付状況',
                 _ when openProject != null => 'プロジェクト',
