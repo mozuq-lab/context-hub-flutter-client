@@ -2,6 +2,15 @@
 
 2026-11-01。架空サンプル・一時Vault・専用エミュレーターを使用した確認結果です。実Vault・実モデル・Gateway・同期サービスへの接続や設定反映は含みません。
 
+## Makefileによるビルド（2026-11-21）
+
+- 一時作業コピーで`MACOS_BUILD_METHOD=project make macos`を実行し、arm64のReleaseアプリ・ad-hoc署名の検証・ZIP生成を確認。
+- `make macos-signed`の処理経路は、個人の証明書を使わず、検証用ad-hoc identityと`MACOS_TIMESTAMP=none`で実行。hardened runtime・Release entitlementsの保持、ZIP再展開後の`codesign --verify --deep --strict`を確認。
+- 署名コマンドを代用品にした検査で、署名失敗時の停止、タイムスタンプの自動省略をしないこと、ネストしたframeworkから先に署名すること、空白などを含む証明書指定を1つの引数として渡すことを確認。証明書未指定・不正なタイムスタンプ設定は、ビルド開始前に停止する。
+- 署名失敗時に以前のアプリとZIPを保持し、成功した場合にアプリの古いファイルを引き継がないことを一時成果物で確認。
+- 最新のmainを取り込んだ状態で、静的解析の指摘なし、Flutterテスト452件成功。Swiftのsnapshot検査24項目は、コンパイル用キャッシュを一時領域に指定して確認。
+- 今回は通常のworkspace経路・Androidビルド・実Developer ID証明書による署名・タイムスタンプ取得・公証・実アプリ起動は再検証していません。Makefileと資料に個人の証明書名・Team ID・証明書hash・個人の絶対パスは記載していません。
+
 ## 確認済み
 
 - Flutter 3.41.5 / Dart 3.11.3。静的解析の指摘なし、共通66テスト成功。
