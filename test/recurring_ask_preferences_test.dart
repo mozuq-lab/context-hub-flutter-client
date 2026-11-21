@@ -6,6 +6,7 @@ import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/models.dart';
 import 'package:context_hub_client/core/parser.dart';
 import 'package:context_hub_client/core/preferences.dart';
+import 'package:context_hub_client/core/intake_features.dart';
 import 'package:context_hub_client/core/repository.dart';
 import 'package:context_hub_client/core/templates.dart';
 import 'package:context_hub_client/storage/capture_service.dart';
@@ -35,17 +36,24 @@ Map<String, String> withRepeat(
   return {...files, path: jsonEncode(items)};
 }
 
-/// 本体の対応表を書き換える（古い本体はファイルを書かない）。
+/// 本体の対応表（`intake-features.json`）を書き換える。nullなら対応表のない古い本体。
+/// [features]は、新しい依頼のうち受け付けるもの（item-repeat・item-occurrence・ask・client-preferences）。
 Map<String, String> withFeatures(
   Map<String, String> files,
   List<String>? features,
 ) {
-  const path = '90_system/capabilities.json';
-  final next = {...files}..remove(path);
+  final next = {...files}..remove(intakeFeaturesPath);
   if (features != null) {
-    next[path] = jsonEncode({
+    next[intakeFeaturesPath] = jsonEncode({
       'schema_version': 1,
-      'features': features,
+      'operations': [
+        'capture',
+        'item-schedule',
+        for (final f in features)
+          if (f != 'item-repeat') f,
+      ],
+      'capture_fields': ['happened_on'],
+      'item_schedule_fields': [if (features.contains('item-repeat')) 'repeat'],
       'ask': {'enabled': features.contains('ask'), 'max_question_chars': 500},
     });
   }
@@ -66,13 +74,13 @@ void main() {
     expect(const RepeatRule('month', 3).label, '3か月ごと');
     expect(const RepeatRule('day', 1).label, '毎日');
     // 生成したfixtureの本体は、新しい依頼をすべて受け付ける。
-    expect(repo.capabilities.repeat, isTrue);
-    expect(repo.capabilities.occurrence, isTrue);
-    expect(repo.capabilities.ask, isTrue);
-    expect(repo.capabilities.preferences, isTrue);
+    expect(repo.intakeFeatures.repeat, isTrue);
+    expect(repo.intakeFeatures.occurrence, isTrue);
+    expect(repo.intakeFeatures.ask, isTrue);
+    expect(repo.intakeFeatures.preferences, isTrue);
     // 対応表のない古い本体では、どれも使わない。
     final old = HubRepository(fixture(withFeatures(fixtureFiles(), null)));
-    expect(old.capabilities.repeat || old.capabilities.ask, isFalse);
+    expect(old.intakeFeatures.repeat || old.intakeFeatures.ask, isFalse);
     expect(old.warnings, isEmpty);
     for (final bad in [
       {'unit': 'year', 'every': 1},
@@ -606,7 +614,7 @@ void main() {
     access.current = fixture(withFeatures(files, const []));
     await c.reload();
     await tester.pumpAndSettle();
-    expect(c.repository!.capabilities.ask, isFalse);
+    expect(c.repository!.intakeFeatures.ask, isFalse);
   });
 
   test('好みの新しさは本体の記録の日時で決め、時計のずれた端末でも本人の変更とほかの端末の変更を失わない', () async {

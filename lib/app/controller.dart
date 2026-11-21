@@ -260,7 +260,7 @@ class HubController extends ChangeNotifier {
 
   /// 本体が好みの共有に対応しているか。
   bool get preferenceSyncSupported =>
-      repository?.capabilities.preferences ?? false;
+      repository?.intakeFeatures.preferences ?? false;
 
   String get _deviceName {
     final current = _preferenceSync['device'];
@@ -366,7 +366,7 @@ class HubController extends ChangeNotifier {
         _disposed ||
         _sendingPreferences ||
         !preferenceSyncEnabled ||
-        !repo.capabilities.preferences) {
+        !repo.intakeFeatures.preferences) {
       return;
     }
     final identity = target.identity;
@@ -460,7 +460,7 @@ class HubController extends ChangeNotifier {
   Future<void> enablePreferenceSync({required bool useVault}) async {
     final target = location, repo = repository;
     if (target == null || repo == null) throw StateError('先にVaultを選んでください。');
-    if (!repo.capabilities.preferences) {
+    if (!repo.intakeFeatures.preferences) {
       throw StateError('Mac miniの本体が好みの共有に対応していません。本体を更新してください。');
     }
     await _loadSeen();
@@ -1655,6 +1655,57 @@ class HubController extends ChangeNotifier {
     }
   }
 
+  /// 採用した方針を「まだ有効」と確かめたことを、表示中の内容のhashに結び付けてInputへ依頼する。
+  /// 古い本体はこの依頼を知らず受け付けられないため、本体が対応を書き出しているときだけ依頼する。
+  Future<CaptureResult> requestPolicyKeep(
+    String candidateId,
+    String expectedHash,
+  ) async {
+    final target = location, epoch = _epoch;
+    if (target == null ||
+        repository == null ||
+        loading ||
+        saving ||
+        error != null ||
+        captureWarning != null) {
+      throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    saving = true;
+    _changed();
+    try {
+      final fresh = await access.readSnapshot(target);
+      if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+      final parsed = HubRepository(fresh);
+      repository = parsed;
+      _changed();
+      if (!parsed.intakeFeatures.policyKeep) {
+        throw StateError('Mac miniの本体がまだ「まだ有効」の記録に対応していません。本体を更新してください。');
+      }
+      final candidate = review?.byId(candidateId);
+      if (candidate == null ||
+          !candidate.keepable ||
+          candidate.dependencies[candidate.targetPath] != expectedHash) {
+        throw StateError('方針の内容が変更されています。表示を確認してから操作してください。');
+      }
+      if (review!.policyKeepRequestIdFor(candidateId) != null ||
+          review!.retirementRequestIdFor(candidateId) != null) {
+        throw StateError('この方針の依頼は保存済みです。受付状況を確認してください。');
+      }
+      // 確かめた内容と、前回確かめた日時を含める。保存結果が不明なまま押し直しても同じ操作として1回だけ保存する。
+      final key =
+          '${target.identity}/policy-keep/${candidate.id}/$expectedHash/${candidate.policyReview?.confirmedAt?.toIso8601String() ?? '-'}';
+      final operation = _reviewOperations.putIfAbsent(
+        key,
+        () => const Uuid().v4(),
+      );
+      return await ReviewService(access, target).keep(operation, candidate);
+    } finally {
+      saving = false;
+      if (!_disposed) await reload();
+      _changed();
+    }
+  }
+
   /// 表示中の定義hashに結び付けて、プロジェクトの状態変更をInputへ依頼する。
   Future<CaptureResult> requestProjectStatus(
     String projectId,
@@ -1948,7 +1999,7 @@ class HubController extends ChangeNotifier {
             found.repeat == nextRepeat) {
           throw StateError('日付は変わっていません。');
         }
-        if (withRepeat && !parsed.capabilities.repeat) {
+        if (withRepeat && !parsed.intakeFeatures.repeat) {
           throw StateError('Mac miniの本体が繰り返しに対応していません。本体を更新してください。');
         }
         if (parsed.scheduleRequestIdFor(itemKey) != null) {
@@ -1991,7 +2042,7 @@ class HubController extends ChangeNotifier {
         if (parsed.projects[projectId] case final owner?) {
           _refuseMerged(parsed, owner);
         }
-        if (!parsed.capabilities.occurrence) {
+        if (!parsed.intakeFeatures.occurrence) {
           throw StateError('Mac miniの本体が定例の回の完了に対応していません。本体を更新してください。');
         }
         final found = parsed.projects[projectId]?.nowItems
@@ -2023,7 +2074,7 @@ class HubController extends ChangeNotifier {
     }
     return _confirmedRequest(
       (parsed) {
-        if (!parsed.capabilities.ask) {
+        if (!parsed.intakeFeatures.ask) {
           throw StateError(
             'Mac miniの本体で「記録に聞く」が使えません。本体の更新と設定（ask.enabled）を確かめてください。',
           );

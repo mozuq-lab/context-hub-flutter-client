@@ -578,7 +578,7 @@ class _HubShellState extends State<HubShell> {
                   ('review', '確認待ち', Icons.fact_check_outlined),
                   ('search', '検索', Icons.search),
                   // 記録に聞くは、本体が対応しているとき（または問いがあるとき）だけメニューに出す。
-                  if (c.repository?.capabilities.ask == true ||
+                  if (c.repository?.intakeFeatures.ask == true ||
                       (c.repository?.asks.isNotEmpty ?? false) ||
                       page == 'ask')
                     ('ask', '記録に聞く', Icons.question_answer_outlined),

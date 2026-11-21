@@ -31,7 +31,7 @@ class _AskPanelState extends State<AskPanel> {
   Future<void> send() async {
     final repo = c.repository;
     if (repo == null) return;
-    final max = repo.capabilities.askMaxChars;
+    final max = repo.intakeFeatures.askMaxChars;
     final text = question.text.trim();
     if (text.isEmpty || text.length > max) {
       notice(context, '問いは1〜$max文字で入力してください。');
@@ -211,8 +211,8 @@ class _AskPanelState extends State<AskPanel> {
   Widget build(BuildContext context) {
     final repo = c.repository;
     if (repo == null) return const SizedBox.shrink();
-    final enabled = repo.capabilities.ask;
-    final max = repo.capabilities.askMaxChars;
+    final enabled = repo.intakeFeatures.ask;
+    final max = repo.intakeFeatures.askMaxChars;
     final projects = repo.orderedProjects.where((p) => !p.merged).toList();
     if (project != null && !projects.any((p) => p.id == project)) {
       project = null;

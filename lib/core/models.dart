@@ -424,17 +424,6 @@ class RepeatRule {
 const occurrenceActions = ['done', 'skip'];
 const occurrenceActionLabels = {'done': '今回を完了', 'skip': '今回は見送る'};
 
-/// 本体が受け付ける操作（`90_system/capabilities.json`）。古い本体はファイルを書かないため、空として扱う。
-class CoreCapabilities {
-  const CoreCapabilities({this.features = const {}, this.askMaxChars = 500});
-  final Set<String> features;
-  final int askMaxChars;
-  bool get repeat => features.contains('item-repeat');
-  bool get occurrence => features.contains('item-occurrence');
-  bool get ask => features.contains('ask');
-  bool get preferences => features.contains('client-preferences');
-}
-
 /// 「記録に聞く」の答えの状態（本体のaskStatuses）。
 const askStatusLabels = {
   'pending': '答え待ち',
