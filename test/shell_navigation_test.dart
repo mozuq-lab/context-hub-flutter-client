@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
+import 'package:context_hub_client/core/models.dart';
+import 'package:context_hub_client/storage/capture_service.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'package:context_hub_client/ui/notice.dart';
 import 'package:context_hub_client/ui/theme.dart';
@@ -150,6 +152,66 @@ void main() {
     await press(tester, LogicalKeyboardKey.keyN);
     expect(find.text('思いつきを、そのまま。'), findsNothing);
   });
+
+  for (final size in [const Size(1280, 900), const Size(400, 800)]) {
+    testWidgets('「保存と反映」の項目を開いた画面は、「閉じる」でその画面だけを閉じる（${size.width.toInt()}幅）', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      final access = MemoryUIAccess();
+      await access.init();
+      final files = fixtureFiles();
+      access.current = VaultSnapshot(files, loadedAt: DateTime(2000));
+      final c = HubController(access, sampleLoader: () async => files);
+      addTearDown(() async {
+        c.dispose();
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      await tester.pumpWidget(ContextHubApp(controller: c));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('サンプルで試す'));
+      await tester.pumpAndSettle();
+      // この端末で保存したメモが、同期でVaultに届いた（Mac miniはまだ受け取っていない）。
+      final saved = await tester.runAsync(
+        () => c.save(
+          const CaptureDraft(
+            operationId: '0b9d4c3a-1111-4222-8333-444455556667',
+            text: '帰りに牛乳を買う',
+          ),
+        ),
+      );
+      access.current = VaultSnapshot({
+        ...files,
+        'Input/${saved!.requestId}.md': access.requests[saved.requestId]!,
+      }, loadedAt: DateTime(2000));
+      await tester.runAsync(c.refreshQuietly);
+      await tester.pumpAndSettle();
+      if (size.width < 800) {
+        await tester.tap(find.byTooltip('Open navigation menu'));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const Key('nav-intake')));
+      await tester.pumpAndSettle();
+      expect(topTitle(tester), '保存と反映');
+      final intakeItem = find.ancestor(
+        of: find.textContaining('保存済み'),
+        matching: find.byType(ListTile),
+      );
+      expect(intakeItem, findsOneWidget);
+      await tester.tap(intakeItem);
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.tap(find.text('閉じる'));
+      await tester.pumpAndSettle();
+      // 開いた画面だけが閉じ、「保存と反映」の一覧はそのまま残る。
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(topTitle(tester), '保存と反映');
+      expect(intakeItem, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('続けて出した案内は、前の案内が消えるのを待たずに出る', (tester) async {
     await tester.pumpWidget(
