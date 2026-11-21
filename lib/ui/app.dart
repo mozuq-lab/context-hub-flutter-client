@@ -64,9 +64,9 @@ class _HubShellState extends State<HubShell> {
     c.addListener(_announce);
     _lifecycle = AppLifecycleListener(
       onResume: () {
-        final loaded = c.repository?.snapshot.loadedAt;
-        if (loaded == null ||
-            DateTime.now().difference(loaded) >= _resumeAfter) {
+        final checked = c.lastCheckedAt;
+        if (checked == null ||
+            DateTime.now().difference(checked) >= _resumeAfter) {
           _autoReload();
         }
         _startAutoReloadTimer();

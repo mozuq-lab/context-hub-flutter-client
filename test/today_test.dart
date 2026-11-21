@@ -53,11 +53,27 @@ void main() {
     final next = t.rollOver('2026-11-21', (p) => p.itemKey != key('a'));
     expect(next.date, '2026-11-21');
     expect(next.picks, isEmpty);
-    // 片付いたaは消える。前の日に選んだbは日数を1つ増やし、決めていなかった持ち越しcはそのまま。
+    // 片付いたaは消える。前の日に選んだbを先に置き、決めていなかった持ち越しcも日数を1つ増やす。
     expect(
       [for (final p in next.carry) (p.itemKey, p.carried)],
-      [(key('c'), 2), (key('b'), 2)],
+      [(key('b'), 2), (key('c'), 3)],
     );
+    // 上限を超えるときは、古い持ち越しから手放し、前の日に選んだものを残す。
+    final crowded = TodayFocus(
+      date: '2026-11-20',
+      picks: [pick('a'), pick('b'), pick('c')],
+      carry: [
+        for (final c in ['d', 'e', 'f', '1', '2']) pick(c),
+      ],
+    ).rollOver('2026-11-21', (_) => true);
+    expect(crowded.carry.map((p) => p.projectId), [
+      'p-a',
+      'p-b',
+      'p-c',
+      'p-d',
+      'p-e',
+      'p-f',
+    ]);
     // 読み直しても同じ状態になる（読むたびに日数は増えない）。
     expect(
       jsonEncode(TodayFocus.fromJson(next.toJson()).toJson()),
@@ -140,7 +156,7 @@ void main() {
     expect(access.requests, isEmpty);
   });
 
-  test('NOWから消えた項目は、日付が変わると持ち越さない（読取が不完全なときは持ち越す）', () {
+  test('NOWから見つからない項目も持ち越し、本人に外してもらう（同期の途中で見えないだけのこともある）', () {
     final files = multiProjectFiles();
     final repo = HubRepository(fixture(files));
     final (project, item) = itemsOf(repo).first;
@@ -152,7 +168,7 @@ void main() {
       ],
     );
     final next = chosen.rollOver('2026-11-21', (p) => todayOpen(repo, p));
-    expect(next.carry.map((p) => p.itemKey), [item.key]);
+    expect(next.carry.map((p) => p.itemKey), [item.key, key('f')]);
     expect(todayEntry(repo, chosen.picks[1]).missing, isTrue);
     expect(todayEntry(repo, chosen.picks[1]).text, '消えた項目');
   });

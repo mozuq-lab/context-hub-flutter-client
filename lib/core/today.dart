@@ -5,6 +5,9 @@ import 'repository.dart';
 /// 「今日の3つ」で選べる件数。
 const todayMax = 3;
 
+/// 持ち越しの確認に残す件数。端末の設定の大きさを抑えるため、古いものから手放す。
+const todayCarryMax = todayMax * 2;
+
 /// 続けて持ち越した日数がこれ以上になったら、大きすぎるかもしれないと添える。
 const todayCarryNudge = 3;
 
@@ -16,11 +19,11 @@ class TodayPick {
   const TodayPick(this.projectId, this.itemKey, this.text, {this.carried = 0});
   final String projectId, itemKey, text;
 
-  /// 前の日から続けて持ち越した日数。今日選んだばかりなら0。
+  /// 前の日から持ち越した日数（日付が変わって開くたびに1つ増える）。今日選んだばかりなら0。
   final int carried;
 
   static final _key = RegExp(r'^[a-f0-9]{64}$');
-  static const _maxText = 80;
+  static const _maxText = 40;
 
   TodayPick carry() =>
       TodayPick(projectId, itemKey, text, carried: carried + 1);
@@ -90,8 +93,8 @@ class TodayFocus {
     }
 
     final picks = list(value['picks'], todayMax);
-    // 持ち越しは前の日の3件と、まだ決めていない持ち越しだけなので、多くても数件。壊れた記録で増え続けないよう抑える。
-    final carry = list(value['carry'], todayMax * 3);
+    // 持ち越しは前の日の3件と、まだ決めていない持ち越しだけ。壊れた記録で増え続けないよう抑える。
+    final carry = list(value['carry'], todayCarryMax);
     return TodayFocus(
       date: date is String && scheduleDatePattern.hasMatch(date) ? date : null,
       picks: picks,
@@ -100,7 +103,8 @@ class TodayFocus {
   }
 
   /// [today]になっていたら、前の日に選んだもののうち[open]（まだ片付いていない）を持ち越しの確認へ回す。
-  /// 片付いたもの・見つからないものは消す。同じ日なら何もしない。
+  /// 片付いたものは消す。同じ日なら何もしない。まだ決めていない持ち越しも、続けた日数を1つ増やして残す。
+  /// 上限を超えるときは、古い持ち越しから手放す（前の日に選んだものを残す）。
   TodayFocus rollOver(String today, bool Function(TodayPick) open) {
     if (date == today) return this;
     // 日付を戻した端末などで、前の日付へ戻ったときも同じように扱う（選んだ日と違えば持ち越し）。
@@ -108,9 +112,9 @@ class TodayFocus {
     return TodayFocus(
       date: today,
       carry: [
-        for (final p in [...carry, ...picks.map((p) => p.carry())])
-          if (open(p) && seen.add(p.itemKey)) p,
-      ].take(todayMax * 3).toList(),
+        for (final p in [...picks, ...carry])
+          if (open(p) && seen.add(p.itemKey)) p.carry(),
+      ].take(todayCarryMax).toList(),
     );
   }
 
@@ -180,10 +184,10 @@ TodayEntry todayEntry(HubRepository repo, TodayPick pick) {
 
 /// 持ち越すか（日付が変わったときに、まだ片付いていないか）。
 ///
-/// 読取の上限に達して一部を読めていないときは、見つからなくても持ち越す（片付いたと決めつけない）。
+/// NOWから見つからない項目は、同期の途中や読取の失敗で見えないだけのこともあるため、持ち越して本人に外してもらう。
 bool todayOpen(HubRepository repo, TodayPick pick) {
   final entry = todayEntry(repo, pick);
-  if (entry.missing) return repo.snapshot.limitReached;
+  if (entry.missing) return true;
   // 完了・解決や誤りとして外す報告を送って反映を待っている項目も、片付いたものとして扱う。
   return !entry.done && repo.itemRequestIdFor(pick.itemKey) == null;
 }

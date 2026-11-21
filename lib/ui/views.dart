@@ -1854,10 +1854,13 @@ class _HubViewState extends State<HubView> {
 
   /// 「今日やる」「今日から外す」。選んだ項目はこの端末だけに残し、Vaultには書かない。
   Widget todayToggle(HubProject project, String key) {
-    final on = c.today.picked(key);
+    final focus = c.today, on = focus.picked(key);
     return TextButton.icon(
       key: Key('today-${key.substring(0, 12)}'),
-      onPressed: () => setToday(project.id, key, !on),
+      // 3つ埋まっている間は、外す操作だけを受け付ける。
+      onPressed: !on && focus.full
+          ? null
+          : () => setToday(project.id, key, !on),
       icon: Icon(on ? Icons.wb_sunny : Icons.wb_sunny_outlined, size: 15),
       label: Text(on ? '今日から外す' : '今日やる'),
     );
@@ -1962,7 +1965,10 @@ class _HubViewState extends State<HubView> {
     }
 
     Widget carryRow(TodayEntry e) {
-      final key = e.pick.itemKey;
+      final key = e.pick.itemKey,
+              // 日付が変わった後に片付いた・報告した項目は、続けたり日付を付けたりできない。
+              closed =
+              e.missing || e.done || repo.itemRequestIdFor(key) != null;
       return Padding(
         key: Key('today-carry-${key.substring(0, 12)}'),
         padding: const EdgeInsets.only(bottom: 10),
@@ -1971,6 +1977,13 @@ class _HubViewState extends State<HubView> {
           children: [
             projectLink(e),
             Text(e.text),
+            if (e.missing)
+              Text(
+                'NOWから見つかりません。言い換えられたか、片付いた可能性があります。',
+                style: TextStyle(fontSize: 12, color: scheme.error),
+              )
+            else if (closed)
+              const Text('片付いたか、報告済みです。', style: TextStyle(fontSize: 12)),
             Text(
               e.pick.carried >= todayCarryNudge
                   ? '${e.pick.carried}日続けて持ち越しています。小さく分けると進めやすいかもしれません。'
@@ -1984,7 +1997,7 @@ class _HubViewState extends State<HubView> {
             Wrap(
               spacing: 8,
               children: [
-                if (!e.missing)
+                if (!closed)
                   TextButton.icon(
                     key: Key('today-keep-${key.substring(0, 12)}'),
                     onPressed: focus.full
@@ -1993,7 +2006,7 @@ class _HubViewState extends State<HubView> {
                     icon: const Icon(Icons.wb_sunny_outlined, size: 15),
                     label: const Text('今日も続ける'),
                   ),
-                if (!e.missing && repo.scheduleRequestIdFor(key) == null)
+                if (!closed && repo.scheduleRequestIdFor(key) == null)
                   TextButton.icon(
                     key: Key('today-schedule-${key.substring(0, 12)}'),
                     onPressed: busy ? null : () => scheduleCarried(e),

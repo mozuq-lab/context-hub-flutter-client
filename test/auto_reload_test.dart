@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,6 +23,24 @@ class CountingAccess extends MemoryUIAccess {
 }
 
 const newInput = 'IN-01M9ZZZZZZZZZZZZZZZZZZZZZZ';
+const nowPathOf = '10_projects/context-hub/NOW.md';
+
+/// 表示の更新（refreshSnapshot）の読取を、テストが渡すまで止めておく端末。
+class HeldRefreshAccess extends MemoryUIAccess {
+  Completer<VaultSnapshot>? hold;
+  @override
+  Future<VaultSnapshot> refreshSnapshot(
+    VaultLocation location,
+    VaultSnapshot previous,
+  ) {
+    final held = hold;
+    if (held != null) {
+      hold = null;
+      return held.future;
+    }
+    return super.refreshSnapshot(location, previous);
+  }
+}
 
 /// Miniがこの端末の依頼を受け付けた（[organized]なら整理まで終えた）ときのVault。
 Map<String, String> processed(
@@ -87,6 +106,44 @@ void main() {
     expect(c.repository!.inputRecord(newInput) != null, isTrue);
     expect(sawLoading, isFalse);
     expect(c.error, isNull);
+  });
+
+  test('自動の読込は重ねて始めず、読んでいる間に確認の読み直しで新しくなった表示を古い内容で戻さない', () async {
+    final access = HeldRefreshAccess();
+    final files = fixtureFiles();
+    access.current = fixture(files);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    final older = fixture({...files, 'notes/older.md': '古い'});
+    final hold = access.hold = Completer<VaultSnapshot>();
+    final first = c.refreshQuietly();
+    // 実行中は次を始めない。
+    expect(await c.refreshQuietly(), isFalse);
+    // 読んでいる間に、確認のための読み直しなどで新しい記録が入った。
+    final newer = fixture({...files, 'notes/newer.md': '新しい'});
+    access.current = newer;
+    await c.reload();
+    expect(identical(c.repository!.snapshot, newer), isTrue);
+    hold.complete(older);
+    expect(await first, isFalse);
+    expect(identical(c.repository!.snapshot, newer), isTrue);
+  });
+
+  test('更新時刻の付かない（書き込まれた直後の）ファイルは、本文で変化を確かめる', () async {
+    final access = MemoryUIAccess();
+    final files = fixtureFiles();
+    final stamps = {for (final p in files.keys) p: '1:1'}..remove(nowPathOf);
+    access.current = VaultSnapshot(files, stamps: stamps);
+    final c = HubController(access, sampleLoader: () async => files);
+    addTearDown(c.dispose);
+    await c.useSample();
+    expect(await c.refreshQuietly(), isFalse);
+    access.current = VaultSnapshot({
+      ...files,
+      nowPathOf: '${files[nowPathOf]!}\n- 追記\n',
+    }, stamps: stamps);
+    expect(await c.refreshQuietly(), isTrue);
   });
 
   test('入力・保存の途中や、読込に失敗している間は自動で読み込まない', () async {
@@ -202,7 +259,8 @@ void main() {
       processed(files, saved.requestId, raw, organized: true),
       loadedAt: DateTime(2000),
     );
-    // いったん背後に回り、前面に戻る。
+    // しばらく前に確かめたきりで、いったん背後に回り、前面に戻る。
+    c.lastCheckedAt = DateTime(2000);
     for (final state in [
       AppLifecycleState.inactive,
       AppLifecycleState.hidden,
