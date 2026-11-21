@@ -10,6 +10,7 @@ import '../storage/basket_store.dart';
 import '../core/repository.dart';
 import '../core/attention.dart';
 import '../core/home_widget.dart';
+import '../core/today.dart';
 import '../core/review_candidates.dart';
 import '../storage/review_service.dart';
 import '../core/models.dart';
@@ -201,6 +202,82 @@ class HubController extends ChangeNotifier {
     await _savePins(ids);
   }
 
+  // ---- 今日の3つ（端末ごと・Vaultごと。Vaultには書かない） ----
+  // settings.jsonの`today`に、Vaultのidentityごとの今日選んだ項目と、持ち越しの確認を保存する。
+  static const _maxTodayVaults = 12;
+  Map<String, dynamic> _today = {};
+
+  /// 今日の3つ。日付が変わっていれば、片付いていない項目を持ち越しの確認へ回した状態を返す
+  /// （保存は次に設定を書くとき。読むたびに持ち越しの日数は増えない）。
+  TodayFocus get today {
+    final stored = TodayFocus.fromJson(_today[location?.identity ?? '']);
+    final repo = repository;
+    if (repo == null) return stored;
+    return stored.rollOver(hubToday(), (p) => todayOpen(repo, p));
+  }
+
+  /// 日付が変わった後の状態を記録へ反映する。記録が変わったらtrue（設定の保存が要る）。
+  bool _syncToday() {
+    final target = location;
+    if (target == null || repository == null) return false;
+    final stored = _today[target.identity];
+    if (stored == null) return false;
+    final next = today;
+    if (jsonEncode(next.toJson()) == jsonEncode(stored)) return false;
+    _putToday(target.identity, next);
+    return true;
+  }
+
+  void _putToday(String identity, TodayFocus value) {
+    // いま使っているVaultを最後に置き、古いVaultの分から手放す。
+    _today.remove(identity);
+    if (!value.isEmpty) _today[identity] = value.toJson();
+    while (_today.length > _maxTodayVaults) {
+      _today.remove(_today.keys.first);
+    }
+  }
+
+  Future<void> _saveToday(
+    TodayFocus Function(TodayFocus current) change,
+  ) async {
+    final target = location;
+    if (target == null || repository == null) {
+      throw StateError('先にVaultを選んでください。');
+    }
+    await _loadSeen();
+    final before = Map<String, dynamic>.from(_today);
+    _putToday(target.identity, change(today));
+    try {
+      await _writeSettings();
+    } catch (_) {
+      // 保存できなかった選択を、保存できたように見せない。
+      _today = before;
+      _changed();
+      throw StateError('今日の3つを保存できませんでした。もう一度お試しください。');
+    }
+    _changed();
+  }
+
+  /// 次の一手・未解決の項目を、今日の3つに加える（[on]がfalseなら外す）。
+  /// 持ち越しの確認にある項目を加えると、「今日も続ける」として持ち越しから移す。
+  Future<void> setToday(String projectId, String itemKey, bool on) async {
+    if (!on) return _saveToday((t) => t.remove(itemKey));
+    final repo = repository;
+    final project = repo?.projects[projectId];
+    final item = project?.nowItems.where((i) => i.key == itemKey).firstOrNull;
+    if (project == null || item == null || item.resolved) {
+      throw StateError('この項目は片付いたか、NOWから見つかりません。再読込して確かめてください。');
+    }
+    await _saveToday((t) => t.add(TodayPick.of(project, item)));
+  }
+
+  /// 持ち越しの確認から外す（今日はやらない）。
+  Future<void> dropCarried(String itemKey) =>
+      _saveToday((t) => t.remove(itemKey));
+
+  /// 持ち越しの確認をすべて外す。
+  Future<void> clearCarried() => _saveToday((t) => t.clearCarry());
+
   // ---- Androidのホーム画面ウィジェット（端末の表示だけ。Vaultには書かない） ----
   /// 表示設定はVaultごとに持つ。サンプルや別のVaultで選んだ設定を、ほかのVaultへ持ち込まない。
   Map<String, dynamic> _homeWidgets = {};
@@ -220,7 +297,7 @@ class HubController extends ChangeNotifier {
     if (repo != null) {
       try {
         content = encodeHomeWidget(
-          homeWidgetContent(repo, settings: homeWidget),
+          homeWidgetContent(repo, settings: homeWidget, focus: today.picks),
         );
       } catch (_) {
         content = null;
@@ -474,6 +551,7 @@ class HubController extends ChangeNotifier {
       await _loadSeen();
       _initializeSeen();
       _syncAttention();
+      _syncToday();
       await _writeSettings();
       await _pending(target, epoch);
     } catch (e) {
@@ -513,8 +591,10 @@ class HubController extends ChangeNotifier {
       // Vaultを開くのに失敗した後の再読込でも、残した設定（既読・ピン留め・ウィジェット・判断待ち）を読んでから書く（空の設定で上書きしない）。
       await _loadSeen();
       if (!current()) return;
-      final seen = _initializeSeen(), attended = _syncAttention();
-      if (seen || attended) {
+      final seen = _initializeSeen(),
+          attended = _syncAttention(),
+          rolled = _syncToday();
+      if (seen || attended || rolled) {
         try {
           await _writeSettings();
         } catch (_) {
@@ -1519,6 +1599,9 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['pins'] is Map) {
         _pins = Map<String, dynamic>.from(value['pins'] as Map);
       }
+      if (value is Map && value['today'] is Map) {
+        _today = Map<String, dynamic>.from(value['today'] as Map);
+      }
       if (value is Map) {
         final settings = AttentionSettings.fromJson(value['attention']);
         _attention = settings.state;
@@ -1552,6 +1635,7 @@ class HubController extends ChangeNotifier {
     ...target.toJson(),
     if (_homeWidgets.isNotEmpty) 'homeWidget': _homeWidgets,
     if (_pins.isNotEmpty) 'pins': _pins,
+    if (_today.isNotEmpty) 'today': _today,
     if (_attention.identity != null || attentionNotify)
       'attention': AttentionSettings(_attention, attentionNotify).toJson(),
   };
