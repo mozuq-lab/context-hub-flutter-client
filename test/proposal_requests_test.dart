@@ -1577,6 +1577,86 @@ void main() {
     });
   });
 
+  group('方針の「まだ有効」', () {
+    Future<HubController> open(
+      WidgetTester t,
+      MemoryUIAccess a,
+      Map<String, String> files,
+    ) async {
+      t.view.physicalSize = const Size(1280, 4000);
+      t.view.devicePixelRatio = 1;
+      a.current = VaultSnapshot(files);
+      final c = HubController(a, sampleLoader: () async => files);
+      addTearDown(() {
+        c.dispose();
+        t.view.resetPhysicalSize();
+        t.view.resetDevicePixelRatio();
+      });
+      await c.useSample();
+      final item = c.review!.history.firstWhere((i) => i.keepable);
+      await t.pumpWidget(
+        MaterialApp(
+          home: ReviewDetail(
+            controller: c,
+            id: item.id,
+            identity: c.location!.identity,
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+      return c;
+    }
+
+    testWidgets('見直しの状態を示し、「まだ有効」を依頼すると重ねて押せない', (t) async {
+      final files = scopedFiles(), a = MemoryUIAccess();
+      final c = await open(t, a, files);
+      expect(find.byKey(const Key('policy-review-state')), findsOneWidget);
+      // 参考知識には見直しを出さない。
+      expect(
+        c.review!.history
+            .where((i) => i.kind == 'knowledge')
+            .every((i) => !i.keepable),
+        isTrue,
+      );
+      await t.tap(find.byKey(const Key('policy-keep')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('confirm-policy-keep')));
+      await t.pumpAndSettle();
+      expect(a.writes, 1);
+      final saved = a.requests.entries.single,
+          meta = parseMarkdown(saved.value).meta;
+      expect(meta['operation'], 'policy-keep');
+      expect(meta['knowledge_hash'], matches(RegExp(r'^[a-f0-9]{64}$')));
+      expect(find.textContaining('「まだ有効」をこの端末に保存しました'), findsOneWidget);
+      a.current = VaultSnapshot({
+        ...files,
+        'Input/${saved.key}.md': saved.value,
+      });
+      await c.reload();
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('policy-keep')), findsNothing);
+      expect(find.textContaining('「まだ有効」の依頼保存済み'), findsOneWidget);
+      expect(c.repository!.intake.single.title, contains('まだ有効'));
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('対応を書き出していない本体では「まだ有効」を出さない', (t) async {
+      final files = scopedFiles()..remove('90_system/intake-features.json');
+      final c = await open(t, MemoryUIAccess(), files);
+      expect(find.byKey(const Key('policy-review-state')), findsOneWidget);
+      expect(find.byKey(const Key('policy-keep')), findsNothing);
+      final item = c.review!.history.firstWhere((i) => i.keepable);
+      await expectLater(
+        c.requestPolicyKeep(
+          item.id,
+          item.dependencies[item.targetPath] as String,
+        ),
+        throwsStateError,
+      );
+      expect(t.takeException(), isNull);
+    });
+  });
+
   group('判断待ちの既読', () {
     test('代表の案を見た後で、まとめた案が1件ずつ見えても新着にしない', () {
       final files = inboxFiles(),

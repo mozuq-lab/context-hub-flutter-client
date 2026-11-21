@@ -143,7 +143,7 @@ try{
       'knowledge-retire',
     );
   });
-  for (final mode in ['project', 'global', 'retire']) {
+  for (final mode in ['project', 'global', 'retire', 'keep']) {
     test('Dartの$mode要求を本体で受理し方針と停止履歴を再同期する', () async {
       final a = TempAccess();
       await a.init();
@@ -153,6 +153,10 @@ try{
       final candidate = mode == 'retire'
           ? before.review.history.firstWhere(
               (i) => i.retirable && i.kind == 'decision',
+            )
+          : mode == 'keep'
+          ? before.review.history.firstWhere(
+              (i) => i.keepable && i.kind == 'decision',
             )
           : before.review.pending.single;
       final target = mode == 'global'
@@ -164,6 +168,8 @@ try{
             );
       final result = mode == 'retire'
               ? await service.retire(op, candidate)
+              : mode == 'keep'
+              ? await service.keep(op, candidate)
               : await service.submit(op, candidate, 'approve', target: target),
           out = '${a.directory.path}/after.json';
       final node = await Process.run('node', [
@@ -181,8 +187,21 @@ try{
       expect(after.intake.single.state, 'accepted');
       expect(
         after.intake.single.detail,
-        contains(mode == 'retire' ? '適用停止' : '承認済み'),
+        contains(
+          mode == 'retire'
+              ? '適用停止'
+              : mode == 'keep'
+              ? 'まだ有効'
+              : '承認済み',
+        ),
       );
+      if (mode == 'keep') {
+        expect(candidate.policyReview!.confirmedAt, isNull);
+        expect(
+          after.review.byId(candidate.id)!.policyReview!.confirmedAt,
+          isNotNull,
+        );
+      }
       final policy = PolicyReader(after.snapshot).read('example').text;
       expect(policy.contains(candidate.claim), mode != 'retire');
     });

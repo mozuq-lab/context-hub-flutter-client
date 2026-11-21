@@ -45,6 +45,51 @@ class AdoptionTarget {
 /// 1回の判断でまとめられるプロジェクト案の上限（本体のPROJECT_COVERS_MAXと同じ）。
 const maxProposalCovers = 20;
 
+/// 採用した方針の見直しの状態（本体の候補一覧のpolicyReview）。
+class PolicyReviewState {
+  const PolicyReviewState({
+    required this.due,
+    required this.since,
+    required this.days,
+    required this.reviewDays,
+    this.confirmedAt,
+  });
+  final bool due;
+
+  /// 採用か、最後に「まだ有効」と確かめた日時のうち新しい方。
+  final DateTime since;
+  final int days, reviewDays;
+  final DateTime? confirmedAt;
+
+  static PolicyReviewState? parse(Object? raw) {
+    if (raw is! Map) return null;
+    final due = raw['due'], days = raw['days'], reviewDays = raw['reviewDays'];
+    final since = raw['since'] is String
+        ? DateTime.tryParse(raw['since'] as String)
+        : null;
+    final confirmed = raw['confirmedAt'];
+    final confirmedAt = confirmed is String
+        ? DateTime.tryParse(confirmed)
+        : null;
+    if (due is! bool ||
+        since == null ||
+        days is! int ||
+        days < 0 ||
+        reviewDays is! int ||
+        reviewDays < 1 ||
+        (confirmed != null && confirmedAt == null)) {
+      return null;
+    }
+    return PolicyReviewState(
+      due: due,
+      since: since,
+      days: days,
+      reviewDays: reviewDays,
+      confirmedAt: confirmedAt,
+    );
+  }
+}
+
 class ReviewCandidate {
   ReviewCandidate(
     this.data, {
@@ -67,6 +112,17 @@ class ReviewCandidate {
       targetPath != null &&
       dependencies[targetPath] is String;
   String? get retiredAt => data['retiredAt'] as String?;
+
+  /// 採用した方針（判断・好み）の見直しの状態。本体が付けた値で、古い本体・参考知識・形式が読めないときはnull。
+  PolicyReviewState? get policyReview =>
+      PolicyReviewState.parse(data['policyReview']);
+
+  /// 「まだ有効」と確かめられる方針。反映済みで有効なものだけ（本体は内容のhashで確かめる）。
+  bool get keepable =>
+      retirable &&
+      (kind == 'decision' || kind == 'preference') &&
+      policyReview != null;
+
   AdoptionTarget? get adoptedTarget => data['adoptedTarget'] is Map
       ? AdoptionTarget.fromJson(
           Map<String, dynamic>.from(data['adoptedTarget'] as Map),
@@ -422,6 +478,29 @@ class ReviewRepository {
         if (m['operation'] == 'knowledge-retire' &&
             m['target_id'] == 'KNW-${candidateId.substring(4)}' &&
             m['target_hash'] == c.dependencies[c.targetPath] &&
+            m['confirmed'] == true &&
+            m['request_id'] is String &&
+            requestIdPattern.hasMatch(m['request_id']) &&
+            e.key == 'Input/${m['request_id']}.md') {
+          return m['request_id'];
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// 表示中の内容で「まだ有効」と確かめた依頼のREQ ID。本体が受け付けるとInputから消える。
+  String? policyKeepRequestIdFor(String candidateId) {
+    final c = byId(candidateId);
+    if (c == null) return null;
+    for (final e in snapshot.files.entries.where(
+      (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
+    )) {
+      try {
+        final m = parseMarkdown(e.value).meta;
+        if (m['operation'] == 'policy-keep' &&
+            m['knowledge_id'] == 'KNW-${candidateId.substring(4)}' &&
+            m['knowledge_hash'] == c.dependencies[c.targetPath] &&
             m['confirmed'] == true &&
             m['request_id'] is String &&
             requestIdPattern.hasMatch(m['request_id']) &&

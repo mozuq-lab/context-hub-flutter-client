@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/core/guided.dart';
+import 'package:context_hub_client/core/models.dart';
 import 'package:context_hub_client/storage/capture_service.dart';
 import 'capture_test.dart' show TempAccess, location, draft;
 
@@ -17,6 +18,7 @@ Future<void> check(CaptureDraft draft) async {
         'operationId': draft.operationId,
         'project': draft.project,
         'meta': ?draft.meta,
+        'happenedOn': ?draft.happenedOn,
       }),
     );
     final result = await Process.run('node', [
@@ -60,6 +62,16 @@ void main() {
         kind: 'memo',
         project: s.project,
         meta: guidedMeta(s),
+      ),
+    );
+  });
+  test('出来事の日付を付けたメモを、本体が出来事の日付と記録日時を分けて受領する', () async {
+    await check(
+      CaptureDraft(
+        operationId: '55555555-2222-4333-8444-555555555555',
+        text: '昨日の打ち合わせで方針を決めた',
+        project: draft.project,
+        happenedOn: addScheduleDays(hubToday(), -1),
       ),
     );
   });

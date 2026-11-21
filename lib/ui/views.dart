@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unicode;
 import 'package:uuid/uuid.dart';
 import '../app/controller.dart';
+import '../core/calendar.dart';
 import '../core/models.dart';
+import '../core/happened.dart';
 import '../core/repository.dart';
 import '../core/secrets.dart';
 import '../core/templates.dart';
@@ -1868,6 +1870,22 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 期日を端末のカレンダーへ渡す。カレンダーはクラウドへ同期されることが多いため、伏せ字の規則を確かめられないときは渡さない。
+  Future<void> addToCalendar(HubProject project, NowItemRef item) async {
+    final secrets = repo.secretPolicy;
+    if (secrets.problem case final problem?) {
+      notice(context, problem);
+      return;
+    }
+    final event = dueEvent(project, item, hide: secrets.redact);
+    if (event == null) return;
+    try {
+      await c.access.addToCalendar(event);
+    } catch (_) {
+      if (mounted) notice(context, 'カレンダーを開けませんでした。端末にカレンダーのアプリがあるか確かめてください。');
+    }
+  }
+
   /// NOWの1行。プロジェクト画面と「次の一手」画面で共通に使う。
   Widget nowEntry(
     HubProject project,
@@ -1972,6 +1990,16 @@ class _HubViewState extends State<HubView> {
                 icon: const Icon(Icons.report_gmailerrorred_outlined, size: 15),
                 label: const Text('誤りとして外す'),
               ),
+            // 本人が付けた期日だけを、端末のカレンダーの予定作成画面へ渡す。保存するかはカレンダーで本人が決める。
+            if (entry.itemKey case final key? when c.access.calendarSupported)
+              if (project.nowItems.where((i) => i.key == key).firstOrNull
+                  case final item? when item.due != null && !item.resolved)
+                TextButton.icon(
+                  key: Key('calendar-${key.substring(0, 12)}'),
+                  onPressed: busy ? null : () => addToCalendar(project, item),
+                  icon: const Icon(Icons.edit_calendar_outlined, size: 15),
+                  label: const Text('カレンダーに入れる'),
+                ),
             for (final id in entry.references)
               TextButton.icon(
                 key: const Key('source-record'),
@@ -3238,6 +3266,14 @@ class RecordView extends StatelessWidget {
             Text(
               '${originLabel(record.origin)} · ${stateLabel(record.status)}',
             ),
+            if (happenedOf(record) case final h?)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${h.date}のこと（${displayTime(h.recordedAt)}に記録）',
+                  key: const Key('record-happened'),
+                ),
+              ),
             const SizedBox(height: 20),
             for (final warning in record.warnings)
               Padding(
@@ -3273,7 +3309,7 @@ class RecordView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             SelectableText(
-              '${record.sourceId}\n${record.path}\n入力元: ${record.source}\n発生: ${timeLabel(record.at)}\n受領: ${timeLabel(record.receivedAt)}\n生成: ${timeLabel(record.generatedAt)}',
+              '${record.sourceId}\n${record.path}\n入力元: ${record.source}\n${recordTimeLines(record)}\n受領: ${timeLabel(record.receivedAt)}\n生成: ${timeLabel(record.generatedAt)}',
               style: const TextStyle(fontSize: 12, height: 1.9),
             ),
             for (final id in record.references)
@@ -3366,6 +3402,15 @@ String? changeLabel(ProjectChanges? changes) {
 }
 
 String timeLabel(DateTime? value) => value == null ? '未取得' : displayTime(value);
+
+/// 記録の詳細の日時。出来事の日付があれば、その日と実際に書いた日時を示す（発生日時はその日の正午に置いた値なので出さない）。
+String recordTimeLines(HubRecord record) {
+  final h = happenedOf(record);
+  return h == null
+      ? '発生: ${timeLabel(record.at)}'
+      : '出来事の日付: ${h.date}（本人が指定）\n記録: ${displayTime(h.recordedAt)}';
+}
+
 String originLabel(String origin) => switch (origin) {
   'user-note' => '本人のメモ',
   'ai-self-report' => 'AIの作業自己報告・未検証',
@@ -3649,6 +3694,86 @@ class _CaptureDialogState extends State<CaptureDialog> {
   String operation = const Uuid().v4();
   String kind = 'memo';
   String? project, error;
+
+  /// 本人が選んだ出来事の日付（YYYY-MM-DD）。今日のことならnull。
+  String? happenedOn;
+
+  /// 出来事の日付を選べるか。下書き・問いへの答えは今日の記録なので出さず、対応前の本体にも出さない。
+  bool get _canBackdate =>
+      widget.draft == null &&
+      widget.answer == null &&
+      (widget.controller.repository?.intakeFeatures.happenedOn ?? false);
+
+  Future<void> _pickHappenedOn() async {
+    final today = DateTime.parse(hubToday());
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: happenedOn != null
+          ? DateTime.parse(happenedOn!)
+          : today.subtract(const Duration(days: 1)),
+      firstDate: today.subtract(const Duration(days: maxBackdateDays)),
+      lastDate: today.subtract(const Duration(days: 1)),
+      helpText: 'いつのことか',
+    );
+    if (picked == null || !mounted) return;
+    setState(() => happenedOn = scheduleDate(picked));
+    _schedulePersist();
+  }
+
+  Widget _happenedChooser(BuildContext context) {
+    final today = hubToday(),
+        yesterday = addScheduleDays(today, -1),
+        dayBefore = addScheduleDays(today, -2);
+    final custom =
+        happenedOn != null &&
+        happenedOn != yesterday &&
+        happenedOn != dayBefore;
+    void choose(String? value) {
+      setState(() => happenedOn = value);
+      _schedulePersist();
+    }
+
+    return Column(
+      key: const Key('memo-happened'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('いつのこと', style: TextStyle(fontSize: 12)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            for (final (label, value) in [
+              ('今日', null),
+              ('昨日', yesterday),
+              ('おととい', dayBefore),
+            ])
+              ChoiceChip(
+                key: Key('memo-happened-${value ?? 'today'}'),
+                label: Text(label),
+                selected: happenedOn == value,
+                onSelected: locked ? null : (_) => choose(value),
+              ),
+            ChoiceChip(
+              key: const Key('memo-happened-pick'),
+              label: Text(custom ? happenedOn! : '日付を選ぶ…'),
+              selected: custom,
+              onSelected: locked ? null : (_) => _pickHappenedOn(),
+            ),
+          ],
+        ),
+        if (happenedOn != null)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'この日の出来事として記録します。経緯や現在地はこの日の順に並び、本文の「明日」「来週」もこの日を基準に読まれます。',
+              style: TextStyle(fontSize: 11, height: 1.5),
+            ),
+          ),
+      ],
+    );
+  }
+
   CaptureResult? result;
   bool busy = false, locked = false;
 
@@ -3733,6 +3858,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
     text.text = draft?.text ?? '';
     kind = 'memo';
     project = draft?.projectId;
+    happenedOn = null;
   }
 
   /// 前回の書きかけを戻す。保存済みの操作の書きかけは消し、保存結果が不明なものは確認へ戻す。
@@ -3767,6 +3893,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
           ? draft.projectId
           : stored.project != null && projects.containsKey(stored.project)
           ? stored.project
+          : null;
+      // 日付が古くなって選べなくなった書きかけは、今日のことに戻す。
+      happenedOn = _canBackdate && validHappenedOn(stored.happenedOn)
+          ? stored.happenedOn
           : null;
       _restoredAt = stored.updatedAt;
       if (op != null && state != null) {
@@ -3809,6 +3939,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
         project: project,
         gitDraftHash: widget.draft?.hash,
         operationId: locked ? operation : null,
+        happenedOn: happenedOn,
         updatedAt: DateTime.now(),
       ),
     );
@@ -3908,6 +4039,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
           gitDraftId: widget.draft?.id,
           gitDraftHash: widget.draft?.hash,
           meta: widget.answer?.meta,
+          happenedOn: _canBackdate ? happenedOn : null,
         ),
       );
       await _settled(r);
@@ -4193,6 +4325,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
                                   _schedulePersist();
                                 },
                         ),
+                        if (_canBackdate) ...[
+                          const SizedBox(height: 16),
+                          _happenedChooser(context),
+                        ],
                         if (widget.draft != null && kind == 'work-summary')
                           const Padding(
                             padding: EdgeInsets.only(top: 12),
