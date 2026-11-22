@@ -29,6 +29,7 @@ class IntakeFeatures {
     this.itemRecordScopes = const {},
     this.somedayReviewDays = somedayReviewDaysDefault,
     this.actionMoveSupport = false,
+    this.projectOutcome,
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -66,6 +67,10 @@ class IntakeFeatures {
 
   /// 本人が追加した行動を別の置き場へ移す依頼を、本体が元の行動を一覧から外して扱う（`action_moves`）。
   final bool actionMoveSupport;
+
+  /// プロジェクトの望む結果（`outcome`）を、定義の変更・作成・案の採用の依頼で送れるときの上限（`project_outcome`）。
+  /// 対応前の本体はnull。対応前の本体へ送ると依頼ごと断られるので、望む結果の欄を出さない。
+  final ({int maxChars, int maxLines})? projectOutcome;
 
   /// 本人が追加した行動を、別のプロジェクト・プロジェクト未定へ移せる（移す先へ元の行動を指す行動を足す）。
   /// 対応前の本体は元の行動を一覧から外さず二重に並ぶため、移す操作を出さない。
@@ -187,7 +192,8 @@ class IntakeFeatures {
             for (final v in recordScopes)
               if (v is String) v,
         },
-        somedayReviewDays: reviewDays is int && reviewDays >= 1 && reviewDays <= 3650
+        somedayReviewDays:
+            reviewDays is int && reviewDays >= 1 && reviewDays <= 3650
             ? reviewDays
             : somedayReviewDaysDefault,
         askEnabled: ask is Map && ask['enabled'] == true,
@@ -200,6 +206,12 @@ class IntakeFeatures {
         // 知らない値は、本文を出さない側に倒す。
         calendarTitles: titles == null || titles == 'item' ? 'item' : 'project',
         actionMoveSupport: m['action_moves'] == true,
+        projectOutcome: switch (m['project_outcome']) {
+          {'max_chars': final int chars, 'max_lines': final int lines}
+              when chars >= 1 && lines >= 1 =>
+            (maxChars: chars, maxLines: lines),
+          _ => null,
+        },
         {
           for (final v in m['operations'] as List)
             if (v is String) v,

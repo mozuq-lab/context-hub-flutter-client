@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+
 import 'package:crypto/crypto.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unicode;
 
@@ -509,7 +510,14 @@ class HubProject {
     this.keywords = const [],
     this.definitionHash,
     this.mergedInto,
+    this.outcome,
   });
+
+  /// 本人が書いた望む結果（project.mdの`outcome`）。書いていなければnull。
+  final String? outcome;
+
+  /// 表示に使う望む結果の行（空の行と行頭の箇条書きの印を除く）。
+  List<String> get outcomeLines => projectOutcomeLines(outcome);
   String get lifecycle =>
       status == 'paused' || status == 'done' ? status : 'active';
   String get lifecycleLabel => projectLifecycleLabels[lifecycle]!;
@@ -873,14 +881,24 @@ String normalizeProjectName(String value) =>
 class NewProjectRequest {
   final String operationId, projectId, title, firstMemo;
   final List<String> aliases, keywords;
-  const NewProjectRequest({
+
+  /// 望む結果（正規化した文。空なら送らない）。
+  final String outcome;
+
+  /// 本体が示した望む結果の上限。望む結果に対応していない本体ではnull。
+  final ({int maxChars, int maxLines})? outcomeLimits;
+  NewProjectRequest({
     required this.operationId,
     required this.projectId,
     required this.title,
     this.aliases = const [],
     this.keywords = const [],
     this.firstMemo = '',
-  });
+    String outcome = '',
+    this.outcomeLimits,
+  }) : outcome = normalizeProjectOutcome(outcome),
+       _rawOutcome = outcome;
+  final String _rawOutcome;
 
   /// カンマ・読点・改行区切りの入力を、前後の空白を除いた重複のない一覧にする。
   static List<String> splitNames(String value) {
@@ -905,6 +923,19 @@ class NewProjectRequest {
     }
     if (keywords.length > 50 || keywords.any((k) => bad(k, 100))) {
       return 'キーワードは50件まで、それぞれ100文字までで入力してください。';
+    }
+    if (outcome.isNotEmpty) {
+      final limits =
+          outcomeLimits ??
+          (maxChars: projectOutcomeChars, maxLines: projectOutcomeMaxLines);
+      if (RegExp(r'[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]')
+          .hasMatch(_rawOutcome)) {
+        return '望む結果に使えない文字が含まれています。';
+      }
+      if (outcome.length > limits.maxChars ||
+          outcome.split('\n').length > limits.maxLines) {
+        return '望む結果は${limits.maxChars}文字・${limits.maxLines}行までにしてください。';
+      }
     }
     if (firstMemo.length > 8000 || utf8.encode(firstMemo).length > 32000) {
       return '最初のメモは8000文字までで入力してください。';
@@ -931,6 +962,7 @@ class NewProjectRequest {
     'title': title,
     'aliases': aliases,
     'keywords': keywords,
+    if (outcome.isNotEmpty) 'outcome': outcome,
     'confirmed': true,
   };
 
@@ -1238,7 +1270,8 @@ class SomedayEntry {
   String get ref => '$kind:${scope == null ? '' : '$scope:'}$id';
 
   /// 最後に見直してから[today]までの日数。見直した記録がなければnull。
-  int? days(String today) => reviewed == null ? null : waitingDays(reviewed!, today);
+  int? days(String today) =>
+      reviewed == null ? null : waitingDays(reviewed!, today);
 
   /// 見直していないとみなす行か（最後に見直してから[reviewDays]日以上、または見直した記録がない）。
   bool stale(String today, int reviewDays) =>
@@ -1395,3 +1428,38 @@ class WeeklyProgress {
     'base': base,
   };
 }
+
+/// 望む結果の行（本体の`outcomeLines`と同じ規則）。制御文字を空白にし、各行の前後の空白・空の行・行頭の箇条書きの印を除く。
+/// 登録簿hashを本体と同じに求めるのに使うので、規則を変えるときは本体とそろえる。
+List<String> projectOutcomeLines(String? outcome) => (outcome ?? '')
+    .replaceAll(RegExp(r'\r\n?'), '\n')
+    .split('\n')
+    .map(
+      (l) => l
+          .replaceAll(RegExp(r'[\u0000-\u001f\u007f-\u009f]+'), ' ')
+          .trim()
+          .replaceFirst(RegExp(r'^(?:[-*+]\s+|・\s*)+'), '')
+          .trim(),
+    )
+    .where((l) => l.isNotEmpty)
+    .toList();
+
+/// 望む結果の上限（本体の既定。対応した本体は`intake-features.json`の`project_outcome`で示す）。
+const projectOutcomeChars = 500, projectOutcomeMaxLines = 10;
+
+/// AIへ渡し、登録簿hashに含める望む結果（本体の`outcomeForPrompt`と同じ）。書いていなければnull。
+String? projectOutcomeForPrompt(String? outcome) {
+  final text = String.fromCharCodes(
+    projectOutcomeLines(outcome).join('\n').runes.take(projectOutcomeChars),
+  );
+  return text.isEmpty ? null : text;
+}
+
+/// 送る前の望む結果の正規化（本体の`normalizeOutcome`と同じ）。改行をLFにし、タブを空白にし、各行の前後の空白と空の行を除く。
+String normalizeProjectOutcome(String text) => text
+    .replaceAll(RegExp(r'\r\n?'), '\n')
+    .replaceAll('\t', ' ')
+    .split('\n')
+    .map((l) => l.trim())
+    .where((l) => l.isNotEmpty)
+    .join('\n');

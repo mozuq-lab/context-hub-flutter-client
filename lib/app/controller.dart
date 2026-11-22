@@ -1,8 +1,12 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
+
 import 'dart:convert';
+
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
+
 import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
@@ -20,7 +24,9 @@ import '../core/people.dart';
 import '../core/models.dart';
 import '../core/preferences.dart';
 import '../core/templates.dart';
+
 import 'dart:math' show Random;
+
 import '../core/parser.dart' show clip, projectIdPattern;
 import '../core/secrets.dart' show SecretPolicy;
 import '../ai/guided_services.dart';
@@ -1342,11 +1348,10 @@ class HubController extends ChangeNotifier {
       throw StateError('文字数上限を選び直してください。');
     }
     final syncing = _markPreference('basket');
-    return _setBasket(
-      (current) => Basket(ids: current.ids, maxChars: maxChars),
-    ).then((_) {
-      if (syncing) _preferenceChangedSaved();
-    });
+    return _setBasket((current) => Basket(ids: current.ids, maxChars: maxChars))
+        .then((_) {
+          if (syncing) _preferenceChangedSaved();
+        });
   }
 
   /// かごの記録を、コピーの直前に読み直したVaultから1つの文章にまとめる。
@@ -1874,14 +1879,19 @@ class HubController extends ChangeNotifier {
           throw StateError('このプロジェクトへの依頼が反映待ちです。保存と反映を確認してください。');
         }
         _refuseMerged(parsed, found);
+        // 望む結果に対応していない本体へ送ると、依頼ごと断られる。
+        if (next.outcome != null &&
+            parsed.intakeFeatures.projectOutcome == null) {
+          throw StateError('Mac miniの本体が望む結果に対応していません。本体を更新してください。');
+        }
         final problem = next.problem;
         if (problem != null) throw StateError(problem);
         if (next.sameAs(found)) {
-          throw StateError('名前・別名・キーワードに変更がありません。');
+          throw StateError('名前・別名・キーワード・望む結果に変更がありません。');
         }
         project = found;
         // 変更後の内容と最新の変更記録を含め、同じ定義へ戻す依頼が過去の操作と混ざらないようにする。
-        return 'project-definition/$projectId/$expectedHash/${digest(jsonEncode([next.title, next.aliases, next.keywords]))}/${parsed.latestDefinitionChangeId(projectId) ?? '-'}';
+        return 'project-definition/$projectId/$expectedHash/${digest(jsonEncode([next.title, next.aliases, next.keywords, if (next.outcome != null) next.outcome]))}/${parsed.latestDefinitionChangeId(projectId) ?? '-'}';
       },
       (service, parsed, operation) =>
           service.saveProjectDefinition(operation, project, next),
@@ -2186,7 +2196,11 @@ class HubController extends ChangeNotifier {
         operation,
         toScope,
         item.text,
-        from: ActionSource(inputId: item.inputId, text: item.text, key: item.key),
+        from: ActionSource(
+          inputId: item.inputId,
+          text: item.text,
+          key: item.key,
+        ),
       ),
     );
   }
@@ -2410,13 +2424,8 @@ class HubController extends ChangeNotifier {
         }
         return 'someday-review/$target/$targetId/$action/$today/${entry?.reviewed ?? '-'}';
       },
-      (service, parsed, operation) => service.saveSomedayReview(
-        operation,
-        target,
-        targetId,
-        action,
-        today,
-      ),
+      (service, parsed, operation) =>
+          service.saveSomedayReview(operation, target, targetId, action, today),
     );
   }
 
@@ -2652,6 +2661,11 @@ class HubController extends ChangeNotifier {
       if (pending.any((p) => p.operationId != request.operationId)) {
         throw StateError('保存確認待ちの操作があります。保存と反映で確認してから依頼してください。');
       }
+      // 望む結果に対応していない本体へ送ると、作成の依頼ごと断られる。
+      if (request.outcome.isNotEmpty &&
+          parsed.intakeFeatures.projectOutcome == null) {
+        throw StateError('Mac miniの本体が望む結果に対応していません。望む結果を空にするか、本体を更新してください。');
+      }
       // 保存結果が不明だった同じ依頼の確認では、自分自身を作成依頼中として重なりに数えない。
       if (!pending.any((p) => p.operationId == request.operationId)) {
         final overlap = request.overlapError(
@@ -2818,9 +2832,9 @@ class HubController extends ChangeNotifier {
         _pins = Map<String, dynamic>.from(value['pins'] as Map);
       }
       if (value is Map && value['preferenceSync'] is Map) {
-        _preferenceSync =
-            jsonDecode(jsonEncode(value['preferenceSync']))
-                as Map<String, dynamic>;
+        _preferenceSync = jsonDecode(
+          jsonEncode(value['preferenceSync']),
+        ) as Map<String, dynamic>;
       }
       if (value is Map) autoReload = value['autoReload'] != false;
       if (value is Map && value['today'] is Map) {

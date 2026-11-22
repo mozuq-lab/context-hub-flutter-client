@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import '../core/happened.dart';
 import '../core/people.dart';
 import '../core/models.dart';
@@ -46,17 +47,30 @@ class CaptureDraft {
   final String? gitDraftHash;
 }
 
-/// アプリで編集した名前・別名・キーワード。整えた値を持ち、上限は本体と同じにする。
+/// アプリで編集した名前・別名・キーワード（と望む結果）。整えた値を持ち、上限は本体と同じにする。
 class ProjectDefinitionDraft {
   ProjectDefinitionDraft({
     required String title,
     required List<String> aliases,
     required List<String> keywords,
+    String? outcome,
+    this.outcomeLimits,
   }) : title = _clean(title),
        aliases = normalizeTerms(aliases),
-       keywords = normalizeTerms(keywords);
+       keywords = normalizeTerms(keywords),
+       rawOutcome = outcome,
+       outcome = outcome == null ? null : normalizeProjectOutcome(outcome);
   final String title;
   final List<String> aliases, keywords;
+
+  /// 変更後の望む結果（正規化した文。空文字は外す）。nullなら送らず、本体は今の望む結果を保つ。
+  final String? outcome;
+
+  /// 入力のままの望む結果（使えない文字の確認に使う）。
+  final String? rawOutcome;
+
+  /// 本体が示した望む結果の上限（`intake-features.json`の`project_outcome`）。
+  final ({int maxChars, int maxLines})? outcomeLimits;
   static const maxTerms = 50, maxTermChars = 100, maxTitleChars = 200;
 
   static String _clean(String value) =>
@@ -84,13 +98,28 @@ class ProjectDefinitionDraft {
         return '$labelは1件$maxTermChars文字までにしてください。';
       }
     }
+    if (outcome case final text?) {
+      final limits =
+          outcomeLimits ??
+          (maxChars: projectOutcomeChars, maxLines: projectOutcomeMaxLines);
+      if (RegExp(r'[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]')
+          .hasMatch(rawOutcome ?? '')) {
+        return '望む結果に使えない文字が含まれています。';
+      }
+      if (text.length > limits.maxChars ||
+          (text.isEmpty ? 0 : text.split('\n').length) > limits.maxLines) {
+        return '望む結果は${limits.maxChars}文字・${limits.maxLines}行までにしてください。';
+      }
+    }
     return null;
   }
 
+  /// 本体が「変更がない」とする内容か。望む結果は、送るときだけ今の文（手で書いた文はそのまま）と比べる（本体と同じ）。
   bool sameAs(HubProject project) =>
       title == project.title &&
       listEquals(aliases, project.aliases) &&
-      listEquals(keywords, project.keywords);
+      listEquals(keywords, project.keywords) &&
+      (outcome == null || outcome == (project.outcome ?? ''));
 
   static bool listEquals(List<String> a, List<String> b) =>
       a.length == b.length &&
@@ -234,9 +263,8 @@ class CaptureService {
         !['memo', 'work-summary'].contains(draft.kind) ||
         (draft.project != null && !projectIdPattern.hasMatch(draft.project!)) ||
         (draft.gitDraftId != null &&
-            !RegExp(
-              r'^GDR-[0-9A-HJKMNP-TV-Z]{26}$',
-            ).hasMatch(draft.gitDraftId!)) ||
+            !RegExp(r'^GDR-[0-9A-HJKMNP-TV-Z]{26}$')
+                .hasMatch(draft.gitDraftId!)) ||
         (draft.gitDraftId != null) != (draft.gitDraftHash != null) ||
         (draft.gitDraftHash != null &&
             !RegExp(r'^[a-f0-9]{64}$').hasMatch(draft.gitDraftHash!)) ||
@@ -431,9 +459,8 @@ class CaptureService {
             ].contains(candidate.kind)) ||
         (project &&
             (candidate.confirmationToken == null ||
-                !RegExp(
-                  r'^[a-f0-9]{64}$',
-                ).hasMatch(candidate.confirmationToken!)))) {
+                !RegExp(r'^[a-f0-9]{64}$')
+                    .hasMatch(candidate.confirmationToken!)))) {
       throw const FormatException('候補のID・種別・確認情報が不正です。');
     }
     final fields = <String, dynamic>{
@@ -585,7 +612,7 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
-  /// 名前・別名・キーワードの変更依頼。変更後の全体を、表示中の定義hashに結び付けて送る。
+  /// 名前・別名・キーワード（と望む結果）の変更依頼。変更後の全体を、表示中の定義hashに結び付けて送る。
   Future<CaptureResult> saveProjectDefinition(
     String operationId,
     HubProject project,
@@ -599,7 +626,7 @@ class CaptureService {
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(hash) ||
         problem != null ||
         next.sameAs(project)) {
-      throw FormatException(problem ?? '名前・別名・キーワードの変更を確認してください。');
+      throw FormatException(problem ?? '名前・別名・キーワード・望む結果の変更を確認してください。');
     }
     final fields = <String, dynamic>{
       'operation': 'project-definition',
@@ -608,6 +635,8 @@ class CaptureService {
       'title': next.title,
       'aliases': next.aliases,
       'keywords': next.keywords,
+      // 望む結果は変えるときだけ送る（送らなければ本体は今の望む結果を保つ）。
+      'outcome': ?next.outcome,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
@@ -922,7 +951,10 @@ class CaptureService {
       'item_key': item.key,
       'waiting': waiting == null
           ? null
-          : {if (waiting.who != null) 'who': waiting.who, 'since': waiting.since},
+          : {
+              if (waiting.who != null) 'who': waiting.who,
+              'since': waiting.since,
+            },
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

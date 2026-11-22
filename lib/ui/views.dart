@@ -1,8 +1,10 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unicode;
 import 'package:uuid/uuid.dart';
+
 import '../app/controller.dart';
 import '../core/calendar.dart';
 import '../core/models.dart';
@@ -939,7 +941,12 @@ class _HubViewState extends State<HubView> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    subtitle: Text('$projectStaleDays日以上、新しいメモがありません'),
+                    // 望む結果を添え、続けるか・完了にするかを判断しやすくする。
+                    subtitle: Text(
+                      '$projectStaleDays日以上、新しいメモがありません${p.outcomeLines.isEmpty ? '' : '\n望む結果: ${p.outcomeLines.join(' / ')}'}',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     trailing: const Icon(Icons.chevron_right, size: 18),
                     onTap: () => widget.onNavigate('project:${p.id}'),
                   ),
@@ -1655,7 +1662,10 @@ class _HubViewState extends State<HubView> {
     if (hash == null) return;
     final next = await showDialog<ProjectDefinitionDraft>(
       context: context,
-      builder: (_) => ProjectDefinitionDialog(project: project),
+      builder: (_) => ProjectDefinitionDialog(
+        project: project,
+        outcomeLimits: repo.intakeFeatures.projectOutcome,
+      ),
     );
     if (next == null || !mounted) return;
     try {
@@ -1664,7 +1674,7 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '呼び名とキーワードの変更を依頼しました。Mac miniで処理されると反映されます。'
+              ? '${next.outcome == null ? '呼び名とキーワード' : '呼び名・キーワード・望む結果'}の変更を依頼しました。Mac miniで処理されると反映されます。'
               : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
@@ -1837,10 +1847,12 @@ class _HubViewState extends State<HubView> {
   /// 連絡待ちの印（相手・頼んだ日）を依頼する。見直す日を変えたときは、続けて日付も依頼する（見直す日は期日と同じ記録）。
   /// [projectId]は項目の置き場（プロジェクト未定もある）。
   Future<void> waitItem(String projectId, NowItemRef item) async {
-    final choice = await showDialog<({String? who, String since, String? reviewAfter})>(
-      context: context,
-      builder: (_) => WaitDialog(item: item, suggestions: waitingWhoSuggestions()),
-    );
+    final choice =
+        await showDialog<({String? who, String since, String? reviewAfter})>(
+          context: context,
+          builder: (_) =>
+              WaitDialog(item: item, suggestions: waitingWhoSuggestions()),
+        );
     if (choice == null || !mounted) return;
     final changed =
         !item.waiting ||
@@ -1941,9 +1953,7 @@ class _HubViewState extends State<HubView> {
       context: context,
       builder: (dialog) => SimpleDialog(
         key: const Key('move-action-dialog'),
-        title: Text(
-          fromScope == unassignedScope ? 'プロジェクトへ移す' : '別の置き場へ移す',
-        ),
+        title: Text(fromScope == unassignedScope ? 'プロジェクトへ移す' : '別の置き場へ移す'),
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
@@ -2501,11 +2511,7 @@ class _HubViewState extends State<HubView> {
     );
     if (ok != true || !mounted) return;
     try {
-      final result = await c.requestItemOccurrence(
-        projectId,
-        item.key,
-        action,
-      );
+      final result = await c.requestItemOccurrence(projectId, item.key, action);
       if (mounted) {
         notice(
           context,
@@ -3074,13 +3080,15 @@ class _HubViewState extends State<HubView> {
             effortPending =
             repo.effortRequestIdFor(key) != null,
         effort = repo.intakeFeatures.effort && !project.merged,
-        // 連絡待ちの印。依頼が反映待ちの間は出さない。
-        waitPending = repo.waitRequestIdFor(key) != null,
+            // 連絡待ちの印。依頼が反映待ちの間は出さない。
+            waitPending =
+            repo.waitRequestIdFor(key) != null,
         wait = repo.intakeFeatures.wait && !project.merged,
-        // 「いつかやる」へ移す・戻す。依頼が反映待ちの間は出さない。連絡待ちの項目には出さない。
-        somedayPending = repo.somedayRequestIdFor(key) != null,
-        // 休止中・完了のプロジェクトはプロジェクトごと「いつかやる」に並ぶので、項目を移すのは進行中だけ（戻すのは出す）。
-        someday =
+            // 「いつかやる」へ移す・戻す。依頼が反映待ちの間は出さない。連絡待ちの項目には出さない。
+            somedayPending =
+            repo.somedayRequestIdFor(key) != null,
+            // 休止中・完了のプロジェクトはプロジェクトごと「いつかやる」に並ぶので、項目を移すのは進行中だけ（戻すのは出す）。
+            someday =
             repo.intakeFeatures.someday &&
             !project.merged &&
             (project.active || item.someday),
@@ -3090,8 +3098,8 @@ class _HubViewState extends State<HubView> {
         from = !project.merged && repo.intakeFeatures.actions
             ? actionSourceOf(project, section, entry)
             : null,
-        // 本人が追加した行動は、別のプロジェクト・プロジェクト未定へ移せる。ほかの依頼が反映待ちの間は出さない。
-        movable =
+            // 本人が追加した行動は、別のプロジェクト・プロジェクト未定へ移せる。ほかの依頼が反映待ちの間は出さない。
+            movable =
             item.action &&
             section == 'next' &&
             !item.resolved &&
@@ -3358,13 +3366,16 @@ class _HubViewState extends State<HubView> {
             <ScheduleBucket, List<(HubProject?, NowEntry?, NowItemRef, int)>>{},
         resting = <(HubProject?, NowEntry?, NowItemRef, int)>[],
         listed = <String, List<NowEntry>>{},
-        // プロジェクト未定の行動のうち、期日の欄・休ませている項目に出さないもの。
-        ownListed = <NowItemRef>[],
-        // 本人が連絡待ちの印を付けた項目。一覧・件数・期日の欄から外し、「連絡待ち」にまとめる。
-        // 見直す日が来たものは、先頭の「連絡待ちの確認」にも出す。
-        waits = <(HubProject?, NowEntry?, NowItemRef, int)>[],
-        // 次の一手の画面に出す、未解決の欄の連絡待ち（HOMEと同じく、次の一手の画面でもまとめて示す）。
-        openWaits = Set<NowEntry>.identity();
+            // プロジェクト未定の行動のうち、期日の欄・休ませている項目に出さないもの。
+            ownListed =
+            <NowItemRef>[],
+            // 本人が連絡待ちの印を付けた項目。一覧・件数・期日の欄から外し、「連絡待ち」にまとめる。
+            // 見直す日が来たものは、先頭の「連絡待ちの確認」にも出す。
+            waits =
+            <(HubProject?, NowEntry?, NowItemRef, int)>[],
+            // 次の一手の画面に出す、未解決の欄の連絡待ち（HOMEと同じく、次の一手の画面でもまとめて示す）。
+            openWaits =
+            Set<NowEntry>.identity();
     // 手間の目安での絞り込み。目安に対応した本体のときだけ使う。
     final efforts = repo.intakeFeatures.effort,
         filter = efforts ? effortFilter : null;
@@ -3904,17 +3915,18 @@ class _HubViewState extends State<HubView> {
   ];
 
   /// 停滞している進行中のプロジェクト（長く止まっている順）。本体の点検の一覧と同じ日数（`project_stale_days`）で判断する。
-  List<HubProject> get weeklyStaleProjects => [
-    for (final p in repo.weeklyReview?.projects ?? const <WeeklyProject>[])
-      if (p.stale)
-        if (repo.projects[p.id] case final project?
-            when project.active && !project.merged)
-          project,
-  ]..sort(
-          (a, b) => (a.lastEvidenceAt ?? DateTime(0)).compareTo(
-            b.lastEvidenceAt ?? DateTime(0),
-          ),
-        );
+  List<HubProject> get weeklyStaleProjects =>
+      [
+        for (final p in repo.weeklyReview?.projects ?? const <WeeklyProject>[])
+          if (p.stale)
+            if (repo.projects[p.id] case final project?
+                when project.active && !project.merged)
+              project,
+      ]..sort(
+        (a, b) => (a.lastEvidenceAt ?? DateTime(0)).compareTo(
+          b.lastEvidenceAt ?? DateTime(0),
+        ),
+      );
 
   /// 段ごとの残りの件数（点検の対象が数えられない段はnull）。
   int? weeklyRemaining(String step, DateTime now) => switch (step) {
@@ -3962,6 +3974,15 @@ class _HubViewState extends State<HubView> {
               note ?? projectStatusLine(project, now),
               style: const TextStyle(fontSize: 12),
             ),
+            // 望む結果を添え、再開するか・休止か・完了かを判断しやすくする。
+            if (project.outcomeLines.isNotEmpty)
+              Text(
+                '望む結果: ${project.outcomeLines.join(' / ')}',
+                key: Key('weekly-outcome-${project.id}'),
+                style: const TextStyle(fontSize: 12),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
             const SizedBox(height: 4),
             Wrap(
               spacing: 8,
@@ -4483,9 +4504,7 @@ class _HubViewState extends State<HubView> {
             padding: const EdgeInsets.fromLTRB(22, 14, 22, 6),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final e in entries) somedayRow(e, today, days),
-              ],
+              children: [for (final e in entries) somedayRow(e, today, days)],
             ),
           ),
         ),
@@ -4515,8 +4534,8 @@ class _HubViewState extends State<HubView> {
                 repo.projectStatusRequestIdFor(e.id) != null,
           _ => repo.somedayReviewRequestIdFor('idea', e.id) != null,
         },
-        // 操作に使う今の状態が読めない行（項目一覧やプロジェクトの定義が古い・欠けている）には操作を出さない。
-        actionable =
+            // 操作に使う今の状態が読めない行（項目一覧やプロジェクトの定義が古い・欠けている）には操作を出さない。
+            actionable =
             repo.intakeFeatures.someday &&
             switch (e.kind) {
               'item' => item != null && item.someday,
@@ -4625,7 +4644,10 @@ class _HubViewState extends State<HubView> {
     HubProject? project,
   ) async {
     final (body, ok) = switch (e.kind) {
-      'item' => ('この項目を元の欄（${e.section == 'open' ? '未解決' : '次の一手'}）へ戻すよう依頼します。', '戻す'),
+      'item' => (
+        'この項目を元の欄（${e.section == 'open' ? '未解決' : '次の一手'}）へ戻すよう依頼します。',
+        '戻す',
+      ),
       'project' => ('このプロジェクトを進行中に戻すよう依頼します。', '進行中にする'),
       _ => (
         repo.intakeFeatures.actions
@@ -4645,7 +4667,8 @@ class _HubViewState extends State<HubView> {
         );
       case 'project':
         await somedayRequest(
-          () => c.requestProjectStatus(e.id, project!.definitionHash!, 'active'),
+          () =>
+              c.requestProjectStatus(e.id, project!.definitionHash!, 'active'),
           '進行中にする依頼を保存しました。',
         );
       default:
@@ -4672,7 +4695,10 @@ class _HubViewState extends State<HubView> {
     HubProject? project,
   ) async {
     final (body, ok) = switch (e.kind) {
-      'item' => ('この項目はやらないものとして、「誤り（古い情報）」として外すよう依頼します。元のメモは残り、外した項目は元に戻せます。', '外す'),
+      'item' => (
+        'この項目はやらないものとして、「誤り（古い情報）」として外すよう依頼します。元のメモは残り、外した項目は元に戻せます。',
+        '外す',
+      ),
       'project' => ('このプロジェクトを完了にするよう依頼します。記録は残り、あとで進行中に戻せます。', '完了にする'),
       _ => ('このアイデアをやめたと記録し、「いつかやる」から外すよう依頼します。アイデアの記録は残ります。', 'やめる'),
     };
@@ -4959,8 +4985,9 @@ class _HubViewState extends State<HubView> {
         actionable = repo.intakeFeatures.unassignedItems,
         closed = actionable ? repo.closedUnassigned : const <NowItemRef>[],
         pending = repo.unassignedPendingActions,
-        // 件数は、期日の欄などに出した行動も含めた全体。
-        total = repo.unassignedActionCount,
+            // 件数は、期日の欄などに出した行動も含めた全体。
+            total =
+            repo.unassignedActionCount,
         moved = repo.unassignedOwnActions.length - own.length,
         counts = [
           if (total > 0) '行動$total件',
@@ -5077,9 +5104,9 @@ class _HubViewState extends State<HubView> {
       );
     }
     final tag = item.key.substring(0, 12),
-        // 行動にする先は、進行中のプロジェクトかプロジェクト未定。引き取った行を一覧から外すのは
-        // プロジェクトを決めない行動に対応した本体だけなので、対応前の本体には出さない。
-        canTake =
+            // 行動にする先は、進行中のプロジェクトかプロジェクト未定。引き取った行を一覧から外すのは
+            // プロジェクトを決めない行動に対応した本体だけなので、対応前の本体には出さない。
+            canTake =
             takeOver && !item.action && repo.intakeFeatures.unassignedActions,
         records = item.action && repo.intakeFeatures.unassignedRecords,
         scheduling = repo.scheduleRequestIdFor(item.key) != null,
@@ -5099,8 +5126,8 @@ class _HubViewState extends State<HubView> {
             c.access.calendarSupported &&
             validScheduleDate(item.due) &&
             !item.resolved,
-        // 本人が追加した行動は、進行中のプロジェクトへ移せる。ほかの依頼が反映待ちの間は出さない。
-        movable =
+            // 本人が追加した行動は、進行中のプロジェクトへ移せる。ほかの依頼が反映待ちの間は出さない。
+            movable =
             item.action &&
             !item.resolved &&
             repo.intakeFeatures.actionMoves &&
@@ -5319,6 +5346,66 @@ class _HubViewState extends State<HubView> {
     );
   }
 
+  /// プロジェクトの画面の先頭に置く望む結果。書いていなければ、対応した本体のときだけ書く操作を出す。
+  Widget projectOutcome(HubProject project, bool editable) {
+    final lines = project.outcomeLines,
+        supported = repo.intakeFeatures.projectOutcome != null;
+    if (lines.isEmpty && !supported) return const SizedBox.shrink();
+    final edit = supported
+        ? TextButton.icon(
+            key: const Key('project-outcome-edit'),
+            onPressed: editable ? () => changeDefinition(project) : null,
+            icon: const Icon(Icons.edit_outlined, size: 16),
+            label: Text(lines.isEmpty ? '望む結果を書く' : '望む結果を直す'),
+          )
+        : null;
+    // 書いていないときは1行だけにし、画面の先頭を大きく押し下げない。
+    if (lines.isEmpty) {
+      return Padding(
+        key: const Key('project-outcome'),
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          children: [
+            const Text(
+              '望む結果（何をもって完了か）: 未記入',
+              key: Key('project-outcome-empty'),
+              style: TextStyle(fontSize: 12),
+            ),
+            ?edit,
+          ],
+        ),
+      );
+    }
+    return Padding(
+      key: const Key('project-outcome'),
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '望む結果（何をもって完了か）',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              SelectableText(
+                lines.join('\n'),
+                key: const Key('project-outcome-text'),
+                style: const TextStyle(height: 1.6),
+              ),
+              if (edit != null)
+                Align(alignment: Alignment.centerRight, child: edit),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   List<Widget> projectView(HubProject project) {
     final now = DateTime.now(),
         requested = repo.projectStatusRequestIdFor(project.id) != null,
@@ -5352,11 +5439,13 @@ class _HubViewState extends State<HubView> {
         project.title,
         '要約の生成: ${timeLabel(project.generatedAt)}\n最新の根拠: ${timeLabel(project.lastEvidenceAt)}\n${projectStatusLine(project, now)}',
       ),
+      projectOutcome(project, editable),
       if (project.stale(now))
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: NoticeBox(
-            '最終根拠から$projectStaleDays日を超えて新しい入力がありません。再開するか、休止・完了にするかを判断してください。',
+            '最終根拠から$projectStaleDays日を超えて新しい入力がありません。再開するか、休止・完了にするかを判断してください。${project.outcomeLines.isEmpty ? '' : '\n望む結果: ${project.outcomeLines.join(' / ')}'}',
+            key: const Key('project-stale'),
           ),
         ),
       if (requested)
@@ -5423,7 +5512,7 @@ class _HubViewState extends State<HubView> {
         const Padding(
           padding: EdgeInsets.only(bottom: 10),
           child: NoticeBox(
-            '呼び名とキーワードの変更を依頼済みです。Mac miniで処理されると反映されます。',
+            '呼び名とキーワード（または望む結果）の変更を依頼済みです。Mac miniで処理されると反映されます。',
             key: Key('project-definition-requested'),
           ),
         ),
@@ -5532,7 +5621,11 @@ class _HubViewState extends State<HubView> {
                 key: const Key('project-definition'),
                 enabled: editable,
                 value: () => changeDefinition(project),
-                child: const Text('呼び名とキーワードを変える'),
+                child: Text(
+                  repo.intakeFeatures.projectOutcome == null
+                      ? '呼び名とキーワードを変える'
+                      : '呼び名・キーワード・望む結果を変える',
+                ),
               ),
               // 手で書いた統合先が見つからない・循環している定義は、直すまで統合を依頼できない（本体が断る）。
               if (!project.merged && project.mergedInto == null)
@@ -7428,18 +7521,18 @@ class _CaptureDialogState extends State<CaptureDialog> {
                                     Icon(
                                       Icons.playlist_add,
                                       size: 18,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.primary,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary,
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
                                       'ひな形',
                                       style: TextStyle(
                                         fontSize: 13,
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.primary,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
                                       ),
                                     ),
                                   ],
@@ -7472,9 +7565,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
                         if (widget.answer == null) ...[
                           const SizedBox(height: 8),
                           Theme(
-                            data: Theme.of(
-                              context,
-                            ).copyWith(dividerColor: Colors.transparent),
+                            data: Theme.of(context)
+                                .copyWith(dividerColor: Colors.transparent),
                             child: ExpansionTile(
                               key: ValueKey('memo-kind-more-$_formGeneration'),
                               tilePadding: EdgeInsets.zero,
@@ -7780,7 +7872,11 @@ class PinOrderDialog extends StatelessWidget {
 /// 連絡待ちの印（相手・頼んだ日）と見直す日を入力する。相手は任意で、AIは推測しない。
 /// 結果の見直す日（reviewAfter）がnullなら見直す日を外す。
 class WaitDialog extends StatefulWidget {
-  const WaitDialog({super.key, required this.item, this.suggestions = const []});
+  const WaitDialog({
+    super.key,
+    required this.item,
+    this.suggestions = const [],
+  });
   final NowItemRef item;
 
   /// 相手の候補（いま連絡待ちにしている項目の相手）。
@@ -7809,7 +7905,9 @@ class _WaitDialogState extends State<WaitDialog> {
       review.text.trim().isEmpty ? null : review.text.trim();
   String? get whoProblem {
     final v = whoValue;
-    return v == null || validWaitWho(v) ? null : '1行・$waitWhoChars文字以内で入力してください。';
+    return v == null || validWaitWho(v)
+        ? null
+        : '1行・$waitWhoChars文字以内で入力してください。';
   }
 
   String? get sinceProblem {
@@ -7825,20 +7923,23 @@ class _WaitDialogState extends State<WaitDialog> {
         : 'YYYY-MM-DDの実在する日で入力してください（2000〜2099年）。';
   }
 
-  Widget dateChips(String key, TextEditingController c, List<(String, int)> choices) =>
-      Wrap(
-        spacing: 6,
-        runSpacing: 6,
-        children: [
-          for (final (label, days) in choices)
-            ActionChip(
-              key: Key('wait-$key-$days'),
-              label: Text(label),
-              onPressed: () =>
-                  setState(() => c.text = addScheduleDays(hubToday(), days)),
-            ),
-        ],
-      );
+  Widget dateChips(
+    String key,
+    TextEditingController c,
+    List<(String, int)> choices,
+  ) => Wrap(
+    spacing: 6,
+    runSpacing: 6,
+    children: [
+      for (final (label, days) in choices)
+        ActionChip(
+          key: Key('wait-$key-$days'),
+          label: Text(label),
+          onPressed: () =>
+              setState(() => c.text = addScheduleDays(hubToday(), days)),
+        ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -7871,7 +7972,8 @@ class _WaitDialogState extends State<WaitDialog> {
                 maxLength: waitWhoChars,
                 decoration: InputDecoration(
                   labelText: '相手（任意）',
-                  helperText: '名前はVaultに残り、同期先の端末とバックアップにも入ります。気になる場合はイニシャルなどで書いてください。',
+                  helperText:
+                      '名前はVaultに残り、同期先の端末とバックアップにも入ります。気になる場合はイニシャルなどで書いてください。',
                   helperMaxLines: 3,
                   errorText: whoProblem,
                 ),
@@ -7904,7 +8006,12 @@ class _WaitDialogState extends State<WaitDialog> {
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 6),
-              dateChips('since', since, [('今日', 0), ('昨日', -1), ('3日前', -3), ('1週間前', -7)]),
+              dateChips('since', since, [
+                ('今日', 0),
+                ('昨日', -1),
+                ('3日前', -3),
+                ('1週間前', -7),
+              ]),
               const SizedBox(height: 14),
               TextField(
                 key: const Key('wait-review'),
@@ -7927,7 +8034,11 @@ class _WaitDialogState extends State<WaitDialog> {
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 6),
-              dateChips('review', review, [('3日後', 3), ('1週間後', 7), ('2週間後', 14)]),
+              dateChips('review', review, [
+                ('3日後', 3),
+                ('1週間後', 7),
+                ('2週間後', 14),
+              ]),
               const SizedBox(height: 12),
               const Text(
                 '連絡待ちにした項目は、「次の一手」の一覧と件数から外れ、「連絡待ち」にまとまります。返事が来たら印を外すか、完了にしてください。相手の名前は、ホーム画面のウィジェットと、別のAIへ渡す資料には出しません。',
@@ -8425,9 +8536,7 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  nextDue == null
-                      ? '繰り返しは期日を入れると選べます。'
-                      : '繰り返しを付けると、「今回を完了」「今回は見送る」で期日が次の回へ進み、項目は欄に残ります。毎月は期日の日を覚えます（短い月は月末）。',
+                  nextDue == null ? '繰り返しは期日を入れると選べます。' : '繰り返しを付けると、「今回を完了」「今回は見送る」で期日が次の回へ進み、項目は欄に残ります。毎月は期日の日を覚えます（短い月は月末）。',
                   style: const TextStyle(fontSize: 12),
                 ),
               ],
@@ -8500,6 +8609,17 @@ class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
                 title: Text(projectLifecycleLabels[status]!),
                 onTap: () => setState(() => selected = status),
               ),
+          // 完了・休止の判断の基準として、本人が書いた望む結果を添える。
+          if (selected != null && selected != 'active')
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: NoticeBox(
+                widget.project.outcomeLines.isEmpty
+                    ? '望む結果は書かれていません。'
+                    : '望む結果:\n${widget.project.outcomeLines.join('\n')}${selected == 'done' ? '\nこれを満たしたかを確かめてから完了にしてください。' : ''}',
+                key: const Key('project-status-outcome'),
+              ),
+            ),
           const SizedBox(height: 8),
           const Text(
             '休止・完了にすると、ホームの後ろにまとめて表示し、AIの帰属候補から外します。メモで明示したプロジェクトは引き続き使えます。依頼は保存され、Mac miniで処理されると反映されます。',
@@ -8633,10 +8753,16 @@ class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
   );
 }
 
-/// プロジェクトの名前・別名・キーワードを編集する。別名とキーワードは1行に1つ。
+/// プロジェクトの名前・別名・キーワード（と望む結果）を編集する。別名とキーワードは1行に1つ。
+/// 望む結果の欄は、本体が対応しているとき（[outcomeLimits]があるとき）だけ出す。
 class ProjectDefinitionDialog extends StatefulWidget {
-  const ProjectDefinitionDialog({super.key, required this.project});
+  const ProjectDefinitionDialog({
+    super.key,
+    required this.project,
+    this.outcomeLimits,
+  });
   final HubProject project;
+  final ({int maxChars, int maxLines})? outcomeLimits;
   @override
   State<ProjectDefinitionDialog> createState() =>
       _ProjectDefinitionDialogState();
@@ -8647,18 +8773,26 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
       aliases = TextEditingController(text: widget.project.aliases.join('\n')),
       keywords = TextEditingController(
         text: widget.project.keywords.join('\n'),
-      );
+      ),
+      outcome = TextEditingController(text: widget.project.outcome ?? '');
 
+  /// 望む結果は、欄を書き換えたときだけ送る（手で書いた文を、ほかの変更のついでに整えて書き換えない）。
   ProjectDefinitionDraft get draft => ProjectDefinitionDraft(
     title: title.text,
     aliases: aliases.text.split('\n'),
     keywords: keywords.text.split('\n'),
+    outcome:
+        widget.outcomeLimits == null ||
+            outcome.text == (widget.project.outcome ?? '')
+        ? null
+        : outcome.text,
+    outcomeLimits: widget.outcomeLimits,
   );
 
   @override
   void initState() {
     super.initState();
-    for (final t in [title, aliases, keywords]) {
+    for (final t in [title, aliases, keywords, outcome]) {
       t.addListener(() => setState(() {}));
     }
   }
@@ -8668,6 +8802,7 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
     title.dispose();
     aliases.dispose();
     keywords.dispose();
+    outcome.dispose();
     super.dispose();
   }
 
@@ -8676,8 +8811,13 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
     final next = draft,
         problem = next.problem,
         unchanged = next.sameAs(widget.project);
+    final limits = widget.outcomeLimits;
     return AlertDialog(
-      title: Text('${widget.project.title}の呼び名とキーワード'),
+      title: Text(
+        limits == null
+            ? '${widget.project.title}の呼び名とキーワード'
+            : '${widget.project.title}の定義',
+      ),
       content: SizedBox(
         width: 560,
         child: SingleChildScrollView(
@@ -8719,12 +8859,28 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
                       '${next.keywords.length}/${ProjectDefinitionDraft.maxTerms}件',
                 ),
               ),
+              if (limits != null) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  key: const Key('definition-outcome'),
+                  controller: outcome,
+                  minLines: 2,
+                  maxLines: 6,
+                  decoration: InputDecoration(
+                    labelText: '望む結果（任意）',
+                    hintText: 'どうなればこのプロジェクトを完了にできるか',
+                    helperText:
+                        '${normalizeProjectOutcome(outcome.text).length}/${limits.maxChars}文字・${limits.maxLines}行まで。空にすると外します',
+                    alignLabelWithHint: true,
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               if (problem != null)
                 NoticeBox(problem, error: true)
               else
-                const Text(
-                  '依頼は保存され、Mac miniで処理されると反映されます。プロジェクトを指定せずに保存したメモのうち、まだどのプロジェクトにも結び付いていないものは、次のAI読み取りで新しい定義に合わせて見直されます（AIを使います）。',
+                Text(
+                  '依頼は保存され、Mac miniで処理されると反映されます。プロジェクトを指定せずに保存したメモのうち、まだどのプロジェクトにも結び付いていないものは、次のAI読み取りで新しい定義に合わせて見直されます（AIを使います）。${limits == null ? '' : '望む結果もAIへ渡し、メモの結び付けと次の一手を読む手がかりにします。'}',
                   style: TextStyle(fontSize: 12, height: 1.6),
                 ),
             ],
@@ -8775,15 +8931,20 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
   final title = TextEditingController(),
       aliases = TextEditingController(),
       keywords = TextEditingController(),
+      outcome = TextEditingController(),
       memo = TextEditingController();
   final operation = const Uuid().v4(), projectId = newProjectId();
+
+  /// 本体が望む結果に対応していれば、その上限。対応前の本体ではnull（欄を出さない）。
+  ({int maxChars, int maxLines})? get outcomeLimits =>
+      widget.controller.repository?.intakeFeatures.projectOutcome;
   String? error;
   CaptureResult? result;
   bool busy = false, locked = false;
 
   @override
   void dispose() {
-    for (final c in [title, aliases, keywords, memo]) {
+    for (final c in [title, aliases, keywords, outcome, memo]) {
       c.dispose();
     }
     super.dispose();
@@ -8796,6 +8957,8 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
     aliases: NewProjectRequest.splitNames(aliases.text),
     keywords: NewProjectRequest.splitNames(keywords.text),
     firstMemo: memo.text.trim().isEmpty ? '' : memo.text,
+    outcome: outcomeLimits == null ? '' : outcome.text,
+    outcomeLimits: outcomeLimits,
   );
 
   Future<void> submit() async {
@@ -8901,6 +9064,15 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
                 'キーワード（任意）',
                 hint: 'カンマ・読点区切り',
               ),
+              if (outcomeLimits case final limits?)
+                field(
+                  'project-create-outcome',
+                  outcome,
+                  '望む結果（任意）',
+                  hint: 'どうなればこのプロジェクトを完了にできるか（${limits.maxLines}行まで）',
+                  lines: 2,
+                  max: limits.maxChars,
+                ),
               field(
                 'project-create-memo',
                 memo,

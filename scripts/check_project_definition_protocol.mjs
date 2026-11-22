@@ -1,9 +1,10 @@
-// Dartが保存したプロジェクトの名前・別名・キーワードの変更REQを、固定参照の本体が受理して定義へ反映するかを検査する。
+// Dartが保存したプロジェクトの名前・別名・キーワード（と望む結果）の変更REQを、固定参照の本体が受理して定義へ反映するかを検査する。
+// 反映後の登録簿hashを出力し、アプリが同じ値を求めるかをテストで比べる。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,readProjects,readProjectDefinitionChanges,rebuildDashboard,hash,parseMarkdown} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,readProjects,readProjectDefinitionChanges,rebuildDashboard,hash,parseMarkdown,projectRegistryHash} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
 assert.equal(packet.operation,'project-definition');assert.equal(packet.text,'');assert.equal(packet.confirmed,true);
 const root=await mkdtemp(join(tmpdir(),'ctx-definition-protocol-'));
@@ -18,6 +19,8 @@ try{
  assert.equal(ack.result.projectId,packet.project_id);assert.equal(ack.result.deduped,false);
  const project=(await readProjects(config)).find(p=>p.id===packet.project_id);
  assert.deepEqual({title:project.title,aliases:project.aliases,keywords:project.keywords},{title:packet.title,aliases:packet.aliases,keywords:packet.keywords});
+ // 望む結果は、送ったときだけその文になり、送らなければ前の文を保つ。
+ assert.equal(project.outcome,packet.outcome===undefined?parseMarkdown(before).meta.outcome??undefined:packet.outcome||undefined);
  assert.equal((await readProjectDefinitionChanges(vault)).length,1);
  // 本文と状態は変えない。
  assert.equal(parseMarkdown(await vault.read(definitionPath)).text,parseMarkdown(before).text);
@@ -27,5 +30,5 @@ try{
  const snapshot={};for(const dir of ['00_inbox','10_projects','20_ideas','30_knowledge','90_system','Input'])for(const p of await vault.files(dir))snapshot[p]=await vault.read(p);
  for(const p of ['POLICY.md','REVIEW.md']){const v=await vault.read(p);if(v!==undefined)snapshot[p]=v;}
  await writeFile(out,JSON.stringify(snapshot));
- process.stdout.write('DartのREQを受理し、名前・別名・キーワードの反映と重複なしを確認\n');
+ process.stdout.write(`DartのREQを受理し、名前・別名・キーワード・望む結果の反映と重複なしを確認\nREGISTRY:${projectRegistryHash(await readProjects(config))}\n`);
 }finally{await rm(root,{recursive:true,force:true});}
