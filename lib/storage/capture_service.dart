@@ -802,6 +802,40 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// NOWの項目に連絡待ちの印を付ける依頼。[waiting]は変更後の全体（相手は任意）で、nullで外す。
+  Future<CaptureResult> saveItemWait(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    ({String? who, String since})? waiting,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        // プロジェクト未定の本人が追加した行動は、置き場_unassignedで依頼する。
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        (waiting == null && !item.waiting) ||
+        (waiting != null &&
+            (!validScheduleDate(waiting.since) ||
+                (waiting.who != null && !validWaitWho(waiting.who)) ||
+                (item.waiting &&
+                    item.waitingSince == waiting.since &&
+                    item.waitingWho == waiting.who)))) {
+      throw const FormatException('項目と連絡待ちを確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-wait',
+      'project_id': projectId,
+      'item_key': item.key,
+      'waiting': waiting == null
+          ? null
+          : {if (waiting.who != null) 'who': waiting.who, 'since': waiting.since},
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// 定例の今の回（[due]）を完了する（done）・見送る（skip）依頼。本体が次の回の期日を付ける。
   Future<CaptureResult> saveItemOccurrence(
     String operationId,

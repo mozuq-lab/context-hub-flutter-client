@@ -58,6 +58,11 @@ class HubRepository {
   final Map<String, DateTime> _effortTimes = {};
   final Map<String, String> _outstandingEfforts = {};
   final Map<String, String> _latestEfforts = {};
+
+  /// 連絡待ちの記録の作成時刻（記録IDごと）と、反映を待っている印の依頼・最新の記録（項目キーごと）。
+  final Map<String, DateTime> _waitTimes = {};
+  final Map<String, String> _outstandingWaits = {};
+  final Map<String, String> _latestWaits = {};
   final Map<String, String> _outstandingHintDismissals = {};
 
   /// 「記録に聞く」の問いと答え（新しい順）。この端末から送った問いと、CLIなどほかから聞いた問いの答え。
@@ -152,15 +157,22 @@ class HubRepository {
       .firstOrNull;
 
   /// プロジェクトを決めずに本人が追加した行動のうち、片付いていないもの（追加した順）。対応前の本体では空。
+  /// 本人が連絡待ちの印を付けた行動は含めない（[unassignedWaitingActions]）。
   List<NowItemRef> get unassignedOwnActions => [
     for (final i in unassignedItems)
-      if (i.action && !i.resolved) i,
+      if (i.action && !i.resolved && !i.waiting) i,
+  ];
+
+  /// プロジェクトを決めずに本人が追加した行動のうち、連絡待ちの印を付けたもの（追加した順）。
+  List<NowItemRef> get unassignedWaitingActions => [
+    for (final i in unassignedItems)
+      if (i.action && i.waiting) i,
   ];
 
   /// プロジェクトを決めずに追加を依頼し、まだ項目一覧に載っていない行動（端末に保存した依頼・Miniが受け付けた依頼）。
   final List<PendingAction> unassignedPendingActions = [];
 
-  /// プロジェクト未定の次の一手として数える件数（本人が追加した行動と、その反映待ち）。AIの読み取りの行は数えない。
+  /// プロジェクト未定の次の一手として数える件数（本人が追加した行動と、その反映待ち）。AIの読み取りの行と、連絡待ちの行動は数えない。
   int get unassignedActionCount =>
       unassignedOwnActions.length + unassignedPendingActions.length;
 
@@ -607,7 +619,17 @@ class HubRepository {
     // 新しい本体が段階を足しても項目一覧全体は捨てず、知らない段階は目安なしとして読む。
     final rawEffort = i['effort'],
         effort = itemEfforts.contains(rawEffort) ? rawEffort as String : null;
-    if ((rawEffort != null && rawEffort is! String) ||
+    // 本人が付けた連絡待ちの印。旧版の一覧と印のない項目にはない。
+    final wait = i['waiting'];
+    if ((wait != null &&
+            (wait is! Map ||
+                wait['id'] is! String ||
+                !RegExp(
+                  r'^WAIT-[0-9A-HJKMNP-TV-Z]{26}$',
+                ).hasMatch(wait['id']) ||
+                !validScheduleDate(wait['since']) ||
+                (wait['who'] != null && !validWaitWho(wait['who'])))) ||
+        (rawEffort != null && rawEffort is! String) ||
         (act != null && act is! Map) ||
         (from != null &&
             (from is! Map ||
@@ -667,6 +689,9 @@ class HubRepository {
       fromText: from is Map ? from['text'] as String : null,
       fromKey: from is Map ? from['key'] as String? : null,
       effort: effort,
+      waitingId: wait is Map ? wait['id'] as String : null,
+      waitingSince: wait is Map ? wait['since'] as String : null,
+      waitingWho: wait is Map ? wait['who'] as String? : null,
     );
   }
 
@@ -720,6 +745,32 @@ class HubRepository {
         _effortTimes[id] = at;
         final last = _latestEfforts[key];
         if (last == null || id.compareTo(last) > 0) _latestEfforts[key] = id;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    // 連絡待ちの記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（有効な印は項目一覧のwaitingを使う）。
+    final waitRecord = RegExp(
+      r'^90_system/item-waits/(WAIT-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = waitRecord.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']), w = j['waiting'];
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['item_key'] is! String ||
+            !j.containsKey('waiting') ||
+            (w != null && (w is! Map || !validScheduleDate(w['since']))) ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _waitTimes[id] = at;
+        final last = _latestWaits[key];
+        if (last == null || id.compareTo(last) > 0) _latestWaits[key] = id;
       } catch (_) {
         _problem(e.key);
       }
@@ -1267,6 +1318,12 @@ class HubRepository {
 
   /// 反映を待っている、この項目への手間の目安の依頼。
   String? effortRequestIdFor(String itemKey) => _outstandingEfforts[itemKey];
+
+  /// 反映を待っている、この項目への連絡待ちの依頼。
+  String? waitRequestIdFor(String itemKey) => _outstandingWaits[itemKey];
+
+  /// この項目の最新の連絡待ちの記録のID（外した記録を含む）。記録がなければnull。
+  String? latestWaitIdFor(String itemKey) => _latestWaits[itemKey];
 
   /// この項目の最新の手間の目安の記録のID（外した記録を含む）。記録がなければnull。
   String? latestEffortIdFor(String itemKey) => _latestEfforts[itemKey];
@@ -2047,6 +2104,7 @@ class HubRepository {
               'item-schedule',
               'item-occurrence',
               'item-effort',
+              'item-wait',
               'item-hint-dismiss',
               'git-draft-dismiss',
               'project-create',
@@ -2176,6 +2234,27 @@ class HubRepository {
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !m.containsKey('effort') ||
                 (m['effort'] != null && !itemEfforts.contains(m['effort'])))) {
+          throw const FormatException();
+        }
+        final itemWait = m['operation'] == 'item-wait';
+        final waitValue = m['waiting'];
+        if (itemWait &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('waiting') ||
+                (waitValue != null &&
+                    (waitValue is! Map ||
+                        !validScheduleDate(waitValue['since']) ||
+                        (waitValue['who'] != null &&
+                            !validWaitWho(waitValue['who'])) ||
+                        waitValue.keys.any(
+                          (k) => k != 'since' && k != 'who',
+                        ))))) {
           throw const FormatException();
         }
         final occurrence = m['operation'] == 'item-occurrence';
@@ -2319,6 +2398,7 @@ class HubRepository {
         String? resolutionId,
             scheduleId,
             effortId,
+            waitId,
             ideaLinkId,
             occurrenceNext,
             askId;
@@ -2443,6 +2523,8 @@ class HubRepository {
               ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}${m['repeat'] is Map ? '・${_repeatLabelOf(m['repeat'])}' : ''}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemEffort
               ? '${m['effort'] == null ? '手間の目安を外す依頼' : '手間の目安の依頼（${itemEffortLabels[m['effort']]}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemWait
+              ? '${waitValue == null ? '連絡待ちを外す依頼' : '連絡待ちの依頼（${(waitValue as Map)['who'] == null ? '' : '相手: ${waitValue['who']}・'}頼んだ日 ${waitValue['since']}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : hintDismiss
               ? '「片付いたかも」の見送り: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
@@ -2595,6 +2677,19 @@ class HubRepository {
                 throw const FormatException();
               }
               effortId = r['effortId'] as String;
+            }
+            if (itemWait) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['waitId'] is! String ||
+                  !RegExp(
+                    r'^WAIT-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['waitId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              waitId = r['waitId'] as String;
             }
             if (occurrence) {
               final r = ack['result'] as Map;
@@ -2889,6 +2984,16 @@ class HubRepository {
             times: _effortTimes,
             outstanding: _outstandingEfforts,
             what: '手間の目安',
+          );
+        }
+        if (itemWait) {
+          _itemRequest(
+            item,
+            m,
+            waitId,
+            times: _waitTimes,
+            outstanding: _outstandingWaits,
+            what: '連絡待ち',
           );
         }
         if (hintDismiss) _hintDismissRequest(item, m);

@@ -78,7 +78,8 @@ Map<String, Object?> homeWidgetContent(
       rest.add((p.id, p.title, NowEntry('$actionLabel${a.text}')));
     }
     var order = 0;
-    for (final e in p.entriesWithSource('next')) {
+    // 連絡待ちの印を付けた行は出さない（自分では進められないため。相手の名前も出さない）。
+    for (final e in p.activeEntries('next')) {
       order++;
       final item = e.itemKey == null
           ? null

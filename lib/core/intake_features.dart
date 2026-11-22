@@ -59,13 +59,17 @@ class IntakeFeatures {
   /// 手間の目安の依頼（item-effort）で選べる値（`item_efforts`）。
   final Set<String> itemEfforts;
 
-  /// 期日・定例の回・手間の目安の依頼を受け付ける、プロジェクト以外の置き場（`item_record_scopes`）。
+  /// 期日・定例の回・手間の目安・連絡待ちの依頼を受け付ける、プロジェクト以外の置き場（`item_record_scopes`）。
   final Set<String> itemRecordScopes;
 
   /// 次の一手・未解決に手間の目安を付けられる。
   bool get effort =>
       operations.contains('item-effort') &&
       itemEfforts.containsAll(models.itemEfforts);
+
+  /// 次の一手・未解決に連絡待ちの印（相手・頼んだ日）を付け外しできる（item-wait）。
+  /// プロジェクト未定の行動に付けられるかは[unassignedRecords]で決まる。
+  bool get wait => operations.contains('item-wait');
 
   /// メモ・作業要約を、前のメモの続きとして送れる（`continues`）。
   bool get continues => captureFields.contains('continues');
