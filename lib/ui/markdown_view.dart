@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../app/controller.dart';
+import 'mermaid_block.dart';
 import 'notice.dart';
 
 class SafeMarkdown extends StatelessWidget {
@@ -18,6 +19,9 @@ class SafeMarkdown extends StatelessWidget {
   Widget build(BuildContext context) => MarkdownBody(
     data: text,
     selectable: true,
+    // 「```mermaid」のコードブロックは図にする。
+    blockSyntaxes: const [MermaidBlockSyntax()],
+    builders: {mermaidTag: MermaidElementBuilder()},
     imageBuilder: (uri, title, alt) => Text(
       '［画像は表示しません${alt == null ? '' : ': $alt'}］',
       style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
