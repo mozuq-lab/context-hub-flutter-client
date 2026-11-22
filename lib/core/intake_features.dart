@@ -23,6 +23,7 @@ class IntakeFeatures {
     this.askMaxChars = askQuestionChars,
     this.captureKinds = const {},
     this.itemScopes = const {},
+    this.actionScopes = const {},
     this.reviewRejects = const {},
     this.itemEfforts = const {},
   });
@@ -48,6 +49,9 @@ class IntakeFeatures {
   /// 完了・却下を受け付ける、プロジェクト以外の項目の置き場（`item_scopes`）。
   final Set<String> itemScopes;
 
+  /// プロジェクトを指定せずに行動（`kind: action`）を足せる置き場（`action_scopes`）。
+  final Set<String> actionScopes;
+
   /// 確認待ち以外で却下を受け付ける候補の状態（`review_rejects`）。`stale`は古くなった候補。
   final Set<String> reviewRejects;
 
@@ -72,6 +76,10 @@ class IntakeFeatures {
 
   /// 本人が次の一手に直接足す行動（`kind: action`）を送れる。
   bool get actions => captureKinds.contains('action');
+
+  /// プロジェクトを決めずに行動を足せる（プロジェクト未定の次の一手に載り、完了・却下・今日やるが使える）。
+  bool get unassignedActions =>
+      actions && unassignedItems && actionScopes.contains(unassignedScope);
   bool get policyKeep => operations.contains('policy-keep');
 
   /// 人の登録・名前と呼び名の変更・外す依頼（人ごとの見返し）。
@@ -104,6 +112,7 @@ class IntakeFeatures {
       final schedule = m['item_schedule_fields'], ask = m['ask'];
       final kinds = m['capture_kinds'],
           scopes = m['item_scopes'],
+          actionScopes = m['action_scopes'],
           rejects = m['review_rejects'],
           efforts = m['item_efforts'];
       final askMax = ask is Map ? ask['max_question_chars'] : null;
@@ -121,6 +130,11 @@ class IntakeFeatures {
         itemScopes: {
           if (scopes is List)
             for (final v in scopes)
+              if (v is String) v,
+        },
+        actionScopes: {
+          if (actionScopes is List)
+            for (final v in actionScopes)
               if (v is String) v,
         },
         reviewRejects: {

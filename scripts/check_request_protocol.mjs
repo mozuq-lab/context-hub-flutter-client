@@ -98,13 +98,14 @@ try{
   // 本人が追加した行動は、モデルで整理せずに本人の言葉のままNOWの次の一手へ載る。元の行（AIの読み取り）は欄から外れる。
   const saved=(await readInputs(config)).find(i=>i.id===ack.result.inputId);
   assert.deepEqual({kind:saved.kind,text:saved.text,project:saved.project,tool:saved.tool,meta:saved.meta},{kind:'action',text:packet.text,project:packet.project,tool:undefined,meta:packet.meta});
-  const items=(await readNowItems(vault,packet.project)).items,item=items.find(i=>i.input_id===saved.id);
+  // プロジェクトを指定しない行動は、プロジェクト未定の項目一覧（_unassigned）に載る。
+  const scope=packet.project??'_unassigned',items=(await readNowItems(vault,scope)).items,item=items.find(i=>i.input_id===saved.id);
   assert.deepEqual({section:item.section,label:item.label,text:item.text,resolution:item.resolution},{section:'next',label:'本人が追加: ',text:packet.text,resolution:null});
   assert.deepEqual(item.action,packet.meta?{from:{input_id:packet.meta.action_from_input,text:packet.meta.action_from_text,...(packet.meta.action_from_key?{key:packet.meta.action_from_key}:{})}}:{});
   if(packet.meta?.action_from_key)assert.ok(!items.some(i=>i.key===packet.meta.action_from_key));
   const llm=new MockLlm();let calls=0;const complete=llm.complete.bind(llm);llm.complete=(...a)=>{calls++;return complete(...a);};
   await organize(config,llm);assert.equal(calls,0);
-  if(packet.meta)assert.ok(!(await vault.read(`10_projects/${packet.project}/NOW.md`)).includes(`${packet.meta.action_from_text} [${packet.meta.action_from_input}](`));
+  if(packet.meta&&packet.project)assert.ok(!(await vault.read(`10_projects/${packet.project}/NOW.md`)).includes(`${packet.meta.action_from_text} [${packet.meta.action_from_input}](`));
  }else if(packet.continues!==undefined){
   // 続きは前のメモにつながり、プロジェクトを選ばなければ前のメモで指定したプロジェクトを引き継ぐ。
   const inputs=await readInputs(config),saved=inputs.find(i=>i.id===ack.result.inputId),parent=inputs.find(i=>i.id===packet.continues);

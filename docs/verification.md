@@ -265,10 +265,10 @@
 
 ## メモの続きと、次の一手の手間の目安（2026-11-22）
 
-- 本体の固定参照を、メモの続きと手間の目安を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-1jd35u`）のコミット（`19bc373`）へ進めた。本体の対応表に`capture_fields`の`continues`、`operations`の`item-effort`、`item_efforts`が加わったため、読取fixtureを再生成した。
+- 本体の固定参照を、メモの続きと手間の目安を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-1jd35u`）のコミット（`ab08732`。本体mainの`d5fb0a7`を取り込んだもの）へ進めた。本体の対応表に`capture_fields`の`continues`、`operations`の`item-effort`、`item_efforts`が加わったため、読取fixtureを再生成した。
 - 続き: Dartが保存した`continues`付きの`capture`のREQを本体へ渡し、受理・重複排除・前のメモへのつながり・プロジェクトを送らないときに前のメモのプロジェクトを引き継ぐことを確認（`scripts/check_request_protocol.mjs`）。記録の詳細の「続きを書く」から保存し、「前のメモと同じ（プロジェクト名）」と示してプロジェクトを送らないこと、前のメモ・続きの一覧を引けることをテストで確認。
 - 手間の目安: Dartが保存した`item-effort`のREQを本体へ渡し、受理・重複排除・項目一覧の`effort`とNOWの行末「手間 15分ほど」を確認。同期後に反映待ちが外れること、反映待ちの間は重ねて依頼しないこと、「次の一手」の絞り込み（1時間でできるものに15分でできるものを含める・項目に結び付かない行は絞り込み中に出さない・該当なしの表示）をwidgetテストで確認。知らない段階は一覧を捨てずに目安なしとして読む。
-- mainのFlutter 3.47.9への更新を取り込んだ後、Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通529テスト成功。
+- mainのFlutter 3.47.9への更新を取り込んだ後、Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通536テスト成功。
 
 ## 制限・追加確認
 

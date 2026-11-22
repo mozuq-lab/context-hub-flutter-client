@@ -151,6 +151,19 @@ class HubRepository {
       .where((i) => i.inputId == inputId && i.text == text)
       .firstOrNull;
 
+  /// プロジェクトを決めずに本人が追加した行動のうち、片付いていないもの（追加した順）。対応前の本体では空。
+  List<NowItemRef> get unassignedOwnActions => [
+    for (final i in unassignedItems)
+      if (i.action && !i.resolved) i,
+  ];
+
+  /// プロジェクトを決めずに追加を依頼し、まだ項目一覧に載っていない行動（端末に保存した依頼・Miniが受け付けた依頼）。
+  final List<PendingAction> unassignedPendingActions = [];
+
+  /// プロジェクト未定の次の一手として数える件数（本人が追加した行動と、その反映待ち）。AIの読み取りの行は数えない。
+  int get unassignedActionCount =>
+      unassignedOwnActions.length + unassignedPendingActions.length;
+
   /// プロジェクト未定の行のうち、本人が完了・却下したもの（新しい報告順）。
   List<NowItemRef> get closedUnassigned => [
     for (final i in unassignedItems)
@@ -2285,10 +2298,12 @@ class HubRepository {
         // 本人が次の一手へ直接追加する行動（capture・kind: action）。本文は1行の本人の言葉で、プロジェクトの指定が要る。
         final actionCapture =
             m['operation'] == 'capture' && m['kind'] == 'action';
+        // プロジェクトを指定しない行動は、プロジェクト未定の次の一手に載る。
         if (actionCapture &&
             (!validActionText(doc.body) ||
-                m['project'] is! String ||
-                !projectIdPattern.hasMatch(m['project']) ||
+                (m['project'] != null &&
+                    (m['project'] is! String ||
+                        !projectIdPattern.hasMatch(m['project']))) ||
                 m.containsKey('tool') ||
                 (m['meta'] != null && _actionSourceOf(m['meta']) == null))) {
           throw const FormatException();
@@ -2438,7 +2453,7 @@ class HubRepository {
               : correction
               ? '訂正: ${readableTitle(doc.body)}'
               : actionCapture
-              ? '次の一手への追加: ${doc.body}（${projects[m['project']]?.title ?? m['project']}）'
+              ? '次の一手への追加: ${doc.body}（${m['project'] == null ? 'プロジェクト未定' : projects[m['project']]?.title ?? m['project']}）'
               : readableTitle(doc.body),
           at: timestamp(m['occurred_at']),
         );
@@ -3434,34 +3449,37 @@ class HubRepository {
     String text,
     String? inputId,
   ) {
-    final project = projects[m['project']];
+    final unassigned = m['project'] == null,
+        project = unassigned ? null : projects[m['project']];
     // NOWの本文（NOW.md）に載った、または完了・誤りとして外した後なら反映済み。項目一覧だけに載った
     // （NOWの手編集で本文を作り直せなかった・同期の途中）ときは、行動が見えなくならないよう反映待ちのまま示す。
+    // プロジェクト未定の行動は、プロジェクト未定の項目一覧に載れば反映済み（NOWの本文はない）。
     final shown =
         inputId != null &&
-        projects.values.any(
-          (p) => p.nowItems.any(
-            (i) =>
-                i.inputId == inputId &&
-                i.action &&
-                (i.resolved ||
-                    p.sections['next']!.any((e) => e.itemKey == i.key)),
-          ),
-        );
+        (projects.values.any(
+              (p) => p.nowItems.any(
+                (i) =>
+                    i.inputId == inputId &&
+                    i.action &&
+                    (i.resolved ||
+                        p.sections['next']!.any((e) => e.itemKey == i.key)),
+              ),
+            ) ||
+            unassignedItems.any((i) => i.inputId == inputId && i.action));
     if (item.state == 'accepted') {
       item.detail = shown
           ? '次の一手にMac miniが追加しました。'
           : 'Mac miniが受け取り済み。現状の同期を待っています。';
     }
-    if (project == null ||
+    if ((project == null && !unassigned) ||
         shown ||
         !const ['waiting', 'accepted'].contains(item.state)) {
       return;
     }
-    project.pendingActions.add(
+    (project?.pendingActions ?? unassignedPendingActions).add(
       PendingAction(
         requestId: item.id,
-        projectId: project.id,
+        projectId: project?.id ?? unassignedScope,
         text: text,
         state: item.state,
         from: m['meta'] == null ? null : _actionSourceOf(m['meta']),
@@ -3527,8 +3545,10 @@ class HubRepository {
   /// 反映待ちの行動の元にした行（作業要約の次の一手・「提案」）を、次の一手と提案の欄から外す。
   /// 本体も反映するとどのプロジェクトのNOWからも外すため、反映待ちの間に二重に並べたり数えたりしない。
   void _hideTakenOver() {
-    final pending = [for (final p in projects.values) ...p.pendingActions];
-    if (!pending.any((a) => a.from != null)) return;
+    // 反映済みの行動の元の行も外す。同期の順で、行動の載った一覧（プロジェクト未定など）だけが先に届き、
+    // 元の行のNOWがまだ古いときに、二重に並べたり数えたりしないため。
+    final taken = _takenRefs;
+    if (taken.isEmpty) return;
     for (final p in projects.values) {
       p.sections['next']!.removeWhere((e) {
         final item = e.itemKey == null
@@ -3536,21 +3556,41 @@ class HubRepository {
             : p.nowItems.where((i) => i.key == e.itemKey).firstOrNull;
         return item != null &&
             !item.action &&
-            pendingActionFrom(item.inputId, item.text);
+            taken.contains('${item.inputId}\n${item.text}');
       });
       p.sections['proposals']!.removeWhere((e) {
         final from = proposalSource(e);
-        return from != null && pendingActionFrom(from.inputId, from.text);
+        return from != null && taken.contains('${from.inputId}\n${from.text}');
       });
     }
   }
 
-  /// 反映待ちの行動の元にした行か（どのプロジェクトの行動でも同じ行は本人が引き取ったものとして扱う。本体と同じ）。
-  bool pendingActionFrom(String inputId, String text) => projects.values.any(
-    (p) => p.pendingActions.any(
-      (a) => a.from?.inputId == inputId && a.from?.text == text,
-    ),
-  );
+  /// 行動にした行（反映待ちの行動の元と、どの置き場の行動にも記録された元の行）の、根拠の入力IDと本文の組。
+  Set<String> get _takenRefs => {
+    for (final a in [
+      for (final p in projects.values) ...p.pendingActions,
+      ...unassignedPendingActions,
+    ])
+      if (a.from case final from?) '${from.inputId}\n${from.text}',
+    for (final i in [
+      for (final p in projects.values) ...p.nowItems,
+      ...unassignedItems,
+    ])
+      if (i.fromInputId != null && i.fromText != null)
+        '${i.fromInputId}\n${i.fromText}',
+  };
+
+  /// 反映待ちの行動の元にした行か（どのプロジェクトの行動でも、プロジェクト未定の行動でも、
+  /// 同じ行は本人が引き取ったものとして扱う。本体と同じ）。
+  bool pendingActionFrom(String inputId, String text) =>
+      [
+        for (final p in projects.values) ...p.pendingActions,
+        ...unassignedPendingActions,
+      ].any((a) => a.from?.inputId == inputId && a.from?.text == text);
+
+  /// 行動にした行か（反映待ちの行動の元か、どの置き場の行動の元の行として記録されているか）。
+  bool takenOver(String inputId, String text) =>
+      _takenRefs.contains('$inputId\n$text');
 
   /// 「片付いたかも」の見送りの反映状況。NOWの項目一覧からその候補が消えていれば反映済みとする。
   void _hintDismissRequest(IntakeStatus item, Map<String, dynamic> m) {
