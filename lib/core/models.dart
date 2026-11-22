@@ -142,6 +142,7 @@ class NowItemRef {
     this.fromText,
     this.fromKey,
     this.effort,
+    this.contexts = const [],
     this.waitingId,
     this.waitingSince,
     this.waitingWho,
@@ -167,6 +168,9 @@ class NowItemRef {
 
   /// 本人が付けた手間の目安（[itemEfforts]）。目安のない項目や、目安を知らない本体ではnull。
   final String? effort;
+
+  /// 本人が付けた場所・道具の札（本体のitem-contexts、付けた順）。札のない項目や、札を知らない本体では空。
+  final List<String> contexts;
 
   /// 本人が直接追加した行動（本体の入力の種類action）。AIの読み取りではない。
   final bool action;
@@ -219,7 +223,51 @@ String itemRecordLabel(NowItemRef item) => [
     '期日 ${item.due}${item.repeat == null ? '' : '（${item.repeat!.label}）'}',
   if (item.reviewAfter != null) '見直す日 ${item.reviewAfter}',
   if (itemEffortLabels[item.effort] case final effort?) '手間 $effort',
+  if (item.contexts.isNotEmpty) contextsLabel(item.contexts),
 ].join('・');
+
+/// 本体と同じ、場所・道具の札の上限（1つの札の文字数・1項目の札の数・語彙の数）。
+const contextTagChars = 20, contextTagsMax = 8, contextVocabularyMax = 30;
+
+/// 語彙がないときの既定の例（本体のdefaultContextVocabularyと同じ）。
+const defaultContextVocabulary = ['家', '外出先', 'PC', '電話'];
+
+/// 本体のNOWの行末と同じ、札の表示（「@家 @PC」）。
+String contextsLabel(List<String> tags) => tags.map((t) => '@$t').join(' ');
+
+/// 札として送れる文字列か（本体のcontextTagSchemaと同じ規則: 1〜20文字、NFC、空白・制御文字・書式文字・「@・、,<>`」・括弧を含まない）。
+bool validContextTag(Object? value) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= contextTagChars &&
+    unicode.nfc(value) == value &&
+    !_contextTagForbidden.hasMatch(value);
+
+/// 入力した札を送る形に整える（前後の空白を除き、NFCにする）。
+String normalizeContextTag(String value) => unicode.nfc(value.trim());
+
+/// 札に使えない文字（本体の`contextTagSchema`と同じ。制御・書式・空白の各文字と、表示の区切りやMarkdownと紛れる文字）。
+final _contextTagForbidden = RegExp(
+  r'[\p{Cc}\p{Cf}\p{Z}\s@＠、,，・()（）\[\]［］<>`]',
+  unicode: true,
+);
+
+/// 項目の札の全体として送れるか（1〜8個、同じ札を重ねない）。
+bool validContextTags(List<String> tags) =>
+    tags.isNotEmpty &&
+    tags.length <= contextTagsMax &&
+    tags.toSet().length == tags.length &&
+    tags.every(validContextTag);
+
+/// 「次の一手」画面の札での絞り込みで、札のない項目を選ぶ値（札そのものとは重ならない）。
+const contextFilterNone = '';
+
+/// 札が絞り込み（nullはすべて、[contextFilterNone]は札なし、ほかは札そのもの）に合うか。
+bool contextFits(String? filter, List<String> contexts) => switch (filter) {
+  null => true,
+  contextFilterNone => contexts.isEmpty,
+  final tag => contexts.contains(tag),
+};
 
 /// 本体と同じ、連絡待ちの相手の上限（UTF-16の単位で数える）。
 const waitWhoChars = 40;

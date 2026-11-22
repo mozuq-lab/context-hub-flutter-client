@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'models.dart' show contextVocabularyMax, validContextTag;
 import 'parser.dart' show projectIdPattern, timestamp;
 import 'templates.dart';
 
@@ -9,10 +10,18 @@ import 'templates.dart';
 /// 自分が覚えている日時より新しいまとまりを取り込む。既読・ウインドウ・通知・APIキーのような端末ごとの状態は送らない。
 const clientPreferencesPath = '90_system/client-preferences.json';
 const preferenceGroups = ['pins', 'templates', 'basket'];
+
+/// Vaultに置く、端末の間で共有するまとまり。好みをそろえる設定に関係なく、対応した本体ならいつも送り、読む。
+/// contextsは場所・道具の札の語彙（札を選ぶときの一覧）。
+const vaultPreferenceGroups = ['contexts'];
+
+/// 本体の記録と受付ファイルで扱うまとまり。
+const sharedPreferenceGroups = [...preferenceGroups, ...vaultPreferenceGroups];
 const preferenceGroupLabels = {
   'pins': 'ピン留めと並び順',
   'templates': 'メモのひな形',
   'basket': '文脈かごの上限',
+  'contexts': '場所・道具の札の一覧',
 };
 
 /// 受付ファイルの本文の上限（本体のPREFERENCES_MAX_BYTESと同じ）。
@@ -90,12 +99,26 @@ int? basketValue(Map<String, dynamic> value) {
   return max;
 }
 
+/// 場所・道具の札の語彙（本人が決めた並び）。形式が合わなければnull。
+List<String>? contextsValue(Map<String, dynamic> value) {
+  final items = value['items'];
+  if (value.length != 1 ||
+      items is! List ||
+      items.length > contextVocabularyMax ||
+      !items.every(validContextTag) ||
+      items.toSet().length != items.length) {
+    return null;
+  }
+  return List<String>.from(items);
+}
+
 bool _validValue(String group, Object? value) =>
     value is Map<String, dynamic> &&
     switch (group) {
       'pins' => pinsValue(value) != null,
       'templates' => templatesValue(value) != null,
       'basket' => basketValue(value) != null,
+      'contexts' => contextsValue(value) != null,
       _ => false,
     };
 
@@ -109,10 +132,11 @@ Map<String, SharedPreference> parseSharedPreferences(Object? json) {
   }
   final out = <String, SharedPreference>{};
   for (final e in (json['groups'] as Map).entries) {
+    // 新しい本体が足したまとまりは読み飛ばす（知っているまとまりは使い続ける）。
+    if (!sharedPreferenceGroups.contains(e.key)) continue;
     final v = e.value;
     final at = v is Map ? timestamp(v['updated_at']) : null;
-    if (!preferenceGroups.contains(e.key) ||
-        v is! Map ||
+    if (v is! Map ||
         at == null ||
         v['device'] is! String ||
         !_device.hasMatch(v['device']) ||
@@ -139,7 +163,7 @@ String encodePreferencesPayload(
   'schema_version': 1,
   'device': device,
   'groups': {
-    for (final g in preferenceGroups)
+    for (final g in sharedPreferenceGroups)
       if (groups[g] case final entry?)
         g: {
           'updated_at': entry.at.toUtc().toIso8601String(),
@@ -147,6 +171,19 @@ String encodePreferencesPayload(
         },
   },
 });
+
+/// 受付ファイルの本文から、まとまりの変えた日時と値を読む。形式が合わないか、そのまとまりがなければnull。
+({DateTime at, Map<String, dynamic> value})? preferenceEntryOf(
+  String body,
+  String group,
+) {
+  if (!(preferenceGroupsOf(body)?.contains(group) ?? false)) return null;
+  final v = (jsonDecode(body) as Map)['groups'][group] as Map;
+  return (
+    at: timestamp(v['updated_at'])!,
+    value: Map<String, dynamic>.from(v['value'] as Map),
+  );
+}
 
 /// 受付ファイルの本文を読み、送ったまとまりを返す。形式が合わなければnull。
 List<String>? preferenceGroupsOf(String body) {
@@ -165,7 +202,7 @@ List<String>? preferenceGroupsOf(String body) {
     final groups = <String>[];
     for (final e in (j['groups'] as Map).entries) {
       final v = e.value;
-      if (!preferenceGroups.contains(e.key) ||
+      if (!sharedPreferenceGroups.contains(e.key) ||
           v is! Map ||
           v.length != 2 ||
           timestamp(v['updated_at']) == null ||

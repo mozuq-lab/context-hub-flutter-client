@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unicode;
@@ -193,6 +194,9 @@ class _HubViewState extends State<HubView> {
 
   /// 「次の一手」画面の手間の目安での絞り込み（[effortFilters]のキー）。nullならすべて。
   String? effortFilter;
+
+  /// 「次の一手」画面の場所・道具の札での絞り込み。nullならすべて、[contextFilterNone]なら札なし、ほかは札そのもの。
+  String? contextFilter;
 
   /// 「次の一手」画面のプロジェクト未定のメモは[unassignedPageSize]件ずつ並べ、「さらに表示」で残りを出す。
   static const unassignedPageSize = 10;
@@ -1845,6 +1849,64 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 場所・道具の札を選んで依頼する。札は本人が選び、AIは付けない。語彙の一覧もここから変えられる。
+  /// [projectId]は項目の置き場（プロジェクト未定もある）。
+  Future<void> contextsItem(String projectId, NowItemRef item) async {
+    final choice = await showDialog<({List<String>? contexts})>(
+      context: context,
+      builder: (_) => ContextsDialog(
+        item: item,
+        vocabulary: () => repo.contextVocabulary,
+        editVocabulary: editContextVocabulary,
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      final result = await c.requestItemContexts(
+        projectId,
+        item.key,
+        choice.contexts,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '場所・道具の札を依頼しました。Mac miniで処理されると現状と一覧に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 場所・道具の札の一覧（語彙）を編集して、Vaultの好みとして依頼する。依頼したらtrue。
+  Future<bool> editContextVocabulary() async {
+    final next = await showDialog<List<String>>(
+      context: context,
+      builder: (_) => ContextVocabularyDialog(
+        current: repo.contextVocabulary,
+        pending: repo.contextVocabularyPending,
+      ),
+    );
+    if (next == null || !mounted) return false;
+    try {
+      final result = await c.requestContextVocabulary(next);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '札の一覧を依頼しました。Mac miniで処理されると、ほかの端末にも同じ一覧が出ます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+      return result.saved;
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+      return false;
+    }
+  }
+
   /// 連絡待ちの印（相手・頼んだ日）を依頼する。見直す日を変えたときは、続けて日付も依頼する（見直す日は期日と同じ記録）。
   /// [projectId]は項目の置き場（プロジェクト未定もある）。
   Future<void> waitItem(String projectId, NowItemRef item) async {
@@ -2172,15 +2234,29 @@ class _HubViewState extends State<HubView> {
       notice(context, '追加できる進行中のプロジェクトがありません。');
       return;
     }
-    final value = await showDialog<({String projectId, String text})>(
-      context: context,
-      builder: (_) => ActionDialog(
-        projects: choices,
-        from: from,
-        allowUnassigned: allowUnassigned,
-        unassigned: unassigned || choices.isEmpty,
-      ),
-    );
+    // 新しく足す行動には、対応した本体なら手間の目安と札を一緒に付けられる（AIの行を引き取るときは、元の行の札と目安を本体が写す）。
+    final features = repo.intakeFeatures;
+    final value =
+        await showDialog<
+          ({
+            String projectId,
+            String text,
+            String? effort,
+            List<String>? contexts,
+          })
+        >(
+          context: context,
+          builder: (_) => ActionDialog(
+            projects: choices,
+            from: from,
+            allowUnassigned: allowUnassigned,
+            unassigned: unassigned || choices.isEmpty,
+            effortChoice: from == null && features.actionEffort,
+            contextChoices: from == null && features.actionContexts
+                ? repo.contextVocabulary
+                : null,
+          ),
+        );
     if (value == null || !mounted) return;
     final checked = await checkSecretsBeforeSave(
       context,
@@ -2197,6 +2273,8 @@ class _HubViewState extends State<HubView> {
         value.projectId,
         checked,
         from: from,
+        effort: value.effort,
+        contexts: value.contexts,
       );
       if (mounted) {
         notice(
@@ -3085,6 +3163,9 @@ class _HubViewState extends State<HubView> {
             effortPending =
             repo.effortRequestIdFor(key) != null,
         effort = repo.intakeFeatures.effort && !project.merged,
+        // 場所・道具の札。依頼が反映待ちの間は出さない。
+        contextsPending = repo.contextsRequestIdFor(key) != null,
+        contexts = repo.intakeFeatures.contexts && !project.merged,
         // 連絡待ちの印。依頼が反映待ちの間は出さない。
         waitPending = repo.waitRequestIdFor(key) != null,
         wait = repo.intakeFeatures.wait && !project.merged,
@@ -3112,6 +3193,7 @@ class _HubViewState extends State<HubView> {
             repo.intakeFeatures.actionMoves &&
             !scheduling &&
             !effortPending &&
+            !contextsPending &&
             !waitPending &&
             !somedayPending,
         calendar =
@@ -3130,6 +3212,12 @@ class _HubViewState extends State<HubView> {
           key: Key('effort-$tag'),
           value: () => effortItem(project.id, item),
           child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
+        ),
+      if (contexts && !contextsPending)
+        PopupMenuItem(
+          key: Key('contexts-$tag'),
+          value: () => contextsItem(project.id, item),
+          child: Text(item.contexts.isEmpty ? '場所・道具の札を付ける' : '場所・道具の札を変える'),
         ),
       if (wait && !waitPending && !somedayPending && !item.someday)
         PopupMenuItem(
@@ -3216,6 +3304,11 @@ class _HubViewState extends State<HubView> {
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 10),
           child: Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        ),
+      if (contextsPending)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Text('札を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         ),
       if (waitPending)
         const Padding(
@@ -3379,6 +3472,23 @@ class _HubViewState extends State<HubView> {
     // 手間の目安での絞り込み。目安に対応した本体のときだけ使う。
     final efforts = repo.intakeFeatures.effort,
         filter = efforts ? effortFilter : null;
+    // 場所・道具の札での絞り込み。札に対応した本体のときだけ使う。手間の目安と両方選ぶと、両方に合う項目だけを出す。
+    final contextsOn = repo.intakeFeatures.contexts,
+        tags = contextsOn ? repo.contextTagsInUse : const <String>[],
+        contextChoice = contextsOn && contextFilter != null
+            ? (contextFilter == contextFilterNone || tags.contains(contextFilter)
+                  ? contextFilter
+                  : null)
+            : null,
+        filtering = filter != null || contextChoice != null;
+    // 選んでいた札が選択肢から消えたら、絞り込みを外したことにする（後で札が戻っても、黙って絞り込み直さない）。
+    if (contextFilter != null && contextChoice == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && contextFilter != null) {
+          setState(() => contextFilter = null);
+        }
+      });
+    }
     var matched = 0, somedays = 0;
     for (final project in projects) {
       final rest = <NowEntry>[];
@@ -3395,9 +3505,10 @@ class _HubViewState extends State<HubView> {
           waits.add((project, entry, item, order));
           continue;
         }
-        // 項目に結び付かない行は目安が分からないので、絞り込み中は出さない（「目安なし」とも言えない）。
-        if (filter != null && item == null) continue;
+        // 項目に結び付かない行は目安も札も分からないので、絞り込み中は出さない（「目安なし」「札なし」とも言えない）。
+        if (filtering && item == null) continue;
         if (!effortFits(filter, item?.effort)) continue;
+        if (!contextFits(contextChoice, item?.contexts ?? const [])) continue;
         if (item == null || !item.scheduled) {
           matched++;
           rest.add(entry);
@@ -3442,6 +3553,7 @@ class _HubViewState extends State<HubView> {
       for (final item in repo.unassignedOwnActions) {
         order++;
         if (!effortFits(filter, item.effort)) continue;
+        if (!contextFits(contextChoice, item.contexts)) continue;
         final b = item.scheduled
             ? scheduleBucket(item.due, item.reviewAfter, today)
             : null;
@@ -3487,7 +3599,7 @@ class _HubViewState extends State<HubView> {
         ],
         // 確認に出したものは、下の「連絡待ち」には重ねて出さない（同じ操作が2か所に並ばないように）。
         waitRest = [
-          if (filter == null)
+          if (!filtering)
             for (final w in waits)
               if (!waitingCheckDue(w.$3, today)) w,
         ];
@@ -3589,6 +3701,39 @@ class _HubViewState extends State<HubView> {
             ],
           ),
         ),
+      if (contextsOn && count[section] != 0)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text('場所・道具', style: TextStyle(fontSize: 12)),
+              for (final (value, label) in [
+                (null, 'すべて'),
+                for (final t in tags) (t, t),
+                (contextFilterNone, '札なし'),
+              ])
+                ChoiceChip(
+                  key: Key(switch (value) {
+                    null => 'context-filter-all',
+                    contextFilterNone => 'context-filter-none',
+                    final t => 'context-filter-tag-$t',
+                  }),
+                  label: Text(label),
+                  selected: contextChoice == value,
+                  onSelected: (_) => setState(() => contextFilter = value),
+                ),
+              IconButton(
+                key: const Key('context-vocabulary-edit'),
+                tooltip: '札の一覧を編集',
+                onPressed: busy ? null : () => editContextVocabulary(),
+                icon: const Icon(Icons.edit_outlined, size: 16),
+              ),
+            ],
+          ),
+        ),
       const SizedBox(height: 20),
       if (checks.isNotEmpty) ...[
         Text(
@@ -3618,12 +3763,12 @@ class _HubViewState extends State<HubView> {
           padding: EdgeInsets.only(bottom: 24),
           child: Text('進行中のプロジェクトはありません。'),
         )
-      else if (filter != null && count[section] != 0 && matched == 0)
+      else if (filtering && count[section] != 0 && matched == 0)
         Padding(
           key: const Key('effort-filter-empty'),
           padding: const EdgeInsets.only(bottom: 24),
           child: Text(
-            '「${effortFilters[filter]}」に合う${sectionLabels[section]}はありません。目安は各項目の「…」から付けられます。',
+            '「${[if (filter != null) effortFilters[filter], if (contextChoice != null) contextChoice == contextFilterNone ? '札なし' : '@$contextChoice'].join('・')}」に合う${sectionLabels[section]}はありません。目安と札は各項目の「…」から付けられます。',
           ),
         )
       else if (count[section] == 0)
@@ -3668,7 +3813,7 @@ class _HubViewState extends State<HubView> {
         if (listed[project.id]! case final entries
             when entries.isNotEmpty ||
                 (section == 'next' &&
-                    filter == null &&
+                    !filtering &&
                     project.pendingActions.isNotEmpty)) ...[
           InkWell(
             key: Key('next-project-${project.id}'),
@@ -3708,7 +3853,7 @@ class _HubViewState extends State<HubView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (section == 'next' && filter == null)
+                  if (section == 'next' && !filtering)
                     for (final action in project.pendingActions)
                       pendingActionRow(action),
                   for (final entry in entries)
@@ -3719,16 +3864,16 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
-      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。目安で絞り込んでいる間は、
-      // 目安に合う本人の行動だけを出す（AIの行とメモには目安がない）。
+      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。目安・札で絞り込んでいる間は、
+      // 合う本人の行動だけを出す（AIの行とメモには目安も札もない）。
       if (section == 'next' &&
-          filter == null &&
+          !filtering &&
           (repo.unassignedMemos.isNotEmpty ||
               repo.unassignedActionCount > 0 ||
               (repo.intakeFeatures.unassignedItems &&
                   repo.closedUnassigned.isNotEmpty)))
         ...unassignedGroup(ownListed)
-      else if (section == 'next' && filter != null && ownListed.isNotEmpty) ...[
+      else if (section == 'next' && filtering && ownListed.isNotEmpty) ...[
         const Text(
           'プロジェクト未定',
           key: Key('next-unassigned'),
@@ -5116,6 +5261,8 @@ class _HubViewState extends State<HubView> {
         scheduling = repo.scheduleRequestIdFor(item.key) != null,
         effortPending = repo.effortRequestIdFor(item.key) != null,
         effort = records && repo.intakeFeatures.effort,
+        contextsPending = repo.contextsRequestIdFor(item.key) != null,
+        contexts = records && repo.intakeFeatures.contexts,
         waitPending = repo.waitRequestIdFor(item.key) != null,
         wait = records && repo.intakeFeatures.wait,
         somedayPending = repo.somedayRequestIdFor(item.key) != null,
@@ -5139,6 +5286,7 @@ class _HubViewState extends State<HubView> {
             repo.correctionRequestIdForInput(item.inputId) == null &&
             !scheduling &&
             !effortPending &&
+            !contextsPending &&
             !waitPending &&
             !somedayPending;
     final more = <PopupMenuEntry<VoidCallback>>[
@@ -5160,6 +5308,12 @@ class _HubViewState extends State<HubView> {
           key: Key('unassigned-effort-$tag'),
           value: () => effortItem(unassignedScope, item),
           child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
+        ),
+      if (contexts && !contextsPending)
+        PopupMenuItem(
+          key: Key('unassigned-contexts-$tag'),
+          value: () => contextsItem(unassignedScope, item),
+          child: Text(item.contexts.isEmpty ? '場所・道具の札を付ける' : '場所・道具の札を変える'),
         ),
       if (wait && !waitPending && !somedayPending && !item.someday)
         PopupMenuItem(
@@ -5223,6 +5377,8 @@ class _HubViewState extends State<HubView> {
           const Text('期日を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         if (effortPending && records)
           const Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        if (contextsPending && records)
+          const Text('札を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         if (waitPending && records)
           const Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         if (somedayPending && records)
@@ -8127,6 +8283,293 @@ class _EffortDialogState extends State<EffortDialog> {
   );
 }
 
+/// 札を選ぶチップの並び。[options]は語彙と、語彙にないが今付いている札（「一覧にない」と添える）。
+class ContextChips extends StatelessWidget {
+  const ContextChips({
+    super.key,
+    required this.options,
+    required this.vocabulary,
+    required this.selected,
+    required this.onChanged,
+    this.keyPrefix = 'contexts-choice',
+  });
+  final List<String> options, vocabulary, selected;
+  final ValueChanged<List<String>> onChanged;
+  final String keyPrefix;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 4,
+    children: [
+      for (final t in options)
+        FilterChip(
+          key: Key('$keyPrefix-$t'),
+          label: Text(vocabulary.contains(t) ? t : '$t（一覧にない）'),
+          selected: selected.contains(t),
+          onSelected: (on) {
+            // 選んだ札は、語彙の並び（一覧にない札はその後ろ）にそろえて送る。
+            final next = on ? {...selected, t} : ({...selected}..remove(t));
+            onChanged([
+              for (final o in options)
+                if (next.contains(o)) o,
+            ]);
+          },
+        ),
+    ],
+  );
+}
+
+/// NOWの項目の場所・道具の札を選ぶ。札は本人が選び、AIは付けない。結果のcontextsがnullなら外す。
+/// 語彙から外した札が付いている項目は、その札を表示したまま付け直せる。
+class ContextsDialog extends StatefulWidget {
+  const ContextsDialog({
+    super.key,
+    required this.item,
+    required this.vocabulary,
+    required this.editVocabulary,
+  });
+  final NowItemRef item;
+
+  /// 今の語彙（一覧を変えた後に読み直すため、関数で受け取る）。
+  final List<String> Function() vocabulary;
+
+  /// 語彙を編集して依頼する。依頼したらtrue。
+  final Future<bool> Function() editVocabulary;
+  @override
+  State<ContextsDialog> createState() => _ContextsDialogState();
+}
+
+class _ContextsDialogState extends State<ContextsDialog> {
+  late List<String> selected = [...widget.item.contexts];
+  late List<String> vocabulary = widget.vocabulary();
+
+  List<String> get options => {
+    ...vocabulary,
+    for (final t in [...widget.item.contexts, ...selected])
+      if (!vocabulary.contains(t)) t,
+  }.toList();
+
+  // 札の並びだけが違う（語彙の順に並べ直した）ときは、変えていないものとする。
+  bool get unchanged =>
+      selected.length == widget.item.contexts.length &&
+      selected.toSet().containsAll(widget.item.contexts);
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('contexts-dialog'),
+    title: const Text('場所・道具の札'),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 480),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.item.display,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            if (options.isEmpty)
+              const Text('札の一覧が空です。「札の一覧を編集」から足してください。')
+            else
+              ContextChips(
+                options: options,
+                vocabulary: vocabulary,
+                selected: selected,
+                onChanged: (next) => setState(() => selected = next),
+              ),
+            if (selected.length > contextTagsMax)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '札は1つの項目に$contextTagsMax個までです。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('contexts-edit-vocabulary'),
+                onPressed: () async {
+                  if (await widget.editVocabulary() && mounted) {
+                    setState(() => vocabulary = widget.vocabulary());
+                  }
+                },
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('札の一覧を編集'),
+              ),
+            ),
+            const Text(
+              '今いる場所や手元の道具でできる項目を「次の一手」で絞り込むための札です。いくつでも選べ、何も選ばなければ札を外します。Mac miniで処理されると現状に反映され、同じ本文の項目には新しい報告が届いても引き継がれます。',
+              style: TextStyle(fontSize: 12, height: 1.6),
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('やめる'),
+      ),
+      FilledButton(
+        key: const Key('contexts-submit'),
+        onPressed: unchanged || selected.length > contextTagsMax
+            ? null
+            : () => Navigator.pop(context, (
+                contexts: selected.isEmpty ? null : selected,
+              )),
+        child: Text(
+          selected.isEmpty && widget.item.contexts.isNotEmpty
+              ? '札を外す'
+              : '依頼する',
+        ),
+      ),
+    ],
+  );
+}
+
+/// 場所・道具の札の一覧（語彙）を編集する。足す・外す・並べ替える。結果は変更後の全体。
+/// 一覧はVaultに置き、同じVaultを使うすべての端末で同じものを使う。外した札は、付いている項目に残る。
+class ContextVocabularyDialog extends StatefulWidget {
+  const ContextVocabularyDialog({
+    super.key,
+    required this.current,
+    this.pending = false,
+  });
+  final List<String> current;
+
+  /// 前の変更がまだ反映されていない（その変更の一覧を見せている）。
+  final bool pending;
+  @override
+  State<ContextVocabularyDialog> createState() =>
+      _ContextVocabularyDialogState();
+}
+
+class _ContextVocabularyDialogState extends State<ContextVocabularyDialog> {
+  late final List<String> items = [...widget.current];
+  final input = TextEditingController();
+  String? error;
+
+  @override
+  void dispose() {
+    input.dispose();
+    super.dispose();
+  }
+
+  void add() {
+    final t = normalizeContextTag(input.text);
+    setState(() {
+      if (t.isEmpty) {
+        error = null;
+      } else if (!validContextTag(t)) {
+        error = '札は$contextTagChars文字以内で、空白・「@・、,<>`」・括弧を使わずに入力してください。';
+      } else if (items.contains(t)) {
+        error = '同じ札が一覧にあります。';
+      } else if (items.length >= contextVocabularyMax) {
+        error = '札の一覧は$contextVocabularyMax個までです。';
+      } else {
+        items.add(t);
+        input.clear();
+        error = null;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('context-vocabulary-dialog'),
+    title: const Text('札の一覧'),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 480),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.pending)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '前の変更がまだMac miniで処理されていません（その一覧を表示しています）。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            for (final (i, t) in items.indexed)
+              Row(
+                key: Key('vocabulary-row-$t'),
+                children: [
+                  Expanded(child: Text(t)),
+                  IconButton(
+                    key: Key('vocabulary-up-$t'),
+                    tooltip: '上へ',
+                    onPressed: i == 0
+                        ? null
+                        : () => setState(() {
+                            items.removeAt(i);
+                            items.insert(i - 1, t);
+                          }),
+                    icon: const Icon(Icons.arrow_upward, size: 18),
+                  ),
+                  IconButton(
+                    key: Key('vocabulary-remove-$t'),
+                    tooltip: '一覧から外す',
+                    onPressed: () => setState(() => items.removeAt(i)),
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
+              ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('vocabulary-input'),
+                    controller: input,
+                    maxLength: contextTagChars,
+                    decoration: InputDecoration(
+                      labelText: '新しい札（例: 家・外出先・PC・電話・元気なとき）',
+                      errorText: error,
+                    ),
+                    onSubmitted: (_) => add(),
+                  ),
+                ),
+                IconButton(
+                  key: const Key('vocabulary-add'),
+                  tooltip: '足す',
+                  onPressed: add,
+                  icon: const Icon(Icons.add),
+                ),
+              ],
+            ),
+            const Text(
+              'この一覧は同じVaultを使うすべての端末で共有します。一覧から外しても、その札が付いている項目からは消えません（札を選ぶ画面に「一覧にない」と出ます）。',
+              style: TextStyle(fontSize: 12, height: 1.6),
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('やめる'),
+      ),
+      FilledButton(
+        key: const Key('vocabulary-submit'),
+        onPressed: listEquals(items, widget.current)
+            ? null
+            : () => Navigator.pop(context, [...items]),
+        child: const Text('依頼する'),
+      ),
+    ],
+  );
+}
+
 /// NOWの項目を「誤り」として外す理由と一言を選ぶ。完了・解決とは別の報告にする。
 class ExcludeDialog extends StatefulWidget {
   const ExcludeDialog({super.key, required this.item, required this.owned});
@@ -8248,7 +8691,15 @@ class ActionDialog extends StatefulWidget {
     this.from,
     this.allowUnassigned = false,
     this.unassigned = false,
+    this.effortChoice = false,
+    this.contextChoices,
   });
+
+  /// 追加と一緒に手間の目安を選べる（対応した本体で、新しく足す行動のとき）。
+  final bool effortChoice;
+
+  /// 追加と一緒に選べる場所・道具の札（語彙）。nullなら札の欄を出さない。
+  final List<String>? contextChoices;
 
   /// 追加先に選べるプロジェクト。1件で[allowUnassigned]でなければ、そのプロジェクトに決まっている。
   final List<HubProject> projects;
@@ -8273,6 +8724,8 @@ class _ActionDialogState extends State<ActionDialog> {
       widget.allowUnassigned && (widget.unassigned || widget.projects.isEmpty)
       ? unassignedScope
       : widget.projects.first.id;
+  String? effort;
+  List<String> contexts = const [];
 
   @override
   void dispose() {
@@ -8282,7 +8735,8 @@ class _ActionDialogState extends State<ActionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final value = text.text.trim(), valid = validActionText(value);
+    final value = text.text.trim(),
+        valid = validActionText(value) && contexts.length <= contextTagsMax;
     return AlertDialog(
       key: const Key('action-dialog'),
       title: Text(widget.from == null ? '次の一手を追加' : '自分の行動にする'),
@@ -8345,6 +8799,46 @@ class _ActionDialogState extends State<ActionDialog> {
                 ),
                 onChanged: (_) => setState(() {}),
               ),
+              if (widget.effortChoice) ...[
+                const SizedBox(height: 12),
+                const Text('手間の目安（任意）', style: TextStyle(fontSize: 12)),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    for (final e in itemEfforts)
+                      ChoiceChip(
+                        key: Key('action-effort-$e'),
+                        label: Text(itemEffortLabels[e]!),
+                        selected: effort == e,
+                        onSelected: (on) =>
+                            setState(() => effort = on ? e : null),
+                      ),
+                  ],
+                ),
+              ],
+              if (widget.contextChoices case final choices?
+                  when choices.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('場所・道具の札（任意・いくつでも）', style: TextStyle(fontSize: 12)),
+                const SizedBox(height: 4),
+                ContextChips(
+                  keyPrefix: 'action-context',
+                  options: choices,
+                  vocabulary: choices,
+                  selected: contexts,
+                  onChanged: (next) => setState(() => contexts = next),
+                ),
+                if (contexts.length > contextTagsMax)
+                  Text(
+                    '札は1つの項目に$contextTagsMax個までです。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+              ],
               const SizedBox(height: 8),
               Text(
                 project == unassignedScope
@@ -8368,7 +8862,14 @@ class _ActionDialogState extends State<ActionDialog> {
         FilledButton(
           key: const Key('action-submit'),
           onPressed: valid
-              ? () => Navigator.pop(context, (projectId: project, text: value))
+              ? () => Navigator.pop(context, (
+                  projectId: project,
+                  text: value,
+                  effort: widget.effortChoice ? effort : null,
+                  contexts: widget.contextChoices != null && contexts.isNotEmpty
+                      ? contexts
+                      : null,
+                ))
               : null,
           child: const Text('追加する'),
         ),
