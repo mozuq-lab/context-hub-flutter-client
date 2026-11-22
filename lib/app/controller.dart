@@ -1374,6 +1374,9 @@ class HubController extends ChangeNotifier {
         saving) {
       throw StateError('保存先と確認情報を先に確認してください。');
     }
+    if (draft.continues != null && !repository!.intakeFeatures.continues) {
+      throw StateError('Mac miniの本体が「続き」に対応していません。本体を更新してください。');
+    }
     final draftId = draft.gitDraftId;
     if (draftId != null) {
       // 保存確認待ちの操作がある間は、同じ下書きから二重に入力を作らない。
@@ -1408,7 +1411,7 @@ class HubController extends ChangeNotifier {
   late final TemplateStore templates = TemplateStore(access);
 
   /// 現在のVaultでの書きかけのキー。Vaultが未選択ならnull。
-  String? draftKey({String? gitDraftId, String? answerTo}) {
+  String? draftKey({String? gitDraftId, String? answerTo, String? continues}) {
     final target = location;
     return target == null
         ? null
@@ -1416,6 +1419,7 @@ class HubController extends ChangeNotifier {
             target.identity,
             gitDraftId: gitDraftId,
             answerTo: answerTo,
+            continues: continues,
           );
   }
 
@@ -2168,6 +2172,49 @@ class HubController extends ChangeNotifier {
         withRepeat: withRepeat,
         repeat: repeat,
       ),
+    );
+  }
+
+  /// 手間の目安を依頼する。[effort]がnullなら外す。
+  Future<CaptureResult> requestItemEffort(
+    String projectId,
+    String itemKey,
+    String? effort,
+  ) {
+    if (effort != null && !itemEfforts.contains(effort)) {
+      throw StateError('手間の目安を選び直してください。');
+    }
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        if (parsed.projects[projectId] case final owner?) {
+          _refuseMerged(parsed, owner);
+        }
+        if (!parsed.intakeFeatures.effort) {
+          throw StateError('Mac miniの本体が手間の目安に対応していません。本体を更新してください。');
+        }
+        final found = parsed.projects[projectId]?.nowItems
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null || found.resolved) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (found.effort == effort) {
+          throw StateError('手間の目安は変わっていません。');
+        }
+        if (parsed.effortRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の手間の目安は依頼済みです。保存と反映を確認してください。');
+        }
+        // 完了・解決の報告が先に反映されると、本体は目安の依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        // 日付と同じく、外した記録も含む最新の記録IDを含め、同じ内容の再試行だけを同じ操作にする。
+        return 'effort/$projectId/$itemKey/${parsed.latestEffortIdFor(itemKey) ?? '-'}/${found.effort ?? '-'}/${effort ?? 'none'}';
+      },
+      (service, parsed, operation) =>
+          service.saveItemEffort(operation, projectId, item, effort),
     );
   }
 

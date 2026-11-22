@@ -20,8 +20,12 @@ class CaptureDraft {
     this.meta,
     this.happenedOn,
     this.maxBackdateDays = defaultMaxBackdateDays,
+    this.continues,
   });
   final String operationId;
+
+  /// 続きとして書いたときの前のメモの入力ID（訂正を除いた元の入力）。対応した本体にだけ送る。
+  final String? continues;
 
   /// 出来事の日付をさかのぼれる日数。本体が`intake-features.json`で示す値（画面で選べる範囲と同じ）を渡す。
   final int maxBackdateDays;
@@ -236,7 +240,11 @@ class CaptureService {
         (draft.gitDraftId != null) != (draft.gitDraftHash != null) ||
         (draft.gitDraftHash != null &&
             !RegExp(r'^[a-f0-9]{64}$').hasMatch(draft.gitDraftHash!)) ||
-        (draft.meta != null && !_validMeta(draft.meta!, draft.gitDraftId))) {
+        (draft.meta != null && !_validMeta(draft.meta!, draft.gitDraftId)) ||
+        (draft.continues != null &&
+            (!inputIdPattern.hasMatch(draft.continues!) ||
+                draft.gitDraftId != null ||
+                draft.kind == 'action'))) {
       throw const FormatException('本文は1〜8000文字、種別とprojectは有効な値を指定してください。');
     }
     // 本体の対応表と同じ範囲（1〜3650日）に収める。
@@ -266,6 +274,7 @@ class CaptureService {
               for (final e in meta.entries) [e.key, e.value],
             ],
           if (draft.happenedOn != null) ['happened_on', draft.happenedOn],
+          if (draft.continues != null) ['continues', draft.continues],
         ]),
       ),
       {
@@ -281,6 +290,7 @@ class CaptureService {
         else
           'meta': ?meta,
         'happened_on': ?draft.happenedOn,
+        'continues': ?draft.continues,
       },
       draft.text,
     );
@@ -756,6 +766,31 @@ class CaptureService {
       'due': due,
       'review_after': reviewAfter,
       if (withRepeat) 'repeat': repeat?.toJson(),
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// NOWの項目に手間の目安を付ける依頼。[effort]は変更後の目安で、nullで外す。
+  Future<CaptureResult> saveItemEffort(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    String? effort,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(projectId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        (effort != null && !itemEfforts.contains(effort)) ||
+        effort == item.effort) {
+      throw const FormatException('項目と手間の目安を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-effort',
+      'project_id': projectId,
+      'item_key': item.key,
+      'effort': effort,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

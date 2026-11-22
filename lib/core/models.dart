@@ -140,8 +140,12 @@ class NowItemRef {
     this.fromInputId,
     this.fromText,
     this.fromKey,
+    this.effort,
   });
   final String key, section, label, text, inputId;
+
+  /// 本人が付けた手間の目安（[itemEfforts]）。目安のない項目や、目安を知らない本体ではnull。
+  final String? effort;
 
   /// 本人が直接追加した行動（本体の入力の種類action）。AIの読み取りではない。
   final bool action;
@@ -177,6 +181,25 @@ class NowItemRef {
   String get display =>
       '$label${text.replaceAll(RegExp(r'[\r\n]+'), ' ').replaceAll('<!--', '&lt;!--')}';
 }
+
+/// 本体のitem-effortsと同じ、本人が付ける手間の目安。quick: 15分ほど / hour: 1時間ほど / half-day: 半日以上。
+const itemEfforts = ['quick', 'hour', 'half-day'];
+const itemEffortLabels = {
+  'quick': '15分ほど',
+  'hour': '1時間ほど',
+  'half-day': '半日以上',
+};
+
+/// 「次の一手」画面の手間の目安での絞り込み。1時間でできるものには15分でできるものも含める。
+const effortFilters = {'quick': '15分でできる', 'hour': '1時間でできる', 'none': '目安なし'};
+
+/// 目安が絞り込み（[effortFilters]のキー。nullはすべて）に合うか。
+bool effortFits(String? filter, String? effort) => switch (filter) {
+  'quick' => effort == 'quick',
+  'hour' => effort == 'quick' || effort == 'hour',
+  'none' => effort == null,
+  _ => true,
+};
 
 /// 本体と同じ、本人が追加する行動の文面の上限（UTF-16の単位で数える）。
 const actionTextChars = 200;

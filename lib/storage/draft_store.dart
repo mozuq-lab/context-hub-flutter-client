@@ -91,11 +91,14 @@ class DraftStore {
     String identity, {
     String? gitDraftId,
     String? answerTo,
+    String? continues,
   }) =>
       '$identity\u001f${gitDraftId != null
           ? 'git:$gitDraftId'
           : answerTo != null
           ? 'insight:$answerTo'
+          : continues != null
+          ? 'continue:$continues'
           : 'memo'}';
 
   /// 読込は1回だけ行い、同時の呼び出しは同じ読込を待つ。
