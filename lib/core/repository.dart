@@ -78,6 +78,16 @@ class HubRepository {
 
   /// 「いつかやる」の一覧を本体が書いた日時。見直しの依頼の反映を確かめるのに使う。
   DateTime? somedayGeneratedAt;
+
+  /// 本体が書く週次レビューの点検の一覧。一覧がない・読めない本体ではnull。
+  WeeklyReview? weeklyReview;
+
+  /// 週次レビューの「見直した」記録の作成時刻（記録IDごと）と、反映を待っている「見直した」の依頼。
+  final Map<String, DateTime> _weeklyReviewTimes = {};
+  String? _outstandingWeeklyReview;
+
+  /// 反映を待っている「見直した」の依頼（この端末や別の端末から送り、本体の一覧にまだ反映されていないもの）。
+  String? get weeklyReviewRequestId => _outstandingWeeklyReview;
   final Map<String, String> _outstandingHintDismissals = {};
 
   /// 「記録に聞く」の問いと答え（新しい順）。この端末から送った問いと、CLIなどほかから聞いた問いの答え。
@@ -482,6 +492,7 @@ class HubRepository {
     _readAnswers();
     _readSharedPreferences();
     _readSomeday();
+    _readWeeklyReview();
     _readIntake();
     _hideTakenOver();
     _readDigest();
@@ -1553,6 +1564,152 @@ class HubRepository {
 
   /// 反映を待っている、この下書きの見送り・入力化の依頼。
   String? draftRequestIdFor(String draftId) => _outstandingDrafts[draftId];
+
+  /// 週次レビューの「見直した」記録（反映を確かめる時刻）と、本体が書く点検の一覧を読む。
+  void _readWeeklyReview() {
+    final record = RegExp(
+      r'^90_system/weekly-reviews/(WRV-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = record.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']);
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            !validScheduleDate(j['on']) ||
+            at == null) {
+          throw const FormatException();
+        }
+        _weeklyReviewTimes[j['id'] as String] = at;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    const path = '90_system/weekly-review.json';
+    final raw = snapshot.files[path];
+    if (raw == null) return;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      if (newerSchema(j)) {
+        _noteNewer(path);
+        return;
+      }
+      final generated = timestamp(j['generated_at']);
+      int count(Object? v) {
+        if (v is! int || v < 0) throw const FormatException();
+        return v;
+      }
+
+      int days(Object? v) {
+        if (v is! int || v < 1 || v > 3650) throw const FormatException();
+        return v;
+      }
+
+      Map<String, dynamic> map(Object? v) {
+        if (v is! Map<String, dynamic>) throw const FormatException();
+        return v;
+      }
+
+      List<WeeklyItem> items(Object? v, String kind) {
+        if (v is! List) throw const FormatException();
+        return [
+          for (final e in v)
+            if (e is! Map ||
+                e['scope'] is! String ||
+                (e['scope'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(e['scope'])) ||
+                e['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(e['item_key']) ||
+                !const ['next', 'open'].contains(e['section']) ||
+                e['label'] is! String ||
+                e['text'] is! String ||
+                !validScheduleDate(e[kind == 'dated' ? 'due' : 'since']) ||
+                (kind == 'dated' &&
+                    !const [
+                      'overdue',
+                      'today',
+                      'week',
+                    ].contains(e['bucket'])) ||
+                (kind == 'waiting' && e['check'] is! bool))
+              throw const FormatException()
+            else
+              WeeklyItem(
+                scope: e['scope'] as String,
+                key: e['item_key'] as String,
+                section: e['section'] as String,
+                label: e['label'] as String,
+                text: e['text'] as String,
+                date: e[kind == 'dated' ? 'due' : 'since'] as String,
+                bucket: kind == 'dated' ? e['bucket'] as String : null,
+                check: kind == 'waiting' && e['check'] == true,
+              ),
+        ];
+      }
+
+      final last = j['last_review'];
+      if (j['schema_version'] != 1 ||
+          generated == null ||
+          (last != null &&
+              (last is! Map ||
+                  last['id'] is! String ||
+                  !RegExp(r'^WRV-[0-9A-HJKMNP-TV-Z]{26}$')
+                      .hasMatch(last['id']) ||
+                  !validScheduleDate(last['on']))) ||
+          j['projects'] is! List) {
+        throw const FormatException();
+      }
+      final inbox = map(j['inbox']),
+          unassigned = map(j['unassigned']),
+          someday = map(j['someday']);
+      final projects = <WeeklyProject>[
+        for (final p in j['projects'] as List)
+          if (p is! Map ||
+              p['project_id'] is! String ||
+              !projectIdPattern.hasMatch(p['project_id']) ||
+              p['title'] is! String ||
+              (p['next'] != null && (p['next'] is! int || p['next'] < 0)) ||
+              (p['open'] != null && (p['open'] is! int || p['open'] < 0)) ||
+              p['stale'] is! bool)
+            throw const FormatException()
+          else
+            WeeklyProject(
+              id: p['project_id'] as String,
+              title: p['title'] as String,
+              next: p['next'] as int?,
+              open: p['open'] as int?,
+              waiting: count(p['waiting']),
+              hints: count(p['hints']),
+              stale: p['stale'] as bool,
+            ),
+      ];
+      weeklyReview = WeeklyReview(
+        generatedAt: generated,
+        intervalDays: days(j['interval_days']),
+        nextStaleDays: days(j['next_stale_days']),
+        openStaleDays: days(j['open_stale_days']),
+        projectStaleDays: days(j['project_stale_days']),
+        lastReviewId: last is Map ? last['id'] as String : null,
+        lastReviewOn: last is Map ? last['on'] as String : null,
+        candidates: count(inbox['candidates']),
+        drafts: count(inbox['drafts']),
+        unassignedActions: count(unassigned['actions']),
+        unassignedSuggestions: count(unassigned['suggestions']),
+        projects: projects,
+        lingering: items(j['lingering'], 'lingering'),
+        lingeringTotal: count(j['lingering_total']),
+        waiting: items(j['waiting'], 'waiting'),
+        dated: items(j['dated'], 'dated'),
+        datedTotal: count(j['dated_total']),
+        somedayTotal: count(someday['total']),
+        somedayStale: count(someday['stale']),
+      );
+    } catch (_) {
+      _problem(path);
+    }
+  }
+
   void _readDigest() {
     final raw = snapshot.files['REVIEW.md'];
     if (raw == null) return;
@@ -2299,6 +2456,7 @@ class HubRepository {
               'item-wait',
               'item-someday',
               'someday-review',
+              'weekly-review',
               'item-hint-dismiss',
               'git-draft-dismiss',
               'project-create',
@@ -2487,6 +2645,14 @@ class HubRepository {
                 !validScheduleDate(m['on']))) {
           throw const FormatException();
         }
+        // 週次レビューを見直した報告。本文は空で、見直した日だけを送る。
+        final weeklyDone = m['operation'] == 'weekly-review';
+        if (weeklyDone &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                !validScheduleDate(m['on']))) {
+          throw const FormatException();
+        }
         final occurrence = m['operation'] == 'item-occurrence';
         if (occurrence &&
             (doc.body.trim().isNotEmpty ||
@@ -2631,6 +2797,7 @@ class HubRepository {
             waitId,
             somedayId,
             reviewId,
+            weeklyReviewId,
             ideaLinkId,
             occurrenceNext,
             askId;
@@ -2766,6 +2933,8 @@ class HubRepository {
                       'start' => '「いつかやる」のアイデアを始めた',
                       _ => '「いつかやる」のアイデアをやめた',
                     }}: ${_somedayTargetTitle(m['target'] as String, m['target_id'] as String)}'
+              : weeklyDone
+              ? '週次レビューを見直した（${m['on']}）'
               : hintDismiss
               ? '「片付いたかも」の見送り: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
@@ -2958,6 +3127,17 @@ class HubRepository {
                 throw const FormatException();
               }
               reviewId = r['reviewId'] as String;
+            }
+            if (weeklyDone) {
+              final r = ack['result'] as Map;
+              if (r['on'] != m['on'] ||
+                  r['weeklyReviewId'] is! String ||
+                  !RegExp(r'^WRV-[0-9A-HJKMNP-TV-Z]{26}$')
+                      .hasMatch(r['weeklyReviewId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              weeklyReviewId = r['weeklyReviewId'] as String;
             }
             if (occurrence) {
               final r = ack['result'] as Map;
@@ -3275,6 +3455,7 @@ class HubRepository {
           );
         }
         if (somedayReview) _somedayReviewRequest(item, m, reviewId);
+        if (weeklyDone) _weeklyReviewRequest(item, weeklyReviewId);
         if (hintDismiss) _hintDismissRequest(item, m);
         if (occurrence) {
           _occurrenceRequest(item, m, occurrenceNext, occurrenceAt);
@@ -3768,6 +3949,24 @@ class HubRepository {
       if (id != null) return id;
     }
     return null;
+  }
+
+  /// 「見直した」の反映状況。記録の作成後に本体が点検の一覧を書き、同期されていれば反映済みとする。
+  void _weeklyReviewRequest(IntakeStatus item, String? recordId) {
+    var waiting = false;
+    if (item.state == 'accepted') {
+      final at = _weeklyReviewTimes[recordId],
+          generated = weeklyReview?.generatedAt;
+      if (at == null || generated == null || generated.isBefore(at)) {
+        waiting = true;
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
+      } else {
+        item.detail = '週次レビューの見直しをMac miniが記録しました。';
+      }
+    } else if (item.state == 'waiting') {
+      waiting = true;
+    }
+    if (waiting) _outstandingWeeklyReview = item.id;
   }
 
   /// 見直しの依頼の対象の表示名（アイデアの題か、プロジェクトの名前）。

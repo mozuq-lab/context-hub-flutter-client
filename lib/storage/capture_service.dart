@@ -875,6 +875,25 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// 週次レビューを終えた（見直した）と報告する依頼。[on]は見直した日（YYYY-MM-DD）。本人の操作だけで送る。
+  Future<CaptureResult> saveWeeklyReview(String operationId, String on) =>
+      _serial(() async {
+        if (!_uuid.hasMatch(operationId) || !validScheduleDate(on)) {
+          throw const FormatException('見直した日を確認してください。');
+        }
+        final fields = <String, dynamic>{
+          'operation': 'weekly-review',
+          'on': on,
+          'confirmed': true,
+        };
+        return _saveRequest(
+          operationId,
+          digest(jsonEncode(fields)),
+          fields,
+          '',
+        );
+      });
+
   /// NOWの項目に連絡待ちの印を付ける依頼。[waiting]は変更後の全体（相手は任意）で、nullで外す。
   Future<CaptureResult> saveItemWait(
     String operationId,

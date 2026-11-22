@@ -2353,6 +2353,70 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 週次レビューを終えた（見直した）と報告する依頼。見直した日は端末の今日（本体と同じ暦日）。
+  /// AIは報告せず、本人が最後の段で押したときだけ送る。反映されると、端末の途中の進み具合は使わなくなる。
+  Future<CaptureResult> requestWeeklyReview({DateTime? now}) {
+    final today = hubToday(now);
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.weeklyReview) {
+          throw StateError('Mac miniの本体が週次レビューに対応していません。本体を更新してください。');
+        }
+        if (parsed.weeklyReviewRequestId != null) {
+          throw StateError('見直したことは報告済みです。保存と反映を確認してください。');
+        }
+        if (parsed.weeklyReview?.lastReviewOn == today) {
+          throw StateError('今日の見直しは記録済みです。');
+        }
+        return 'weekly-review/$today/${parsed.weeklyReview?.lastReviewId ?? '-'}';
+      },
+      (service, parsed, operation) =>
+          service.saveWeeklyReview(operation, today),
+    );
+  }
+
+  // ---- 週次レビューの途中の進み具合（端末ごと・Vaultごと。Vaultには書かない） ----
+  // settings.jsonの`weeklyReview`に、Vaultのidentityごとの今いる段と始めた日、始めた時点の最後の見直しの記録IDを保存する。
+  static const _maxWeeklyVaults = 6;
+  Map<String, dynamic> _weekly = {};
+
+  /// 続きから再開できる進み具合。始めた後に別の端末やCLIで見直しを報告していれば（最後の見直しが変わっていれば）null。
+  /// 始めてから見直しの間隔（7日）以上たった進み具合も使わない（中身が変わった段を飛ばさないよう、最初からやり直す）。
+  WeeklyProgress? get weeklyProgress {
+    final stored = WeeklyProgress.fromJson(_weekly[location?.identity ?? '']);
+    final review = repository?.weeklyReview;
+    if (stored == null || review == null) return stored;
+    if (waitingDays(stored.started, hubToday()) >= review.intervalDays) {
+      return null;
+    }
+    return stored.base == (review.lastReviewId ?? '') ? stored : null;
+  }
+
+  /// 週次レビューの今いる段を端末に残す（[step]がnullなら進み具合を消す）。保存できなくても画面の操作は続けられる。
+  Future<void> setWeeklyStep(String? step) async {
+    final target = location;
+    if (target == null || repository == null) return;
+    await _loadSeen();
+    final current = weeklyProgress;
+    _weekly.remove(target.identity);
+    if (step != null) {
+      _weekly[target.identity] = WeeklyProgress(
+        step: step,
+        started: current?.started ?? hubToday(),
+        base: repository!.weeklyReview?.lastReviewId ?? '',
+      ).toJson();
+    }
+    while (_weekly.length > _maxWeeklyVaults) {
+      _weekly.remove(_weekly.keys.first);
+    }
+    _changed();
+    try {
+      await _writeSettings();
+    } catch (_) {
+      // 進み具合は補助なので、保存できなくても週次レビューは続けられる。
+    }
+  }
+
   /// 連絡待ちの印を依頼する。[since]（頼んだ日）がnullなら印を外す。[who]（相手）は任意。
   /// 相手の名前はVaultに残る（同期先とバックアップにも入る）。ホーム画面のウィジェットと通知には出さない。
   Future<CaptureResult> requestItemWait(
@@ -2695,6 +2759,9 @@ class HubController extends ChangeNotifier {
       if (value is Map && value['today'] is Map) {
         _today = Map<String, dynamic>.from(value['today'] as Map);
       }
+      if (value is Map && value['weeklyReview'] is Map) {
+        _weekly = Map<String, dynamic>.from(value['weeklyReview'] as Map);
+      }
       if (value is Map) {
         final settings = AttentionSettings.fromJson(value['attention']);
         _attention = settings.state;
@@ -2730,6 +2797,7 @@ class HubController extends ChangeNotifier {
     if (_pins.isNotEmpty) 'pins': _pins,
     if (_preferenceSync.isNotEmpty) 'preferenceSync': _preferenceSync,
     if (_today.isNotEmpty) 'today': _today,
+    if (_weekly.isNotEmpty) 'weeklyReview': _weekly,
     if (!autoReload) 'autoReload': false,
     if (_attention.identity != null || attentionNotify)
       'attention': AttentionSettings(_attention, attentionNotify).toJson(),
