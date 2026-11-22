@@ -28,6 +28,7 @@ class IntakeFeatures {
     this.itemEfforts = const {},
     this.itemRecordScopes = const {},
     this.somedayReviewDays = somedayReviewDaysDefault,
+    this.actionMoveSupport = false,
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -62,6 +63,13 @@ class IntakeFeatures {
 
   /// 期日・定例の回・手間の目安・連絡待ちの依頼を受け付ける、プロジェクト以外の置き場（`item_record_scopes`）。
   final Set<String> itemRecordScopes;
+
+  /// 本人が追加した行動を別の置き場へ移す依頼を、本体が元の行動を一覧から外して扱う（`action_moves`）。
+  final bool actionMoveSupport;
+
+  /// 本人が追加した行動を、別のプロジェクト・プロジェクト未定へ移せる（移す先へ元の行動を指す行動を足す）。
+  /// 対応前の本体は元の行動を一覧から外さず二重に並ぶため、移す操作を出さない。
+  bool get actionMoves => actions && actionMoveSupport;
 
   /// 次の一手・未解決に手間の目安を付けられる。
   bool get effort =>
@@ -191,6 +199,7 @@ class IntakeFeatures {
             : defaultMaxBackdateDays,
         // 知らない値は、本文を出さない側に倒す。
         calendarTitles: titles == null || titles == 'item' ? 'item' : 'project',
+        actionMoveSupport: m['action_moves'] == true,
         {
           for (final v in m['operations'] as List)
             if (v is String) v,

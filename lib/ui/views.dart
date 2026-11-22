@@ -1920,6 +1920,71 @@ class _HubViewState extends State<HubView> {
     );
   }
 
+  /// 本人が追加した行動を、別の置き場（進行中のプロジェクト・プロジェクト未定）へ移すよう依頼する。
+  /// [fromScope]は今の置き場。移す先は本人が選び、付けていた日付・手間の目安などは移した先へ引き継ぐ。
+  Future<void> moveAction(String fromScope, NowItemRef item) async {
+    final unassigned = repo.intakeFeatures.unassignedActions;
+    final targets = [
+      for (final p in repo.actionableProjects)
+        if (!p.merged && p.id != fromScope) (id: p.id, title: p.title),
+      if (fromScope != unassignedScope && unassigned)
+        (id: unassignedScope, title: 'プロジェクト未定'),
+    ];
+    if (targets.isEmpty) {
+      notice(context, '移せる進行中のプロジェクトがありません。');
+      return;
+    }
+    final to = await showDialog<String>(
+      context: context,
+      builder: (dialog) => SimpleDialog(
+        key: const Key('move-action-dialog'),
+        title: Text(
+          fromScope == unassignedScope ? 'プロジェクトへ移す' : '別の置き場へ移す',
+        ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+            child: Text(
+              '${item.display}\n\n移す先を選んでください。期日・見直す日・繰り返し・手間の目安・連絡待ち・「いつかやる」は、移した先の行動に引き継ぎます。元に戻すときは、移した先でもう一度移します。「今日の3つ」に選んでいたときは、移した後に選び直してください。',
+              style: const TextStyle(fontSize: 13, height: 1.6),
+            ),
+          ),
+          for (final t in targets)
+            SimpleDialogOption(
+              key: Key('move-action-to-${t.id}'),
+              onPressed: () => Navigator.of(dialog).pop(t.id),
+              child: Text(t.title),
+            ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: TextButton(
+                key: const Key('move-action-cancel'),
+                onPressed: () => Navigator.of(dialog).pop(),
+                child: const Text('キャンセル'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (to == null || !mounted) return;
+    try {
+      final result = await c.requestMoveAction(fromScope, item.key, to);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '行動を移す依頼を保存しました。Mac miniで処理されると移した先に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   /// 「いつかやる」の依頼を送り、結果を知らせる。
   /// 保存できたかを返す。
   Future<bool> somedayRequest(
@@ -3011,6 +3076,17 @@ class _HubViewState extends State<HubView> {
         from = !project.merged && repo.intakeFeatures.actions
             ? actionSourceOf(project, section, entry)
             : null,
+        // 本人が追加した行動は、別のプロジェクト・プロジェクト未定へ移せる。ほかの依頼が反映待ちの間は出さない。
+        movable =
+            item.action &&
+            section == 'next' &&
+            !item.resolved &&
+            !project.merged &&
+            repo.intakeFeatures.actionMoves &&
+            !scheduling &&
+            !effortPending &&
+            !waitPending &&
+            !somedayPending,
         calendar =
             c.access.calendarSupported &&
             validScheduleDate(item.due) &&
@@ -3066,6 +3142,13 @@ class _HubViewState extends State<HubView> {
           enabled: !c.composing,
           value: () => addAction(project: project, from: from),
           child: const Text('自分の行動にする'),
+        ),
+      if (movable)
+        PopupMenuItem(
+          key: Key('move-action-$tag'),
+          enabled: !c.composing,
+          value: () => moveAction(project.id, item),
+          child: const Text('別の置き場へ移す'),
         ),
       // 本人が付けた期日だけを、端末のカレンダーの予定作成画面へ渡す。保存するかはカレンダーで本人が決める。
       if (calendar)
@@ -4999,8 +5082,25 @@ class _HubViewState extends State<HubView> {
             records &&
             c.access.calendarSupported &&
             validScheduleDate(item.due) &&
-            !item.resolved;
+            !item.resolved,
+        // 本人が追加した行動は、進行中のプロジェクトへ移せる。ほかの依頼が反映待ちの間は出さない。
+        movable =
+            item.action &&
+            !item.resolved &&
+            repo.intakeFeatures.actionMoves &&
+            repo.intakeFeatures.unassignedActions &&
+            !scheduling &&
+            !effortPending &&
+            !waitPending &&
+            !somedayPending;
     final more = <PopupMenuEntry<VoidCallback>>[
+      if (movable)
+        PopupMenuItem(
+          key: Key('unassigned-move-$tag'),
+          enabled: !c.composing,
+          value: () => moveAction(unassignedScope, item),
+          child: const Text('プロジェクトへ移す'),
+        ),
       if (records && !scheduling)
         PopupMenuItem(
           key: Key('unassigned-schedule-$tag'),

@@ -18,10 +18,12 @@ import 'widget_test.dart' show MemoryUIAccess;
 import 'work_records_test.dart' show protocol;
 
 /// 本体の対応表から、プロジェクト未定の行動への日付・手間の目安の対応を外す（古い本体）。
+/// 行動を移す対応（`action_moves`）は、それより後の本体で加わったので一緒に外す。
 Map<String, String> withoutRecordScopes(Map<String, String> files) {
   final features =
       jsonDecode(files[intakeFeaturesPath]!) as Map<String, dynamic>;
   features.remove('item_record_scopes');
+  features.remove('action_moves');
   return {...files, intakeFeaturesPath: jsonEncode(features)};
 }
 

@@ -4093,21 +4093,33 @@ class HubRepository {
           ? '次の一手にMac miniが追加しました。'
           : 'Mac miniが受け取り済み。現状の同期を待っています。';
     }
+    final from = m['meta'] == null ? null : _actionSourceOf(m['meta']);
+    // 断られていない依頼の元の行（行動を移した依頼なら、移した元の行動の入力ID）。
+    if (from != null && const ['waiting', 'accepted'].contains(item.state)) {
+      _actionFromInputs.add(from.inputId);
+    }
     if ((project == null && !unassigned) ||
         shown ||
         !const ['waiting', 'accepted'].contains(item.state)) {
       return;
     }
-    (project?.pendingActions ?? unassignedPendingActions).add(
-      PendingAction(
-        requestId: item.id,
-        projectId: project?.id ?? unassignedScope,
-        text: text,
-        state: item.state,
-        from: m['meta'] == null ? null : _actionSourceOf(m['meta']),
-      ),
+    final pending = PendingAction(
+      requestId: item.id,
+      projectId: project?.id ?? unassignedScope,
+      text: text,
+      state: item.state,
+      from: from,
+      inputId: inputId,
     );
+    (project?.pendingActions ?? unassignedPendingActions).add(pending);
+    _pendingActionStatus[item.id] = item;
   }
+
+  /// 行動の追加の依頼が指す元の行の入力ID（送った・受け付けた依頼。断られた依頼は含めない）。
+  final Set<String> _actionFromInputs = {};
+
+  /// 反映待ちとして示した行動の追加の依頼（依頼ID→依頼の状況）。
+  final Map<String, IntakeStatus> _pendingActionStatus = {};
 
   /// 根拠の入力ID（訂正の整理ならチェーンの先頭）ごとの処理記録。「提案」の行の元の本文を探すときに使う。
   late final Map<String, List<Map<String, dynamic>>> _receiptsByRoot = () {
@@ -4167,6 +4179,7 @@ class HubRepository {
   /// 反映待ちの行動の元にした行（作業要約の次の一手・「提案」）を、次の一手と提案の欄から外す。
   /// 本体も反映するとどのプロジェクトのNOWからも外すため、反映待ちの間に二重に並べたり数えたりしない。
   void _hideTakenOver() {
+    _hideMovedActions();
     // 反映済みの行動の元の行も外す。同期の順で、行動の載った一覧（プロジェクト未定など）だけが先に届き、
     // 元の行のNOWがまだ古いときに、二重に並べたり数えたりしないため。
     final taken = _takenRefs;
@@ -4183,6 +4196,44 @@ class HubRepository {
       p.sections['proposals']!.removeWhere((e) {
         final from = proposalSource(e);
         return from != null && taken.contains('${from.inputId}\n${from.text}');
+      });
+    }
+  }
+
+  /// 別の置き場へ移した行動（本人が追加した行動）を、元の置き場から外す。
+  /// 本体は移した元の行動を一覧から外すが、移す依頼の反映待ちの間と、移した先の一覧だけが先に同期されたときに、
+  /// 二重に並べたり数えたりしないため。行動は入力1件が1項目なので、入力IDで判定する（本体と同じ）。
+  /// 移した後は、元の行動の追加の依頼が「反映待ち」に戻らないようにする（元の行動は一覧から外れるため）。
+  void _hideMovedActions() {
+    final moved = <String>{
+      ..._actionFromInputs,
+      for (final i in [
+        for (final p in projects.values) ...p.nowItems,
+        ...unassignedItems,
+      ])
+        if (i.action && i.fromInputId != null) i.fromInputId!,
+    };
+    if (moved.isEmpty) return;
+    bool gone(NowItemRef i) => i.action && moved.contains(i.inputId);
+    for (final p in projects.values) {
+      final keys = {
+        for (final i in p.nowItems)
+          if (gone(i)) i.key,
+      };
+      if (keys.isNotEmpty) {
+        p.sections['next']!.removeWhere((e) => keys.contains(e.itemKey));
+        p.nowItems.removeWhere((i) => keys.contains(i.key));
+      }
+    }
+    unassignedItems.removeWhere(gone);
+    for (final list in [
+      for (final p in projects.values) p.pendingActions,
+      unassignedPendingActions,
+    ]) {
+      list.removeWhere((a) {
+        if (a.inputId == null || !moved.contains(a.inputId)) return false;
+        _pendingActionStatus[a.requestId]?.detail = '次の一手にMac miniが追加しました。';
+        return true;
       });
     }
   }

@@ -70,6 +70,8 @@ MacはNOFOLLOW・排他公開・file/dir fsyncを使います。保存先識別�
 
 本人が追加した行動（項目一覧`90_system/now-items/_unassigned.json`の`action`付きの行）には、プロジェクトの項目と同じ`item-schedule`・`item-effort`・`item-occurrence`の依頼を`project_id: _unassigned`で送れます。本体の対応表`90_system/intake-features.json`の`item_record_scopes`に`_unassigned`があるときだけ操作を出し（`IntakeFeatures.unassignedRecords`）、AIの行には送りません（本体も断ります）。反映待ちの判断は、プロジェクト未定の項目一覧の`generated_at`と記録の作成時刻を比べます。期日が近い行動は「次の一手」画面の期日の欄・ホーム画面ウィジェット・カレンダーの予定に、プロジェクトの項目と一緒に出し、見直す日まで休ませている行動は出しません。
 
+本人が追加した行動は、別の置き場（進行中のプロジェクト・プロジェクト未定）へ移せます。移す依頼は、移す先への行動の追加（`capture`・`kind: action`）に、元の行動を指す`meta`（`action_from_input`・`action_from_text`・`action_from_key`）を付けて送ります（「自分の行動にする」と同じ形）。本体は元の行動の記録を移した先へ写し、元の行動を一覧から外します。対応表の`action_moves`が`true`のときだけ操作を出します（`IntakeFeatures.actionMoves`。対応前の本体は元の行動を外さないため）。アプリは、移す依頼の反映待ちの間と、移した先の一覧だけが先に同期されたときにも、元の行動（どの行動かの元の行に入力IDが指されている本人の行動）を元の置き場から外し、元の行動の追加の依頼を「反映待ち」に戻しません。完了・却下した行動と、ほかの依頼が反映待ちの行動は移しません。
+
 アイデアの題は、訂正のない100文字以下のメモ1件から作られたアイデアに限り、アイデアの本文（AIの要約）ではなく元のメモの本文を1行にしたものを使います（`lib/core/parser.dart`の`shortMemoText`。本体の`shortMemoText`と同じ基準）。対応した本体は短いメモの要約を本人の言葉にするので、対応前に整理されたアイデアの見え方をそろえるための読み替えです。アイデアのファイルは書き換えません。
 
 ## 今週の気づき

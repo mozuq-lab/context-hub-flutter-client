@@ -303,9 +303,13 @@ class PendingAction {
     required this.text,
     required this.state,
     this.from,
+    this.inputId,
   });
   final String requestId, projectId, text, state;
   final ActionSource? from;
+
+  /// Mac miniが受け付けた行動の入力ID（受け付け前はnull）。
+  final String? inputId;
 }
 
 /// 「片付いたかも」の根拠。メモのIDと、メモの原文からの引用。
