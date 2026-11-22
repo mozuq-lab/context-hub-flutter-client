@@ -750,7 +750,9 @@ class CaptureService {
     // 繰り返しを送らない依頼では、本体は今の繰り返しを保つ（期日を外したときは繰り返しも外れる）。
     final nextRepeat = withRepeat ? repeat : (due == null ? null : item.repeat);
     if (!_uuid.hasMatch(operationId) ||
-        !projectIdPattern.hasMatch(projectId) ||
+        // プロジェクト未定の本人が追加した行動は、置き場_unassignedで依頼する。
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
         item.resolved ||
         (due != null && !validScheduleDate(due)) ||
@@ -781,7 +783,9 @@ class CaptureService {
     String? effort,
   ) => _serial(() async {
     if (!_uuid.hasMatch(operationId) ||
-        !projectIdPattern.hasMatch(projectId) ||
+        // プロジェクト未定の本人が追加した行動は、置き場_unassignedで依頼する。
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
         item.resolved ||
         (effort != null && !itemEfforts.contains(effort)) ||
@@ -806,7 +810,9 @@ class CaptureService {
     String action,
   ) => _serial(() async {
     if (!_uuid.hasMatch(operationId) ||
-        !projectIdPattern.hasMatch(projectId) ||
+        // プロジェクト未定の本人が追加した行動は、置き場_unassignedで依頼する。
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
         !item.repeating ||
         !occurrenceActions.contains(action)) {

@@ -2152,7 +2152,8 @@ class HubRepository {
             (doc.body.trim().isNotEmpty ||
                 m['confirmed'] != true ||
                 m['project_id'] is! String ||
-                !projectIdPattern.hasMatch(m['project_id']) ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
                 m['item_key'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !m.containsKey('due') ||
@@ -2169,7 +2170,8 @@ class HubRepository {
             (doc.body.trim().isNotEmpty ||
                 m['confirmed'] != true ||
                 m['project_id'] is! String ||
-                !projectIdPattern.hasMatch(m['project_id']) ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
                 m['item_key'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !m.containsKey('effort') ||
@@ -2181,7 +2183,8 @@ class HubRepository {
             (doc.body.trim().isNotEmpty ||
                 m['confirmed'] != true ||
                 m['project_id'] is! String ||
-                !projectIdPattern.hasMatch(m['project_id']) ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
                 m['item_key'] is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !occurrenceActions.contains(m['action']) ||
@@ -2970,12 +2973,20 @@ class HubRepository {
     String? next,
     DateTime? receivedAt,
   ) {
-    final key = m['item_key'] as String, project = projects[m['project_id']];
-    final current = project?.nowItems.where((i) => i.key == key).firstOrNull;
+    final key = m['item_key'] as String,
+        unassigned = m['project_id'] == unassignedScope,
+        project = projects[m['project_id']];
+    // プロジェクト未定の行動は、プロジェクト未定の項目一覧から探す。
+    final current =
+        (unassigned ? unassignedItems : project?.nowItems ?? const [])
+            .where((i) => i.key == key)
+            .firstOrNull;
     if (item.state == 'waiting') {
       _outstandingSchedules[key] = item.id;
     } else if (item.state == 'accepted') {
-      final generated = project?.nowItemsGeneratedAt;
+      final generated = unassigned
+          ? unassignedItemsGeneratedAt
+          : project?.nowItemsGeneratedAt;
       if (current != null &&
           current.due == m['due'] &&
           (generated == null ||

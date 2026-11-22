@@ -563,6 +563,10 @@ class _HubViewState extends State<HubView> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      subtitle: switch (itemRecordLabel(item)) {
+                        '' => null,
+                        final label => Text(label),
+                      },
                       onTap: () {
                         nextSection = 'next';
                         widget.onNavigate('next');
@@ -1713,8 +1717,8 @@ class _HubViewState extends State<HubView> {
     }
   }
 
-  /// 手間の目安を選んで依頼する。目安は本人が選び、AIは推測しない。
-  Future<void> effortItem(HubProject project, NowItemRef item) async {
+  /// 手間の目安を選んで依頼する。目安は本人が選び、AIは推測しない。[projectId]は項目の置き場（プロジェクト未定もある）。
+  Future<void> effortItem(String projectId, NowItemRef item) async {
     final choice = await showDialog<({String? effort})>(
       context: context,
       builder: (_) => EffortDialog(item: item),
@@ -1722,7 +1726,7 @@ class _HubViewState extends State<HubView> {
     if (choice == null || !mounted) return;
     try {
       final result = await c.requestItemEffort(
-        project.id,
+        projectId,
         item.key,
         choice.effort,
       );
@@ -1885,8 +1889,8 @@ class _HubViewState extends State<HubView> {
     ),
   );
 
-  /// 期日・見直す日（と繰り返し）を依頼する。依頼を保存できたらtrue。
-  Future<bool> scheduleItem(HubProject project, NowItemRef item) async {
+  /// 期日・見直す日（と繰り返し）を依頼する。依頼を保存できたらtrue。[projectId]は項目の置き場（プロジェクト未定もある）。
+  Future<bool> scheduleItem(String projectId, NowItemRef item) async {
     // 繰り返しに対応した本体にだけ、繰り返しを選ばせて送る（古い本体は知らない欄を断るため）。
     final repeatable = repo.intakeFeatures.repeat;
     final value =
@@ -1900,7 +1904,7 @@ class _HubViewState extends State<HubView> {
     if (value == null || !mounted) return false;
     try {
       final result = await c.requestItemSchedule(
-        project.id,
+        projectId,
         item.key,
         value.due,
         value.reviewAfter,
@@ -2135,7 +2139,7 @@ class _HubViewState extends State<HubView> {
 
   /// 定例の今の回を完了にする・見送る。本体が次の回の期日を付け、項目は欄に残る。
   Future<void> completeRound(
-    HubProject project,
+    String projectId,
     NowItemRef item,
     String action,
   ) async {
@@ -2166,7 +2170,7 @@ class _HubViewState extends State<HubView> {
     if (ok != true || !mounted) return;
     try {
       final result = await c.requestItemOccurrence(
-        project.id,
+        projectId,
         item.key,
         action,
       );
@@ -2400,7 +2404,7 @@ class _HubViewState extends State<HubView> {
 
   /// 持ち越した項目に期日を付ける。依頼を保存できたら、持ち越しの確認から外す。
   Future<void> scheduleCarried(TodayEntry entry) async {
-    if (!await scheduleItem(entry.project!, entry.item!)) return;
+    if (!await scheduleItem(entry.pick.projectId, entry.item!)) return;
     await dropCarried(entry.pick.itemKey);
   }
 
@@ -2526,9 +2530,12 @@ class _HubViewState extends State<HubView> {
                     icon: const Icon(Icons.wb_sunny_outlined, size: 15),
                     label: const Text('今日も続ける'),
                   ),
-                // プロジェクト未定の行には期日を付けられない（本体が受け付けない）。
+                // プロジェクト未定の行には、本人が追加した行動にだけ、対応した本体のときに期日を付けられる。
                 if (!closed &&
-                    !e.unassigned &&
+                    e.item != null &&
+                    (!e.unassigned ||
+                        (e.item!.action &&
+                            repo.intakeFeatures.unassignedRecords)) &&
                     repo.scheduleRequestIdFor(key) == null)
                   TextButton.icon(
                     key: Key('today-schedule-${key.substring(0, 12)}'),
@@ -2678,14 +2685,20 @@ class _HubViewState extends State<HubView> {
   bool _calendarOpening = false;
 
   /// 期日を端末のカレンダーへ渡す。カレンダーはクラウドへ同期されることが多いため、伏せ字の規則を確かめられないときは渡さない。
-  Future<void> addToCalendar(HubProject project, NowItemRef item) async {
+  /// [projectId]と[projectTitle]は項目の置き場（プロジェクト未定の行動は[unassignedScope]と「プロジェクト未定」）。
+  Future<void> addToCalendar(
+    String projectId,
+    String projectTitle,
+    NowItemRef item,
+  ) async {
     final secrets = repo.secretPolicy;
     if (secrets.problem case final problem?) {
       notice(context, problem);
       return;
     }
     final event = dueEvent(
-      project,
+      projectId,
+      projectTitle,
       item,
       hide: secrets.redact,
       withText: repo.intakeFeatures.calendarTitles == 'item',
@@ -2738,19 +2751,19 @@ class _HubViewState extends State<HubView> {
       if (!scheduling)
         PopupMenuItem(
           key: Key('schedule-$tag'),
-          value: () => scheduleItem(project, item),
+          value: () => scheduleItem(project.id, item),
           child: Text(item.scheduled ? '期日を変える' : '期日を付ける'),
         ),
       if (effort && !effortPending)
         PopupMenuItem(
           key: Key('effort-$tag'),
-          value: () => effortItem(project, item),
+          value: () => effortItem(project.id, item),
           child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
         ),
       if (rounds)
         PopupMenuItem(
           key: Key('round-skip-$tag'),
-          value: () => completeRound(project, item, 'skip'),
+          value: () => completeRound(project.id, item, 'skip'),
           child: Text(occurrenceActionLabels['skip']!),
         ),
       if (item.repeating)
@@ -2772,7 +2785,7 @@ class _HubViewState extends State<HubView> {
       if (calendar)
         PopupMenuItem(
           key: Key('calendar-$tag'),
-          value: () => addToCalendar(project, item),
+          value: () => addToCalendar(project.id, project.title, item),
           child: const Text('カレンダーに入れる'),
         ),
       PopupMenuItem(
@@ -2785,7 +2798,9 @@ class _HubViewState extends State<HubView> {
       if (rounds)
         TextButton.icon(
           key: Key('round-done-$tag'),
-          onPressed: busy ? null : () => completeRound(project, item, 'done'),
+          onPressed: busy
+              ? null
+              : () => completeRound(project.id, item, 'done'),
           icon: const Icon(Icons.task_alt, size: 15),
           label: Text(occurrenceActionLabels['done']!),
         )
@@ -2936,10 +2951,13 @@ class _HubViewState extends State<HubView> {
             const <String>{},
     };
     // 末尾の番号はNOWでの並び順。期日とプロジェクトが同じ項目の順を保つために使う。
+    // プロジェクトとNOWの行がnullの項目は、プロジェクトを決めずに本人が追加した行動。
     final front =
-            <ScheduleBucket, List<(HubProject, NowEntry, NowItemRef, int)>>{},
-        resting = <(HubProject, NowEntry, NowItemRef, int)>[],
-        listed = <String, List<NowEntry>>{};
+            <ScheduleBucket, List<(HubProject?, NowEntry?, NowItemRef, int)>>{},
+        resting = <(HubProject?, NowEntry?, NowItemRef, int)>[],
+        listed = <String, List<NowEntry>>{},
+        // プロジェクト未定の行動のうち、期日の欄・休ませている項目に出さないもの。
+        ownListed = <NowItemRef>[];
     // 手間の目安での絞り込み。目安に対応した本体のときだけ使う。
     final efforts = repo.intakeFeatures.effort,
         filter = efforts ? effortFilter : null;
@@ -2978,32 +2996,74 @@ class _HubViewState extends State<HubView> {
       }
       listed[project.id] = rest;
     }
+    // プロジェクトを決めずに本人が追加した行動も、期日が近いものはプロジェクトの項目と一緒に先頭へ出し、
+    // 見直す日が先のものはたたむ（日付は、対応した本体が付けたものだけが載る）。
+    if (section == 'next') {
+      var order = 0;
+      for (final item in repo.unassignedOwnActions) {
+        order++;
+        if (!effortFits(filter, item.effort)) continue;
+        final b = item.scheduled
+            ? scheduleBucket(item.due, item.reviewAfter, today)
+            : null;
+        if (b == null || !b.hidden) matched++;
+        if (b != null && b.hidden) {
+          resting.add((null, null, item, order));
+        } else if (b != null && scheduleBucketLabels.containsKey(b.bucket)) {
+          front.putIfAbsent(b.bucket, () => []).add((null, null, item, order));
+        } else {
+          ownListed.add(item);
+        }
+      }
+    }
     for (final list in front.values) {
       list.sort(
         (a, b) => a.$3.due!.compareTo(b.$3.due!) != 0
             ? a.$3.due!.compareTo(b.$3.due!)
-            : a.$1.id.compareTo(b.$1.id) != 0
-            ? a.$1.id.compareTo(b.$1.id)
+            : (a.$1?.id ?? unassignedScope).compareTo(
+                    b.$1?.id ?? unassignedScope,
+                  ) !=
+                  0
+            ? (a.$1?.id ?? unassignedScope).compareTo(
+                b.$1?.id ?? unassignedScope,
+              )
             : a.$4.compareTo(b.$4),
       );
     }
-    Widget crossEntry((HubProject, NowEntry, NowItemRef, int) e) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InkWell(
-          onTap: () => widget.onNavigate('project:${e.$1.id}'),
-          child: Text(
-            e.$1.title,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Theme.of(context).colorScheme.primary,
-            ),
+    Widget crossEntry((HubProject?, NowEntry?, NowItemRef, int) e) =>
+        switch (e) {
+          (final HubProject project, final NowEntry entry, _, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              InkWell(
+                onTap: () => widget.onNavigate('project:${project.id}'),
+                child: Text(
+                  project.title,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+              nowEntry(project, section, entry, added[project.id]!),
+            ],
           ),
-        ),
-        nowEntry(e.$1, section, e.$2, added[e.$1.id]!),
-      ],
-    );
+          (_, _, final item, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'プロジェクト未定',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              unassignedOwnRow(item),
+            ],
+          ),
+        };
     return [
       title(
         '次の一手',
@@ -3062,7 +3122,7 @@ class _HubViewState extends State<HubView> {
           ),
         ),
       const SizedBox(height: 20),
-      if (projects.isEmpty)
+      if (projects.isEmpty && front.isEmpty && resting.isEmpty)
         const Padding(
           padding: EdgeInsets.only(bottom: 24),
           child: Text('進行中のプロジェクトはありません。'),
@@ -3168,14 +3228,34 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
-      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。目安で絞り込んでいる間は出さない。
+      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。目安で絞り込んでいる間は、
+      // 目安に合う本人の行動だけを出す（AIの行とメモには目安がない）。
       if (section == 'next' &&
           filter == null &&
           (repo.unassignedMemos.isNotEmpty ||
               repo.unassignedActionCount > 0 ||
               (repo.intakeFeatures.unassignedItems &&
                   repo.closedUnassigned.isNotEmpty)))
-        ...unassignedGroup(),
+        ...unassignedGroup(ownListed)
+      else if (section == 'next' && filter != null && ownListed.isNotEmpty) ...[
+        const Text(
+          'プロジェクト未定',
+          key: Key('next-unassigned'),
+          style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          key: const Key('unassigned-own'),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [for (final item in ownListed) unassignedOwnRow(item)],
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+      ],
       if (resting.isNotEmpty)
         Card(
           child: ExpansionTile(
@@ -3455,17 +3535,19 @@ class _HubViewState extends State<HubView> {
   /// 「次の一手」画面の「プロジェクト未定」。プロジェクトを決めずに本人が追加した行動を先に、
   /// どのプロジェクトにも結び付いていないメモの、AIによるタスクの分類と次の一手の提案を新しい順に並べる。
   /// 本体が対応していれば、行ごとに今日やる・完了・却下・自分の行動にするができる。
-  List<Widget> unassignedGroup() {
+  /// [own]は、ここに並べる本人の行動（期日の欄・休ませている項目に出したものを除く）。
+  List<Widget> unassignedGroup(List<NowItemRef> own) {
     final memos = repo.unassignedMemos,
         listed = memos.take(unassignedShown).toList(),
         rest = repo.unassignedTotal - memos.length,
         actionable = repo.intakeFeatures.unassignedItems,
         closed = actionable ? repo.closedUnassigned : const <NowItemRef>[],
-        own = repo.unassignedOwnActions,
         pending = repo.unassignedPendingActions,
+        // 件数は、期日の欄などに出した行動も含めた全体。
+        total = repo.unassignedActionCount,
+        moved = repo.unassignedOwnActions.length - own.length,
         counts = [
-          if (own.length + pending.length > 0)
-            '行動${own.length + pending.length}件',
+          if (total > 0) '行動$total件',
           if (repo.unassignedTotal > 0) 'メモ${repo.unassignedTotal}件',
         ];
     return [
@@ -3488,6 +3570,14 @@ class _HubViewState extends State<HubView> {
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 12),
+      ],
+      if (moved > 0) ...[
+        Text(
+          '期日が近い・見直す日まで休ませている行動$moved件は、上の期日の欄と「見直す日まで休ませている項目」にあります。',
+          key: const Key('unassigned-moved'),
+          style: const TextStyle(fontSize: 12),
         ),
         const SizedBox(height: 12),
       ],
@@ -3562,6 +3652,7 @@ class _HubViewState extends State<HubView> {
   }
 
   /// プロジェクト未定の項目の操作（今日やる・完了・却下）。[takeOver]ならAIの行を自分の行動にする操作も出す。
+  /// 本人が追加した行動には、対応した本体のとき、期日・手間の目安・定例の回の操作も「…」に出す。
   Widget unassignedItemActions(NowItemRef item, {bool takeOver = false}) {
     if (repo.itemRequestIdFor(item.key) != null) {
       return const Padding(
@@ -3573,16 +3664,67 @@ class _HubViewState extends State<HubView> {
         // 行動にする先は、進行中のプロジェクトかプロジェクト未定。引き取った行を一覧から外すのは
         // プロジェクトを決めない行動に対応した本体だけなので、対応前の本体には出さない。
         canTake =
-            takeOver && !item.action && repo.intakeFeatures.unassignedActions;
+            takeOver && !item.action && repo.intakeFeatures.unassignedActions,
+        records = item.action && repo.intakeFeatures.unassignedRecords,
+        scheduling = repo.scheduleRequestIdFor(item.key) != null,
+        effortPending = repo.effortRequestIdFor(item.key) != null,
+        effort = records && repo.intakeFeatures.effort,
+        rounds =
+            records &&
+            item.repeating &&
+            repo.intakeFeatures.occurrence &&
+            !scheduling,
+        calendar =
+            records &&
+            c.access.calendarSupported &&
+            validScheduleDate(item.due) &&
+            !item.resolved;
+    final more = <PopupMenuEntry<VoidCallback>>[
+      if (records && !scheduling)
+        PopupMenuItem(
+          key: Key('unassigned-schedule-$tag'),
+          value: () => scheduleItem(unassignedScope, item),
+          child: Text(item.scheduled ? '期日を変える' : '期日を付ける'),
+        ),
+      if (effort && !effortPending)
+        PopupMenuItem(
+          key: Key('unassigned-effort-$tag'),
+          value: () => effortItem(unassignedScope, item),
+          child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
+        ),
+      if (rounds)
+        PopupMenuItem(
+          key: Key('unassigned-round-skip-$tag'),
+          value: () => completeRound(unassignedScope, item, 'skip'),
+          child: Text(occurrenceActionLabels['skip']!),
+        ),
+      if (calendar)
+        PopupMenuItem(
+          key: Key('unassigned-calendar-$tag'),
+          value: () => addToCalendar(unassignedScope, 'プロジェクト未定', item),
+          child: const Text('カレンダーに入れる'),
+        ),
+    ];
     return Wrap(
       spacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         todayToggle(unassignedScope, item.key),
+        // 定例の行動は、今の回を完了にする（行動は残る）。定例をやめるときは「完了」。
+        if (rounds)
+          TextButton.icon(
+            key: Key('unassigned-round-done-$tag'),
+            onPressed: busy
+                ? null
+                : () => completeRound(unassignedScope, item, 'done'),
+            icon: const Icon(Icons.task_alt, size: 15),
+            label: Text(occurrenceActionLabels['done']!),
+          ),
         TextButton.icon(
           key: Key('unassigned-resolve-$tag'),
           onPressed: busy ? null : () => reportUnassigned(item, 'resolve'),
           icon: const Icon(Icons.check_circle_outline, size: 15),
-          label: const Text('完了'),
+          label: Text(rounds ? '定例をやめる' : '完了'),
         ),
         TextButton.icon(
           key: Key('unassigned-reject-$tag'),
@@ -3590,6 +3732,19 @@ class _HubViewState extends State<HubView> {
           icon: const Icon(Icons.close, size: 15),
           label: const Text('却下'),
         ),
+        if (scheduling && records)
+          const Text('期日を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        if (effortPending && records)
+          const Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        if (more.isNotEmpty)
+          PopupMenuButton<VoidCallback>(
+            key: Key('unassigned-more-$tag'),
+            enabled: !busy,
+            tooltip: 'ほかの操作',
+            icon: const Icon(Icons.more_horiz, size: 18),
+            onSelected: (action) => action(),
+            itemBuilder: (_) => more,
+          ),
         if (canTake)
           TextButton.icon(
             key: Key('unassigned-take-$tag'),
@@ -3610,7 +3765,7 @@ class _HubViewState extends State<HubView> {
     );
   }
 
-  /// プロジェクトを決めずに本人が追加した行動の1行。
+  /// プロジェクトを決めずに本人が追加した行動の1行。本人が付けた日付と手間の目安を本文の下に示す。
   Widget unassignedOwnRow(NowItemRef item) => Padding(
     key: Key('unassigned-action-${item.key.substring(0, 12)}'),
     padding: const EdgeInsets.only(bottom: 12),
@@ -3621,6 +3776,12 @@ class _HubViewState extends State<HubView> {
           item.display,
           style: const TextStyle(fontWeight: FontWeight.w600, height: 1.5),
         ),
+        if (itemRecordLabel(item) case final label when label.isNotEmpty)
+          Text(
+            label,
+            key: Key('unassigned-label-${item.key.substring(0, 12)}'),
+            style: const TextStyle(fontSize: 12),
+          ),
         unassignedItemActions(item),
       ],
     ),

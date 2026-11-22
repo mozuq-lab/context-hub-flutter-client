@@ -58,8 +58,13 @@ void main() {
       inputId: 'IN-1',
       due: due,
     );
-    expect(dueEvent(project, item(), hide: (s) => s), isNull);
-    final event = dueEvent(project, item(due: '2026-12-01'), hide: (s) => s)!;
+    expect(dueEvent(project.id, project.title, item(), hide: (s) => s), isNull);
+    final event = dueEvent(
+      project.id,
+      project.title,
+      item(due: '2026-12-01'),
+      hide: (s) => s,
+    )!;
     // 本体のcalendarEventsが同じ項目に付けるUIDと件名。
     expect(event.uid, '3a75aaee8e55a55bd9aea17e1e68ca00-due@context-hub');
     expect(event.title, '[期日] 集約ツール: [確認済み] 利用者に見せる');
@@ -68,20 +73,32 @@ void main() {
     expect(ics, contains('DTEND;VALUE=DATE:20261202\r\n'));
     expect(ics.endsWith('\r\n'), isTrue);
     final hidden = dueEvent(
-      project,
+      project.id,
+      project.title,
       item(due: '2026-12-01', text: 'token abc'),
       hide: (s) => s.replaceAll('abc', '[伏せ字]'),
     )!;
     expect('${hidden.title}${hidden.description}', isNot(contains('abc')));
     // 本体の`calendar.titles: project`と同じく、本文を入れない。
     final bare = dueEvent(
-      project,
+      project.id,
+      project.title,
       item(due: '2026-12-01'),
       hide: (s) => s,
       withText: false,
     )!;
     expect(bare.title, '[期日] 集約ツール: 次の一手');
     expect(bare.description, isNot(contains('利用者に見せる')));
+    // プロジェクト未定の行動は、本体の書き出しと同じく置き場を_unassignedとしてUIDを決め、「プロジェクト未定」と示す。
+    final own = dueEvent(
+      unassignedScope,
+      'プロジェクト未定',
+      item(due: '2026-12-01'),
+      hide: (s) => s,
+    )!;
+    expect(own.title, '[期日] プロジェクト未定: [確認済み] 利用者に見せる');
+    expect(own.description, contains('プロジェクト: 未定'));
+    expect(own.uid, isNot(event.uid));
     // 本体のfoldLineと同じく、UTF-8の文字の途中で切らずに75オクテットで折り返す。
     expect(
       foldIcsLine('DESCRIPTION:${'あ' * 40}'),

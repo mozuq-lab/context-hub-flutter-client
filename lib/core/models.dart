@@ -190,6 +190,15 @@ const itemEffortLabels = {
   'half-day': '半日以上',
 };
 
+/// 本人が付けた日付と手間の目安の表示（本体のNOW・HOMEの行末と同じ並び）。どちらもなければ空文字。
+/// 本体がNOWの本文に書かない置き場（プロジェクト未定の行動）で、行の下に示す。
+String itemRecordLabel(NowItemRef item) => [
+  if (item.due != null)
+    '期日 ${item.due}${item.repeat == null ? '' : '（${item.repeat!.label}）'}',
+  if (item.reviewAfter != null) '見直す日 ${item.reviewAfter}',
+  if (itemEffortLabels[item.effort] case final effort?) '手間 $effort',
+].join('・');
+
 /// 「次の一手」画面の手間の目安での絞り込み。1時間でできるものには15分でできるものも含める。
 const effortFilters = {'quick': '15分でできる', 'hour': '1時間でできる', 'none': '目安なし'};
 
