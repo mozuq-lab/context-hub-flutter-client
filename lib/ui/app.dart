@@ -572,6 +572,11 @@ class _HubShellState extends State<HubShell> {
                 for (final item in [
                   ('home', 'ホーム', Icons.space_dashboard_outlined),
                   ('next', '次の一手', Icons.checklist_outlined),
+                  // いつかやるは、一覧に行があるとき（または開いている間）だけメニューに出す。
+                  // 空のうちは、項目の「…」やアイデアの画面から置くと現れる。
+                  if ((c.repository?.somedayEntries.isNotEmpty ?? false) ||
+                      page == 'someday')
+                    ('someday', 'いつかやる', Icons.inventory_2_outlined),
                   ('digest', 'ふりかえり', Icons.event_note_outlined),
                   ('recent', '最近のメモ', Icons.notes_outlined),
                   ('ideas', 'アイデア', Icons.lightbulb_outline),
@@ -895,6 +900,7 @@ class _HubShellState extends State<HubShell> {
         has
             ? switch (page) {
                 'next' => '次の一手',
+                'someday' => 'いつかやる',
                 'digest' => 'ふりかえり',
                 'recent' => '最近のメモ',
                 'ideas' => 'アイデア',

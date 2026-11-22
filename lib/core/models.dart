@@ -144,15 +144,25 @@ class NowItemRef {
     this.waitingId,
     this.waitingSince,
     this.waitingWho,
+    this.somedayId,
+    this.somedaySince,
+    this.somedayReviewed,
   });
   final String key, section, label, text, inputId;
+
+  /// 本人が「いつかやる」へ移した記録（本体のitem-somedays）。効いている記録のID・移した日・最後に見直した日（YYYY-MM-DD）。
+  /// 移していない項目や、「いつかやる」を知らない本体ではnull。
+  final String? somedayId, somedaySince, somedayReviewed;
+
+  /// 「いつかやる」へ移してある（片付いた項目には付かない）。次の一手の一覧・件数・ウィジェットから外す。
+  bool get someday => somedaySince != null && !resolved;
 
   /// 本人が付けた連絡待ちの印（本体のitem-waits）。効いている記録のID・頼んだ日（YYYY-MM-DD）・相手（任意）。
   /// 印のない項目や、連絡待ちを知らない本体ではnull。相手はホーム画面のウィジェットと通知には出さない。
   final String? waitingId, waitingSince, waitingWho;
 
-  /// 連絡待ちの印が付いている（片付いた項目には付かない）。
-  bool get waiting => waitingSince != null && !resolved;
+  /// 連絡待ちの印が付いている（片付いた項目には付かない）。「いつかやる」の項目は連絡待ちとして扱わない。
+  bool get waiting => waitingSince != null && !resolved && !someday;
 
   /// 本人が付けた手間の目安（[itemEfforts]）。目安のない項目や、目安を知らない本体ではnull。
   final String? effort;
@@ -464,10 +474,13 @@ class HubProject {
   /// 本人が連絡待ちの印を付けた行か。
   bool waitingEntry(NowEntry entry) => itemOf(entry)?.waiting ?? false;
 
-  /// 出典の付いた行のうち、連絡待ちでないもの（次の一手・未解決の一覧と件数に使う）。
+  /// 本人が「いつかやる」へ移した行か。
+  bool somedayEntry(NowEntry entry) => itemOf(entry)?.someday ?? false;
+
+  /// 出典の付いた行のうち、連絡待ちでも「いつかやる」でもないもの（次の一手・未解決の一覧と件数に使う）。
   List<NowEntry> activeEntries(String section) => [
     for (final e in entriesWithSource(section))
-      if (!waitingEntry(e)) e,
+      if (!waitingEntry(e) && !somedayEntry(e)) e,
   ];
 
   /// 出典の付いた行のうち、本人が連絡待ちの印を付けたもの。
@@ -476,7 +489,7 @@ class HubProject {
       if (waitingEntry(e)) e,
   ];
 
-  /// 次の一手の件数（出典の付いた行と、反映待ちの行動）。連絡待ちの行は数えない。
+  /// 次の一手の件数（出典の付いた行と、反映待ちの行動）。連絡待ちと「いつかやる」の行は数えない。
   int get nextCount => activeEntries('next').length + pendingActions.length;
 
   /// 確認待ちの作業記録の下書き。
@@ -1179,3 +1192,57 @@ class PendingPersonAdd {
   final String requestId, personId, name, state;
   final List<String> aliases;
 }
+
+/// 本体が書く「いつかやる」の一覧（90_system/someday.json）の1行。最後に見直した日の古い順に並ぶ。
+/// kindは item（本人が移した次の一手・未解決）・project（休止中のプロジェクト）・idea（本人が置いたアイデア）。
+/// reviewedは最後に見直した日（置いた日を含む）。休止した日も見直した記録もないプロジェクトではnull。
+class SomedayEntry {
+  const SomedayEntry({
+    required this.kind,
+    required this.id,
+    required this.title,
+    required this.since,
+    required this.reviewed,
+    this.scope,
+    this.section,
+    this.label = '',
+    this.path,
+    this.place,
+  });
+
+  /// item・project・idea。
+  final String kind;
+
+  /// 項目は項目キー、プロジェクトはプロジェクトID、アイデアはアイデアID。
+  final String id;
+
+  /// 項目は本文（[label]を除く）、プロジェクトは名前、アイデアは要約。
+  final String title;
+  final String? since, reviewed;
+
+  /// 項目の置き場（プロジェクトIDか、プロジェクト未定の`_unassigned`）と欄（next・open）、行頭の区分。
+  final String? scope, section;
+  final String label;
+
+  /// アイデアのファイル（20_ideas/IDEA-….md）。
+  final String? path;
+
+  /// 項目の置き場の名前（プロジェクト名か「プロジェクト未定」）。
+  final String? place;
+
+  /// 一覧の中で行を区別するキー（種類と対象）。
+  String get ref => '$kind:${scope == null ? '' : '$scope:'}$id';
+
+  /// 最後に見直してから[today]までの日数。見直した記録がなければnull。
+  int? days(String today) => reviewed == null ? null : waitingDays(reviewed!, today);
+
+  /// 見直していないとみなす行か（最後に見直してから[reviewDays]日以上、または見直した記録がない）。
+  bool stale(String today, int reviewDays) =>
+      reviewed == null || waitingDays(reviewed!, today) >= reviewDays;
+}
+
+/// 「いつかやる」を見直していないとみなす日数の既定（本体の`someday_review_days`がないとき）。
+const somedayReviewDaysDefault = 30;
+
+/// 本体のsomeday-reviewsの判断。add: アイデアを置く / keep: そのまま / start: 始めた / drop: やめた。
+const somedayReviewActions = ['add', 'keep', 'start', 'drop'];
