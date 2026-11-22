@@ -592,14 +592,16 @@ void main() {
           a = MemoryUIAccess(),
           c = await sample(t, a, files);
       final lead = leadOf(c.review!), members = c.review!.groupMembers(lead);
-      // ホームは、次の一手、プロジェクト未定、プロジェクト、確認待ち、ふりかえり、最近のメモの順。
+      // ホームは、件数の札（次の一手・確認待ち・ふりかえりを横に並べる）、プロジェクト未定、プロジェクト、
+      // 見直しと判断（プロジェクト案）、最近のメモの順。
       double top(String key) => t.getTopLeft(find.byKey(Key(key))).dy;
+      expect(top('home-review'), top('home-next'));
+      expect(top('home-digest'), top('home-next'));
       final order = [
         'home-next',
         'home-unassigned',
         'project-status-garden',
-        'home-review',
-        'home-digest',
+        'home-proposal-${lead.id}',
         'home-recent',
       ].map(top).toList();
       expect(order, [...order]..sort());

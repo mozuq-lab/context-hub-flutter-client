@@ -228,7 +228,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('サンプルで試す'));
     await tester.pumpAndSettle();
-    double top(String key) => tester.getTopLeft(find.byKey(Key(key)).last).dy;
+    // ホームのプロジェクトは2列に並ぶので、上から、同じ行では左からの順で比べる。
+    double top(String key) {
+      final at = tester.getTopLeft(find.byKey(Key(key)).last);
+      return at.dy * 10000 + at.dx;
+    }
+
     expect(find.byKey(const Key('home-pins')), findsNothing);
     expect(top('pin-context-hub'), lessThan(top('pin-old-plan')));
     // 休止中のプロジェクトをピン留めすると、進行中より前に出る。

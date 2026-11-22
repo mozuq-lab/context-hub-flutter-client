@@ -26,8 +26,8 @@ import 'review_view.dart';
 import 'guided_view.dart';
 import 'shortcuts.dart';
 import 'notice.dart';
-import 'shell_scope.dart';
 import 'ask_view.dart';
+import 'theme.dart';
 
 export 'notice.dart';
 
@@ -89,21 +89,44 @@ class NoticeBox extends StatelessWidget {
   final String text;
   final bool error;
   @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-    color: error
-        ? Theme.of(context).colorScheme.errorContainer
-        : Theme.of(context).colorScheme.secondaryContainer,
-    child: Text(
-      text,
-      style: TextStyle(
-        fontSize: 12,
-        height: 1.5,
-        color: error ? Theme.of(context).colorScheme.onErrorContainer : null,
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final tone = error ? scheme.error : scheme.primary;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 11, 16, 11),
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: dark ? .14 : .07),
+        borderRadius: BorderRadius.circular(hubRadiusSmall),
+        border: Border.all(color: tone.withValues(alpha: dark ? .3 : .18)),
       ),
-    ),
-  );
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(
+              error ? Icons.error_outline : Icons.info_outline,
+              size: 17,
+              color: tone,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.55,
+                color: error ? scheme.error : scheme.onSurface,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class HubView extends StatefulWidget {
@@ -287,35 +310,319 @@ class _HubViewState extends State<HubView> {
   }
 
   /// 画面の見出し。labelは状態など、見出しの上に添える短い語（任意）。
-  Widget title(String text, String subtitle, {String? label}) => Padding(
-    padding: const EdgeInsets.only(bottom: 28),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (label != null) ...[
+  Widget title(String text, String subtitle, {String? label}) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (label != null) ...[
+            Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          Text(text, style: theme.textTheme.headlineSmall),
+          const SizedBox(height: 6),
           Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.primary,
+            subtitle,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              height: 1.65,
             ),
           ),
-          const SizedBox(height: 10),
         ],
-        Text(
-          text,
-          style: const TextStyle(
-            fontSize: 30,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -.6,
+      ),
+    );
+  }
+
+  /// ホームの見出し。今日の日付と、読み込んだ記録の量。
+  Widget homeHeader(DateTime now) {
+    final theme = Theme.of(context);
+    const week = ['月', '火', '水', '木', '金', '土', '日'];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${now.month}月${now.day}日（${week[now.weekday - 1]}）',
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text('今日、どこから始める？', style: theme.textTheme.headlineSmall),
+          const SizedBox(height: 6),
+          Text(
+            '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ · 読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 欄の見出し。[trailing]は見出しの右に置く小さな操作。
+  Widget sectionHeading(
+    String text, {
+    Key? key,
+    List<Widget> trailing = const [],
+  }) => Padding(
+    padding: const EdgeInsets.only(top: 28, bottom: 8),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            text,
+            key: key,
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
           ),
         ),
-        const SizedBox(height: 10),
-        Text(subtitle, style: const TextStyle(height: 1.7)),
+        ...trailing,
       ],
     ),
   );
+
+  /// 行を1枚の面にまとめる。行の間には細い線を引く。
+  Widget groupCard(List<Widget> rows) => Card(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final (i, row) in rows.indexed) ...[
+          if (i > 0) const Divider(indent: 16, endIndent: 16),
+          row,
+        ],
+      ],
+    ),
+  );
+
+  /// 同じ幅の札を、幅に合わせた列数で並べる。行ごとに高さをそろえる。
+  Widget tileGrid(List<Widget> tiles, {int Function(double width)? columns}) =>
+      LayoutBuilder(
+        builder: (context, box) {
+          if (tiles.isEmpty) return const SizedBox.shrink();
+          final count =
+              (columns?.call(box.maxWidth) ??
+                      (box.maxWidth >= 680 ? tiles.length.clamp(1, 4) : 2))
+                  .clamp(1, tiles.length);
+          return Column(
+            children: [
+              for (var i = 0; i < tiles.length; i += count)
+                Padding(
+                  padding: EdgeInsets.only(top: i == 0 ? 0 : 12),
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var j = i; j < i + count; j++) ...[
+                          if (j > i) const SizedBox(width: 12),
+                          Expanded(
+                            child: j < tiles.length
+                                ? tiles[j]
+                                : const SizedBox.shrink(),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      );
+
+  /// ホームの件数の札。押すとその画面を開く。[highlight]は判断が要るものがあるときの印。
+  Widget homeTile({
+    required Key key,
+    required IconData icon,
+    required String title,
+    required String caption,
+    required VoidCallback onTap,
+    bool highlight = false,
+    bool compact = false,
+  }) {
+    final theme = Theme.of(context), scheme = theme.colorScheme;
+    final mark = Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: .1),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Icon(icon, size: 18, color: scheme.primary),
+    );
+    final dot = Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: scheme.primary, shape: BoxShape.circle),
+    );
+    if (compact) {
+      return InkWell(
+        key: key,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+          child: Row(
+            children: [
+              mark,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      caption,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              if (highlight) ...[const SizedBox(width: 8), dot],
+              Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: scheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return Card(
+      child: InkWell(
+        key: key,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [mark, const Spacer(), if (highlight) dot]),
+              const SizedBox(height: 14),
+              Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                caption,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// ホームのプロジェクトの札。先頭の次の一手と状態、前回見てからの変化を示す。
+  Widget projectCard(HubProject project, DateTime now) {
+    final theme = Theme.of(context), scheme = theme.colorScheme;
+    final pinned = repo.isPinned(project.id);
+    return Card(
+      child: InkWell(
+        key: Key('project-${project.id}'),
+        onTap: () => widget.onNavigate('project:${project.id}'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 10, 6, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      project.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: Key('pin-${project.id}'),
+                    tooltip: pinned ? 'ピン留めを外す' : 'ピン留めして先頭に表示',
+                    isSelected: pinned,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => togglePin(project),
+                    icon: const Icon(Icons.push_pin_outlined, size: 18),
+                    selectedIcon: const Icon(Icons.push_pin, size: 18),
+                  ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      // 本人が追加して反映待ちの行動は、本体と同じく作業要約の次の一手より前に示す。
+                      project.pendingActions.firstOrNull?.text != null
+                          ? '$actionLabel${project.pendingActions.first.text}（反映待ち）'
+                          // 連絡待ちの行は、自分では進められないので先頭の次の一手にしない。
+                          : project.activeEntries('next').firstOrNull?.text ??
+                                '次の一手はまだ作られていません。',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      projectStatusLine(project, now),
+                      key: Key('project-status-${project.id}'),
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    if (changeLabel(c.changesSince(project)) case final label?)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          label,
+                          key: Key('project-changes-${project.id}'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: scheme.primary,
+                          ),
+                        ),
+                      ),
+                    if (project.drafts.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '作業記録の下書き ${project.drafts.length}件',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   /// アイデア一覧の印。束ねたアイデアと、未確認の似ているアイデアの数。
   String? ideaBadge(HubRecord r) {
@@ -335,60 +642,72 @@ class _HubViewState extends State<HubView> {
     Key? key,
     List<String>? words,
     String? badge,
-  }) => Card(
-    key: key,
-    child: ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      title: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${words == null ? '' : '${searchKindLabels[HubRepository.searchKindOf(r)] ?? r.kind} · '}${originLabel(r.origin)} · ${stateLabel(r.status)}\n${recordWhen(r)}',
-              style: const TextStyle(fontSize: 12, height: 1.7),
-            ),
-            if (badge != null)
-              Text(
-                badge,
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.7,
-                  color: Theme.of(context).colorScheme.tertiary,
-                ),
-              ),
-            if (words != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text.rich(
-                  key: const Key('search-snippet'),
-                  TextSpan(
-                    children: highlightSpans(
-                      searchSnippet(r.body, words),
-                      words,
-                      Theme.of(context).colorScheme.primaryContainer,
+  }) {
+    final theme = Theme.of(context);
+    return Card(
+      key: key,
+      child: InkWell(
+        onTap: () => open(r.id),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 8, 14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      r.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(fontSize: 15),
                     ),
-                  ),
-                  style: const TextStyle(fontSize: 13, height: 1.6),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
+                    const SizedBox(height: 4),
+                    Text(
+                      '${words == null ? '' : '${searchKindLabels[HubRepository.searchKindOf(r)] ?? r.kind} · '}${originLabel(r.origin)} · ${stateLabel(r.status)}\n${recordWhen(r)}',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    if (badge != null)
+                      Text(
+                        badge,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.tertiary,
+                        ),
+                      ),
+                    if (words != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text.rich(
+                          key: const Key('search-snippet'),
+                          TextSpan(
+                            children: highlightSpans(
+                              searchSnippet(r.body, words),
+                              words,
+                              theme.colorScheme.primaryContainer,
+                            ),
+                          ),
+                          style: const TextStyle(fontSize: 13, height: 1.6),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
                 ),
               ),
-          ],
+              if (HubRepository.bundleKinds.contains(r.kind))
+                BasketToggle(controller: c, record: r),
+              Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ),
         ),
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (HubRepository.bundleKinds.contains(r.kind))
-            BasketToggle(controller: c, record: r),
-          const Icon(Icons.chevron_right),
-        ],
-      ),
-      onTap: () => open(r.id),
-    ),
-  );
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.page == 'review') return ReviewView(controller: c);
@@ -441,14 +760,9 @@ class _HubViewState extends State<HubView> {
     } else if (page == 'weekly') {
       children.addAll(weeklyView());
     } else if (page == 'home') {
-      children.add(
-        title(
-          '今日、どこから始める？',
-          '${repo.projects.length}プロジェクト · ${repo.recent.length}件のメモ\n読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
-        ),
-      );
-      final backupNow = DateTime.now();
-      for (final (index, warning) in repo.backup.warnings(backupNow).indexed) {
+      final now = DateTime.now();
+      children.add(homeHeader(now));
+      for (final (index, warning) in repo.backup.warnings(now).indexed) {
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -460,14 +774,14 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
-      if (repo.backup.line(backupNow) case final line?) {
+      if (repo.backup.line(now) case final line?) {
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
             child: Text(
               line,
               key: const Key('home-backup'),
-              style: const TextStyle(fontSize: 12),
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
         );
@@ -476,6 +790,7 @@ class _HubViewState extends State<HubView> {
       children.addAll(todaySection(compact: true));
       // 今週の気づきは、行動につながる欄（次の一手）より前に置く。
       children.addAll(insightsHome());
+      // 件数の札。毎日開く画面への入口を横に並べ、件数と要点だけを示す。
       // プロジェクトを決めずに本人が追加した行動も、次の一手として数える。
       final actionable = repo.actionableProjects,
           ownUnassigned = repo.unassignedActionCount,
@@ -483,27 +798,73 @@ class _HubViewState extends State<HubView> {
               actionable.fold<int>(0, (n, p) => n + p.nextCount) +
               ownUnassigned,
           nextProjects = actionable.where((p) => p.nextCount > 0).length;
+      // 確認待ちは、同じ対象を指すプロジェクト案を1件と数える。
+      final review = c.review!;
+      final stale = repo.orderedProjects
+          .where((p) => !p.merged && p.stale(now))
+          .toList();
+      final somedayDays = repo.intakeFeatures.somedayReviewDays,
+          somedayStale = repo.staleSomedayEntries(hubToday()).length;
+      // 狭い画面では札を横に並べず、1枚の面に行として並べる。
       children.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 20),
-          child: Card(
-            child: ListTile(
-              key: const Key('home-next'),
-              leading: const Icon(Icons.checklist_outlined),
-              title: Text('次の一手 $nextCount件'),
-              subtitle: Text(
-                nextCount == 0
+        LayoutBuilder(
+          builder: (context, box) {
+            final compact = box.maxWidth < 560;
+            final tiles = [
+              homeTile(
+                key: const Key('home-next'),
+                icon: Icons.checklist_outlined,
+                title: '次の一手 $nextCount件',
+                caption: nextCount == 0
                     ? '進行中のプロジェクトに次の一手はありません'
                     : nextProjects == 0
-                    ? 'プロジェクト未定から · 終わったらその場で完了を報告'
+                    ? 'プロジェクト未定から'
                     : ownUnassigned > 0
-                    ? '進行中の$nextProjectsプロジェクトとプロジェクト未定から · 終わったらその場で完了を報告'
-                    : '進行中の$nextProjectsプロジェクトから · 終わったらその場で完了を報告',
+                    ? '進行中の$nextProjectsプロジェクトとプロジェクト未定から'
+                    : '進行中の$nextProjectsプロジェクトから',
+                compact: compact,
+                onTap: () => widget.onNavigate('next'),
               ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => widget.onNavigate('next'),
-            ),
-          ),
+              homeTile(
+                key: const Key('home-review'),
+                icon: Icons.fact_check_outlined,
+                title: '確認待ち ${review.pendingRows.length}件',
+                caption: review.attention.isEmpty
+                    ? 'AIの提案を、採用するか却下するか決めます'
+                    : '要確認 ${review.attention.length}件 · AIの提案を、採用するか却下するか決めます',
+                // 判断を待つ候補があれば印を付ける。
+            highlight: review.pendingRows.isNotEmpty,
+                compact: compact,
+                onTap: () => widget.onNavigate('review'),
+              ),
+              homeTile(
+                key: const Key('home-digest'),
+                icon: Icons.event_note_outlined,
+                title: repo.digestDocument == null
+                    ? 'ふりかえり（未生成）'
+                    : '直近${repo.digestDocument!.periodDays ?? 7}日のふりかえり',
+                caption: stale.isEmpty
+                    ? '動いたプロジェクトと現在地の変化を見ます'
+                    : '停滞しているプロジェクト ${stale.length}件 · 続けるか休止・完了にするかを決めます',
+                highlight: stale.isNotEmpty,
+                compact: compact,
+                onTap: () => widget.onNavigate('digest'),
+              ),
+              // 「いつかやる」は件数と、見直していない件数だけを示す（中身は専用の画面で見直す）。
+              if (repo.somedayEntries.isNotEmpty)
+                homeTile(
+                  key: const Key('home-someday'),
+                  icon: Icons.inventory_2_outlined,
+                  title: 'いつかやる ${repo.somedayEntries.length}件',
+                  caption: somedayStale > 0
+                      ? '$somedayDays日以上見直していないもの$somedayStale件'
+                      : '今は取り組まないことの置き場 · すべて$somedayDays日以内に見直し済み',
+                  compact: compact,
+                  onTap: () => widget.onNavigate('someday'),
+                ),
+            ];
+            return compact ? groupCard(tiles) : tileGrid(tiles);
+          },
         ),
       );
       if (repo.unassignedMemos.isNotEmpty || ownUnassigned > 0) {
@@ -514,464 +875,291 @@ class _HubViewState extends State<HubView> {
               if (ownUnassigned > 0) '行動$ownUnassigned件',
               if (repo.unassignedTotal > 0) 'メモ${repo.unassignedTotal}件',
             ].join('・');
+        void openNext() {
+          nextSection = 'next';
+          widget.onNavigate('next');
+        }
+
+        children.add(sectionHeading('プロジェクト未定'));
         children.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 20),
-            child: Card(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ListTile(
-                    key: const Key('home-unassigned'),
-                    leading: const Icon(Icons.lightbulb_outline),
-                    title: Text('プロジェクト未定の次の一手 $counts'),
-                    subtitle: Text(
-                      repo.unassignedMemos.isEmpty
-                          ? 'プロジェクトを決めずに追加した行動'
-                          : repo.intakeFeatures.unassignedItems
-                          ? 'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証）など · 次の一手で完了・却下'
-                          : 'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証） · 完了の報告はできません',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () {
-                      nextSection = 'next';
-                      widget.onNavigate('next');
-                    },
-                  ),
-                  for (final action in repo.unassignedPendingActions.take(
-                    homeUnassigned,
-                  ))
-                    ListTile(
-                      key: Key('home-unassigned-pending-${action.requestId}'),
-                      dense: true,
-                      contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
-                      title: Text(
-                        '$actionLabel${action.text}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text('反映待ち（${intakeStateLabel(action.state)}）'),
-                      onTap: () {
-                        nextSection = 'next';
-                        widget.onNavigate('next');
-                      },
-                    ),
-                  for (final item in own.take(
-                    (homeUnassigned - repo.unassignedPendingActions.length)
-                        .clamp(0, homeUnassigned),
-                  ))
-                    ListTile(
-                      key: Key(
-                        'home-unassigned-action-${item.key.substring(0, 12)}',
-                      ),
-                      dense: true,
-                      contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
-                      title: Text(
-                        item.display,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: switch (itemRecordLabel(item)) {
-                        '' => null,
-                        final label => Text(label),
-                      },
-                      onTap: () {
-                        nextSection = 'next';
-                        widget.onNavigate('next');
-                      },
-                    ),
-                  for (final memo in repo.unassignedMemos.take(
-                    (homeUnassigned - ownUnassigned).clamp(0, homeUnassigned),
-                  ))
-                    ListTile(
-                      key: Key('home-unassigned-${memo.inputId}'),
-                      dense: true,
-                      contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
-                      title: Text(
-                        memo.text,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text(
-                        [
-                          hubToday(memo.at),
-                          memo.ownWords ? '本人のメモ' : 'AIの要約・未検証',
-                          if (memo.task) 'AIがタスクと分類',
-                          if (memo.suggestions.isNotEmpty)
-                            'AI提案: ${memo.suggestions.first}',
-                        ].join(' · '),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: () {
-                        final record = repo.inputRecord(memo.inputId);
-                        if (record != null) open(record.id);
-                      },
-                    ),
-                ],
+          groupCard([
+            ListTile(
+              key: const Key('home-unassigned'),
+              leading: const Icon(Icons.lightbulb_outline),
+              title: Text('プロジェクト未定の次の一手 $counts'),
+              subtitle: Text(
+                repo.unassignedMemos.isEmpty
+                    ? 'プロジェクトを決めずに追加した行動'
+                    : repo.intakeFeatures.unassignedItems
+                    ? 'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証）など · 次の一手で完了・却下'
+                    : 'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証） · 完了の報告はできません',
               ),
+              trailing: const Icon(Icons.chevron_right, size: 20),
+              onTap: openNext,
             ),
-          ),
-        );
-      }
-      // 「いつかやる」は件数と、見直していない件数だけを示す（中身は専用の画面で見直す）。
-      if (repo.somedayEntries.isNotEmpty) {
-        final days = repo.intakeFeatures.somedayReviewDays,
-            stale = repo.staleSomedayEntries(hubToday()).length;
-        children.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 20),
-            child: Card(
-              child: ListTile(
-                key: const Key('home-someday'),
-                leading: const Icon(Icons.inventory_2_outlined),
-                title: Text('いつかやる ${repo.somedayEntries.length}件'),
-                subtitle: Text(
-                  stale > 0
-                      ? '$days日以上見直していないもの$stale件 · 始める・そのまま・やめるを選べます'
-                      : '今は取り組まないことの置き場 · すべて$days日以内に見直し済み',
+            for (final action in repo.unassignedPendingActions.take(
+              homeUnassigned,
+            ))
+              ListTile(
+                key: Key('home-unassigned-pending-${action.requestId}'),
+                dense: true,
+                contentPadding: const EdgeInsets.fromLTRB(56, 0, 16, 0),
+                title: Text(
+                  '$actionLabel${action.text}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => widget.onNavigate('someday'),
+                subtitle: Text('反映待ち（${intakeStateLabel(action.state)}）'),
+                onTap: openNext,
               ),
-            ),
-          ),
+            for (final item in own.take(
+              (homeUnassigned - repo.unassignedPendingActions.length).clamp(
+                0,
+                homeUnassigned,
+              ),
+            ))
+              ListTile(
+                key: Key('home-unassigned-action-${item.key.substring(0, 12)}'),
+                dense: true,
+                contentPadding: const EdgeInsets.fromLTRB(56, 0, 16, 0),
+                title: Text(
+                  item.display,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: switch (itemRecordLabel(item)) {
+                  '' => null,
+                  final label => Text(label),
+                },
+                onTap: openNext,
+              ),
+            for (final memo in repo.unassignedMemos.take(
+              (homeUnassigned - ownUnassigned).clamp(0, homeUnassigned),
+            ))
+              ListTile(
+                key: Key('home-unassigned-${memo.inputId}'),
+                dense: true,
+                contentPadding: const EdgeInsets.fromLTRB(56, 0, 16, 0),
+                title: Text(
+                  memo.text,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  [
+                    hubToday(memo.at),
+                    memo.ownWords ? '本人のメモ' : 'AIの要約・未検証',
+                    if (memo.task) 'AIがタスクと分類',
+                    if (memo.suggestions.isNotEmpty)
+                      'AI提案: ${memo.suggestions.first}',
+                  ].join(' · '),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () {
+                  final record = repo.inputRecord(memo.inputId);
+                  if (record != null) open(record.id);
+                },
+              ),
+          ]),
         );
       }
-      final now = DateTime.now();
-      if (repo.projects.isEmpty) {
-        children.add(const Text('プロジェクトはまだありません。メモはproject未指定でも追加できます。'));
-      }
-      // 統合済みのプロジェクトは変化の印を出さないので、件数にも数えない。
+      // プロジェクト。統合済みのプロジェクトは変化の印を出さないので、件数にも数えない。
       final changed = repo.projects.values
           .where((p) => !p.merged && c.changesSince(p)?.isEmpty == false)
           .length;
-      if (changed > 0) {
-        children.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '前回見てから変化のあったプロジェクト $changed件',
-                    key: const Key('home-changes'),
-                  ),
-                ),
-                TextButton(
-                  key: const Key('mark-all-seen'),
-                  onPressed: markAllSeen,
-                  child: const Text('すべて既読にする'),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
       final mergedProjects = repo.projects.values
           .where((p) => p.merged)
           .toList();
       // 統合済みのプロジェクトは後ろの「統合済み」にまとめるので、ピン留めの先頭には数えない。
       final pinnedCount = repo.pinnedProjects.where((p) => !p.merged).length;
-      if (pinnedCount > 0) {
+      children.add(
+        sectionHeading(
+          'プロジェクト',
+          trailing: [
+            if (changed > 0)
+              TextButton(
+                key: const Key('mark-all-seen'),
+                onPressed: markAllSeen,
+                child: const Text('すべて既読にする'),
+              ),
+            if (pinnedCount > 0)
+              TextButton(
+                key: const Key('reorder-pins'),
+                onPressed: reorderPins,
+                child: const Text('並び替え'),
+              ),
+          ],
+        ),
+      );
+      if (changed > 0 || pinnedCount > 0) {
         children.add(
           Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Wrap(
+              spacing: 16,
+              runSpacing: 4,
               children: [
-                Expanded(
-                  child: Text(
+                if (changed > 0)
+                  Text(
+                    '前回見てから変化のあったプロジェクト $changed件',
+                    key: const Key('home-changes'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                if (pinnedCount > 0)
+                  Text(
                     'ピン留め $pinnedCount件を先頭に表示（この端末だけの並び）',
                     key: const Key('home-pins'),
-                    style: const TextStyle(fontSize: 12),
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                ),
-                TextButton(
-                  key: const Key('reorder-pins'),
-                  onPressed: reorderPins,
-                  child: const Text('並び替え'),
-                ),
               ],
             ),
           ),
         );
       }
-      for (final project in repo.orderedProjects.where((p) => !p.merged)) {
-        final pinned = repo.isPinned(project.id);
+      if (repo.projects.isEmpty) {
         children.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Card(
-              child: ListTile(
-                key: Key('project-${project.id}'),
-                contentPadding: const EdgeInsets.fromLTRB(24, 24, 12, 24),
-                title: Text(
-                  project.title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                subtitle: Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        // 本人が追加して反映待ちの行動は、本体と同じく作業要約の次の一手より前に示す。
-                        project.pendingActions.firstOrNull?.text != null
-                            ? '$actionLabel${project.pendingActions.first.text}（反映待ち）'
-                            // 連絡待ちの行は、自分では進められないので先頭の次の一手にしない。
-                            : project.activeEntries('next').firstOrNull?.text ??
-                                  '次の一手はまだ作られていません。',
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        projectStatusLine(project, now),
-                        key: Key('project-status-${project.id}'),
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      if (changeLabel(c.changesSince(project))
-                          case final label?)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(
-                            label,
-                            key: Key('project-changes-${project.id}'),
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        ),
-                      if (project.drafts.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(
-                            '作業記録の下書き ${project.drafts.length}件',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      key: Key('pin-${project.id}'),
-                      tooltip: pinned ? 'ピン留めを外す' : 'ピン留めして先頭に表示',
-                      isSelected: pinned,
-                      onPressed: () => togglePin(project),
-                      icon: const Icon(Icons.push_pin_outlined, size: 20),
-                      selectedIcon: const Icon(Icons.push_pin, size: 20),
-                    ),
-                    const Icon(Icons.arrow_forward),
-                  ],
-                ),
-                onTap: () => widget.onNavigate('project:${project.id}'),
-              ),
-            ),
+          Text(
+            'プロジェクトはまだありません。メモはproject未指定でも追加できます。',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
         );
       }
+      children.add(
+        tileGrid([
+          for (final project in repo.orderedProjects.where((p) => !p.merged))
+            projectCard(project, now),
+        ], columns: (width) => width >= 640 ? 2 : 1),
+      );
       if (mergedProjects.isNotEmpty) {
         // 統合済みのプロジェクトは入力を統合先のものとして読むため、小さくまとめて統合先を示す。
+        children.add(const SizedBox(height: 12));
         children.add(
-          Padding(
-            padding: const EdgeInsets.only(top: 8, bottom: 12),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
-                      child: Text(
-                        '統合済み（${mergedProjects.length}件）',
-                        key: const Key('merged-projects'),
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    for (final project in mergedProjects)
-                      ListTile(
-                        key: Key('project-${project.id}'),
-                        dense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                        ),
-                        title: Text(project.title),
-                        subtitle: Text(
-                          projectStatusLine(project, now),
-                          key: Key('project-status-${project.id}'),
-                        ),
-                        trailing: const Icon(Icons.arrow_forward, size: 18),
-                        onTap: () => widget.onNavigate('project:${project.id}'),
-                      ),
-                  ],
+          groupCard([
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Text(
+                '統合済み（${mergedProjects.length}件）',
+                key: const Key('merged-projects'),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            for (final project in mergedProjects)
+              ListTile(
+                key: Key('project-${project.id}'),
+                dense: true,
+                title: Text(project.title),
+                subtitle: Text(
+                  projectStatusLine(project, now),
+                  key: Key('project-status-${project.id}'),
+                ),
+                trailing: const Icon(Icons.chevron_right, size: 20),
+                onTap: () => widget.onNavigate('project:${project.id}'),
+              ),
+          ]),
+        );
+      }
+      // 判断が要るもの。プロジェクト案は、根拠のメモが多いものから数件を出す（依頼を保存済みのものは除く）。
+      // 週次レビューは最後に見直してからの日数を示し、間隔を過ぎたら促す（通知は出さない）。
+      // 停滞しているプロジェクトは、その場で開いて状態を決められるようにする。
+      final proposals = [
+        for (final (index, item) in review.pendingRows.indexed)
+          if (item.kind == 'project' && review.requestIdFor(item.id) == null)
+            (index, item, review.groupMembers(item).length + 1),
+      ]..sort((a, b) => b.$3 != a.$3 ? b.$3 - a.$3 : a.$1.compareTo(b.$1));
+      final weekly = repo.weeklyReview;
+      final decide = [
+        for (final (_, item, memos) in proposals.take(homeProposals))
+          ListTile(
+            key: Key('home-proposal-${item.id}'),
+            leading: const Icon(Icons.create_new_folder_outlined),
+            title: Text(
+              'プロジェクト案: ${item.title}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text('採用するとプロジェクトを作ります · 元のメモ$memos件'),
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ReviewDetail(
+                  controller: c,
+                  id: item.id,
+                  identity: c.location!.identity,
                 ),
               ),
             ),
           ),
-        );
+        if (weekly != null)
+          ListTile(
+            key: const Key('home-weekly'),
+            leading: const Icon(Icons.event_repeat_outlined),
+            title: Text(
+              switch (weekly.daysSinceReview(hubToday(now))) {
+                null => '週次レビュー: まだ見直した記録がありません',
+                0 => '週次レビュー: 今日見直しました',
+                final d => '週次レビュー: 前回から$d日',
+              },
+              style: weekly.due(hubToday(now))
+                  ? TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.primary,
+                    )
+                  : null,
+            ),
+            subtitle: weekly.due(hubToday(now))
+                ? Text(
+                    c.weeklyProgress != null
+                        ? '続きから再開できます'
+                        : '${weekly.intervalDays}日以上空いています · 一覧を順に点検します',
+                  )
+                : null,
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => widget.onNavigate('weekly'),
+          ),
+        for (final p in stale.take(3))
+          ListTile(
+            key: Key('home-stale-${p.id}'),
+            leading: const Icon(Icons.hourglass_empty_outlined),
+            title: Text(p.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            // 望む結果を添え、続けるか・完了にするかを判断しやすくする。
+            subtitle: Text(
+              '$projectStaleDays日以上、新しいメモがありません${p.outcomeLines.isEmpty ? '' : '\n望む結果: ${p.outcomeLines.join(' / ')}'}',
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => widget.onNavigate('project:${p.id}'),
+          ),
+      ];
+      if (decide.isNotEmpty) {
+        children.add(sectionHeading('見直しと判断'));
+        children.add(groupCard(decide));
       }
-      // 確認待ちは、同じ対象を指すプロジェクト案を1件と数える。
-      // プロジェクト案は、根拠のメモが多いものから数件をここに出す（依頼を保存済みのものは除く）。
-      final review = c.review!,
-          proposals = [
-            for (final (index, item) in review.pendingRows.indexed)
-              if (item.kind == 'project' &&
-                  review.requestIdFor(item.id) == null)
-                (index, item, review.groupMembers(item).length + 1),
-          ]..sort((a, b) => b.$3 != a.$3 ? b.$3 - a.$3 : a.$1.compareTo(b.$1));
       children.add(
-        Padding(
-          padding: const EdgeInsets.only(top: 8, bottom: 20),
-          child: Card(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ListTile(
-                  key: const Key('home-review'),
-                  leading: const Icon(Icons.fact_check_outlined),
-                  title: Text('確認待ち ${review.pendingRows.length}件'),
-                  subtitle: Text(
-                    [
-                      'AIの提案を、採用するか却下するか決めます',
-                      if (review.attention.isNotEmpty)
-                        '要確認 ${review.attention.length}件',
-                    ].join(' · '),
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => widget.onNavigate('review'),
-                ),
-                for (final (_, item, memos) in proposals.take(homeProposals))
-                  ListTile(
-                    key: Key('home-proposal-${item.id}'),
-                    dense: true,
-                    contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
-                    title: Text(
-                      'プロジェクト案: ${item.title}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text('採用するとプロジェクトを作ります · 元のメモ$memos件'),
-                    trailing: const Icon(Icons.chevron_right, size: 18),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ReviewDetail(
-                          controller: c,
-                          id: item.id,
-                          identity: c.location!.identity,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      );
-      final stale = repo.orderedProjects
-          .where((p) => !p.merged && p.stale(now))
-          .toList();
-      children.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 20),
-          child: Card(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ListTile(
-                  key: const Key('home-digest'),
-                  leading: const Icon(Icons.event_note_outlined),
-                  title: Text(
-                    repo.digestDocument == null
-                        ? 'ふりかえり（未生成）'
-                        : '直近${repo.digestDocument!.periodDays ?? 7}日のふりかえり',
-                  ),
-                  subtitle: Text(
-                    stale.isEmpty
-                        ? '動いたプロジェクトと現在地の変化を見ます'
-                        : '停滞しているプロジェクト ${stale.length}件 · 開いて、続けるか休止・完了にするかを決めます',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => widget.onNavigate('digest'),
-                ),
-                // 週次レビュー。最後に見直してからの日数を示し、間隔を過ぎたら促す（通知は出さない）。
-                if (repo.weeklyReview case final review?)
-                  ListTile(
-                    key: const Key('home-weekly'),
-                    dense: true,
-                    contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
-                    title: Text(
-                      switch (review.daysSinceReview(hubToday(now))) {
-                        null => '週次レビュー: まだ見直した記録がありません',
-                        0 => '週次レビュー: 今日見直しました',
-                        final d => '週次レビュー: 前回から$d日',
-                      },
-                      style: review.due(hubToday(now))
-                          ? TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context).colorScheme.primary,
-                            )
-                          : null,
-                    ),
-                    subtitle: review.due(hubToday(now))
-                        ? Text(
-                            c.weeklyProgress != null
-                                ? '続きから再開できます'
-                                : '${review.intervalDays}日以上空いています · 一覧を順に点検します',
-                          )
-                        : null,
-                    trailing: const Icon(Icons.chevron_right, size: 18),
-                    onTap: () => widget.onNavigate('weekly'),
-                  ),
-                // 停滞しているプロジェクトは、その場で開いて状態を決められるようにする。
-                for (final p in stale.take(3))
-                  ListTile(
-                    key: Key('home-stale-${p.id}'),
-                    dense: true,
-                    contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
-                    title: Text(
-                      p.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    // 望む結果を添え、続けるか・完了にするかを判断しやすくする。
-                    subtitle: Text(
-                      '$projectStaleDays日以上、新しいメモがありません${p.outcomeLines.isEmpty ? '' : '\n望む結果: ${p.outcomeLines.join(' / ')}'}',
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: const Icon(Icons.chevron_right, size: 18),
-                    onTap: () => widget.onNavigate('project:${p.id}'),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      );
-      children.add(const SizedBox(height: 8));
-      children.add(
-        const Text(
+        sectionHeading(
           '最近のメモ',
-          key: Key('home-recent'),
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          key: const Key('home-recent'),
+          trailing: [
+            if (repo.recent.length > 5)
+              TextButton(
+                key: const Key('home-recent-all'),
+                onPressed: () => widget.onNavigate('recent'),
+                child: const Text('すべて見る'),
+              ),
+          ],
         ),
       );
-      children.add(const SizedBox(height: 12));
       children.addAll(
         repo.recent
             .take(5)
             .map(
               (r) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.only(bottom: 8),
                 child: recordCard(r),
               ),
             ),
@@ -986,20 +1174,36 @@ class _HubViewState extends State<HubView> {
               )
               .length;
       if (waiting + failing + c.pending.length > 0) {
+        final problem = failing + c.pending.length > 0;
         children.add(
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: 12),
             child: InkWell(
               key: const Key('home-status'),
+              borderRadius: BorderRadius.circular(hubRadiusSmall),
               onTap: () => widget.onNavigate('intake'),
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  // 問題があるときだけ件数を並べ、なければ反映待ちの件数だけを示す。
-                  failing + c.pending.length > 0
-                      ? '保存と反映: 失敗 $failing件 · 保存確認待ち ${c.pending.length}件（開いて確かめる）'
-                      : '保存と反映: Mac miniの受け取り待ち $waiting件',
-                  style: const TextStyle(fontSize: 12),
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      problem ? Icons.error_outline : Icons.sync_outlined,
+                      size: 16,
+                      color: problem
+                          ? Theme.of(context).colorScheme.error
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        // 問題があるときだけ件数を並べ、なければ反映待ちの件数だけを示す。
+                        problem
+                            ? '保存と反映: 失敗 $failing件 · 保存確認待ち ${c.pending.length}件（開いて確かめる）'
+                            : '保存と反映: Mac miniの受け取り待ち $waiting件',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1135,12 +1339,15 @@ class _HubViewState extends State<HubView> {
     return Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1040),
+        constraints: const BoxConstraints(maxWidth: 1000),
         child: ListView(
           key: ValueKey('${c.location?.handle}:$page'),
-          padding: EdgeInsets.all(
-            MediaQuery.sizeOf(context).width < 600 ? 20 : 40,
-          ),
+          // 狭い画面では、右下の「メモを追加」に最後の行が隠れないよう下を空ける。
+          padding: MediaQuery.sizeOf(context).width < 600
+              ? const EdgeInsets.fromLTRB(16, 20, 16, 96)
+              : MediaQuery.sizeOf(context).width < 820
+              ? const EdgeInsets.fromLTRB(28, 28, 28, 96)
+              : const EdgeInsets.fromLTRB(40, 32, 40, 48),
           children: children,
         ),
       ),
@@ -2632,10 +2839,7 @@ class _HubViewState extends State<HubView> {
       context,
       MaterialPageRoute(
         builder: (_) => Scaffold(
-          appBar: AppBar(
-            title: Text('${project.title}の$label'),
-            actions: const [HubMenuButton()],
-          ),
+          appBar: AppBar(title: Text('${project.title}の$label')),
           body: ListView(
             key: Key('$keyName-view'),
             padding: const EdgeInsets.all(24),
@@ -6373,7 +6577,6 @@ class RecordView extends StatelessWidget {
               labeled: true,
             ),
           ),
-        const HubMenuButton(),
       ],
     ),
     body: Center(

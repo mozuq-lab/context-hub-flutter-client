@@ -95,7 +95,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('思いつきを、そのまま。'), findsNothing);
     // 閉じた後もショートカットが届く。
-    await press(tester, LogicalKeyboardKey.digit3);
+    await press(tester, LogicalKeyboardKey.digit5);
     expect(appBarTitle(tester), 'ふりかえり');
     expect(tester.takeException(), isNull);
   });
@@ -148,7 +148,7 @@ void main() {
     );
     try {
       await openSample(tester);
-      await press(tester, LogicalKeyboardKey.digit6);
+      await press(tester, LogicalKeyboardKey.digit3);
       expect(appBarTitle(tester), '確認待ち');
       final bar = tester.widget<PlatformMenuBar>(find.byType(PlatformMenuBar));
       expect(bar.menus.map((m) => (m as PlatformMenu).label), [

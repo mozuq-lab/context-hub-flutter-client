@@ -328,7 +328,9 @@ void main() {
     expect(find.byKey(const Key('next-section')), findsOneWidget);
     expect(find.text('出典・日時'), findsNothing);
     // 確認の画面（ここではアプリの情報）を開いている間は割り込まない。
-    await tester.tap(find.byTooltip('このアプリについて'));
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('about')));
     await tester.pumpAndSettle();
     access.action = 'capture';
     access.onAction!();
@@ -339,7 +341,9 @@ void main() {
     // お知らせの表示が消えるのを待つ。
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
-    // 表示設定を開いて保存できる。
+    // 表示設定は「設定」から開いて保存できる。
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('home-widget-settings')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('home-widget-text')));

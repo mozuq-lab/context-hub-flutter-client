@@ -658,6 +658,9 @@ void main() {
     expect(c.attentionFresh(project), 0);
     // Macのドックの件数は出さない。
     expect(access.badges, isEmpty);
+    // 通知の設定は「設定」から開く。
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('attention-settings')));
     await tester.pumpAndSettle();
     expect(find.textContaining('本文は出しません'), findsOneWidget);

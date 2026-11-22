@@ -201,9 +201,9 @@ void main() {
   testWidgets('狭い画面ではナビゲーションから開き、Claudeの失敗を案内してやり直せる', (tester) async {
     await openApp(tester, size: const Size(360, 800));
     secrets.value = 'sk-ant-test-key-0000000000';
-    // 題名の幅を残すため、AppBarには置かない。
+    // 狭い画面では、下のタブの「その他」から開く。
     expect(find.byKey(const Key('open-guided')), findsNothing);
-    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.tap(find.byKey(const Key('nav-more')));
     await tester.pumpAndSettle();
     await tapKey(tester, 'nav-guided');
     model.replies.add(

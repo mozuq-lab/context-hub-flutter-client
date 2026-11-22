@@ -77,7 +77,7 @@ void main() {
     expect(find.text('出典・日時'), findsNothing);
     expect(topTitle(tester), '次の一手');
     // 詳細から戻った後も、続けてキーが届く。
-    await press(tester, LogicalKeyboardKey.digit5);
+    await press(tester, LogicalKeyboardKey.digit6);
     expect(topTitle(tester), 'アイデア');
     expect(tester.takeException(), isNull);
   });
@@ -100,16 +100,23 @@ void main() {
     expect(topTitle(tester), '最近のメモ');
   });
 
-  testWidgets('狭い画面では、詳細のメニューボタンからほかの画面へ移れる', (tester) async {
+  testWidgets('狭い画面では、詳細を開いたまま下のタブと「その他」からほかの画面へ移れる', (tester) async {
     await openSample(tester, const Size(390, 844));
-    await tester.tap(find.byTooltip('Open navigation menu'));
-    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('nav-recent')));
     await tester.pumpAndSettle();
     await tester.tap(find.text(memoTitle).first);
     await tester.pumpAndSettle();
     expect(find.text('出典・日時'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('detail-menu')));
+    // 下のタブは詳細の下にも残る。毎日使う画面へはそのまま移れる。
+    await tester.tap(find.byKey(const Key('nav-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('出典・日時'), findsNothing);
+    expect(topTitle(tester), '次の一手');
+    await tester.tap(find.byKey(const Key('nav-recent')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(memoTitle).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('nav-more')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('nav-ideas')));
     await tester.pumpAndSettle();
@@ -120,13 +127,11 @@ void main() {
 
   testWidgets('狭い画面で詳細の上にメニューを開いたとき、Androidの戻る操作はメニューだけを閉じる', (tester) async {
     await openSample(tester, const Size(390, 844));
-    await tester.tap(find.byTooltip('Open navigation menu'));
-    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('nav-recent')));
     await tester.pumpAndSettle();
     await tester.tap(find.text(memoTitle).first);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('detail-menu')));
+    await tester.tap(find.byKey(const Key('nav-more')));
     await tester.pumpAndSettle();
     expect(find.byType(Drawer), findsOneWidget);
     expect(await tester.binding.handlePopRoute(), isTrue);
@@ -189,7 +194,7 @@ void main() {
       await tester.runAsync(c.refreshQuietly);
       await tester.pumpAndSettle();
       if (size.width < 800) {
-        await tester.tap(find.byTooltip('Open navigation menu'));
+        await tester.tap(find.byKey(const Key('nav-more')));
         await tester.pumpAndSettle();
       }
       await tester.tap(find.byKey(const Key('nav-intake')));

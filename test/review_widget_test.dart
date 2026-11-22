@@ -126,8 +126,7 @@ void main() {
     await t.pumpAndSettle();
     await c.useSample();
     await t.pumpAndSettle();
-    await t.tap(find.byTooltip('Open navigation menu'));
-    await t.pumpAndSettle();
+    // 狭い画面では、確認待ちは下のタブにある。
     await t.tap(find.byKey(const Key('nav-review')));
     await t.pumpAndSettle();
     await t.scrollUntilVisible(find.text('判断履歴（2件）'), 400);

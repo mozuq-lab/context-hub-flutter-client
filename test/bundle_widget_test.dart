@@ -221,7 +221,7 @@ void main() {
     expect(find.byKey(const Key('basket-empty')), findsOneWidget);
   });
 
-  testWidgets('狭い画面でもdrawerから文脈かごを開ける', (tester) async {
+  testWidgets('狭い画面でも「その他」のメニューから文脈かごを開ける', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -232,7 +232,7 @@ void main() {
     await access.init();
     final c = await open(tester, access);
     await c.toggleBasket(c.repository!.recent.first.id);
-    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.tap(find.byKey(const Key('nav-more')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('nav-basket')));
     await tester.pumpAndSettle();
