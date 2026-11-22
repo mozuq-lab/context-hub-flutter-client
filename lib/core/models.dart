@@ -1246,3 +1246,148 @@ const somedayReviewDaysDefault = 30;
 
 /// 本体のsomeday-reviewsの判断。add: アイデアを置く / keep: そのまま / start: 始めた / drop: やめた。
 const somedayReviewActions = ['add', 'keep', 'start', 'drop'];
+
+/// 本体が書く週次レビューの点検の一覧（90_system/weekly-review.json）の、項目を指す行。
+/// [scope]はプロジェクトIDか、プロジェクト未定の`_unassigned`。[date]は段によって、根拠のメモの日付（長く残っている項目）・
+/// 頼んだ日（連絡待ち）・期日（期日）。
+class WeeklyItem {
+  const WeeklyItem({
+    required this.scope,
+    required this.key,
+    required this.section,
+    required this.label,
+    required this.text,
+    required this.date,
+    this.bucket,
+    this.check = false,
+  });
+  final String scope, key, section, label, text, date;
+
+  /// 期日の区分（overdue・today・week）。期日の段の行だけ。
+  final String? bucket;
+
+  /// 連絡待ちで、見直す日が来たもの。
+  final bool check;
+}
+
+/// 週次レビューの点検の一覧の、進行中のプロジェクト1件。[next]は連絡待ち・「いつかやる」を除いた次の一手の数
+/// （本体が項目一覧を読めなかったときはnull）。
+class WeeklyProject {
+  const WeeklyProject({
+    required this.id,
+    required this.title,
+    required this.next,
+    required this.open,
+    required this.waiting,
+    required this.hints,
+    required this.stale,
+  });
+  final String id, title;
+  final int? next, open;
+  final int waiting, hints;
+  final bool stale;
+
+  /// 次の一手も連絡待ちもないプロジェクト（次の一手を足すか、休止・完了にする）。
+  bool get empty => next == 0 && waiting == 0;
+}
+
+/// 本体が書く週次レビューの点検の一覧。行はモデルを使わずに作られ、アプリは今の項目一覧と照らして片付いた行を除く。
+class WeeklyReview {
+  const WeeklyReview({
+    required this.generatedAt,
+    required this.intervalDays,
+    required this.nextStaleDays,
+    required this.openStaleDays,
+    required this.projectStaleDays,
+    required this.lastReviewId,
+    required this.lastReviewOn,
+    required this.candidates,
+    required this.drafts,
+    required this.unassignedActions,
+    required this.unassignedSuggestions,
+    required this.projects,
+    required this.lingering,
+    required this.lingeringTotal,
+    required this.waiting,
+    required this.dated,
+    required this.datedTotal,
+    required this.somedayTotal,
+    required this.somedayStale,
+  });
+  final DateTime generatedAt;
+  final int intervalDays, nextStaleDays, openStaleDays, projectStaleDays;
+
+  /// 最後に本人が見直しを報告した記録のIDと日付（YYYY-MM-DD）。記録がなければnull。
+  final String? lastReviewId, lastReviewOn;
+  final int candidates, drafts, unassignedActions, unassignedSuggestions;
+  final List<WeeklyProject> projects;
+  final List<WeeklyItem> lingering, waiting, dated;
+  final int lingeringTotal, datedTotal, somedayTotal, somedayStale;
+
+  /// 最後に見直してから[today]までの日数。記録がなければnull。
+  int? daysSinceReview(String today) =>
+      lastReviewOn == null ? null : waitingDays(lastReviewOn!, today);
+
+  /// 週次レビューを促すか（記録がないか、最後の見直しから間隔の日数以上）。
+  bool due(String today) {
+    final days = daysSinceReview(today);
+    return days == null || days >= intervalDays;
+  }
+}
+
+/// 週次レビューの段（点検の順）。insightsは今週の気づきがあるときだけ使う。
+const weeklySteps = [
+  'insights',
+  'inbox',
+  'unassigned',
+  'projects',
+  'stale',
+  'waiting',
+  'dates',
+  'someday',
+  'finish',
+];
+
+/// 週次レビューの段の名前。
+const weeklyStepLabels = {
+  'insights': '今週の気づき',
+  'inbox': '確認待ち',
+  'unassigned': 'プロジェクト未定',
+  'projects': '進行中のプロジェクト',
+  'stale': '停滞',
+  'waiting': '連絡待ち',
+  'dates': '期日',
+  'someday': 'いつかやる',
+  'finish': '見直した',
+};
+
+/// 週次レビューの途中の進み具合（端末だけに保存する。Vaultには書かない）。
+/// [base]は始めた時点の最後の見直しの記録ID（なければ空）。別の端末やCLIで見直しを報告すると、続きは捨てる。
+class WeeklyProgress {
+  const WeeklyProgress({
+    required this.step,
+    required this.started,
+    required this.base,
+  });
+  final String step, started, base;
+
+  static WeeklyProgress? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final step = value['step'],
+        started = value['started'],
+        base = value['base'];
+    if (step is! String ||
+        !weeklySteps.contains(step) ||
+        !validScheduleDate(started) ||
+        base is! String) {
+      return null;
+    }
+    return WeeklyProgress(step: step, started: started as String, base: base);
+  }
+
+  Map<String, Object> toJson() => {
+    'step': step,
+    'started': started,
+    'base': base,
+  };
+}

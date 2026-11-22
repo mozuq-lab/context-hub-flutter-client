@@ -77,6 +77,9 @@ class IntakeFeatures {
       operations.contains('item-someday') &&
       operations.contains('someday-review');
 
+  /// 週次レビューを終えたと報告できる（weekly-review）。点検の一覧（weekly-review.json）も書く本体。
+  bool get weeklyReview => operations.contains('weekly-review');
+
   /// 次の一手・未解決に連絡待ちの印（相手・頼んだ日）を付け外しできる（item-wait）。
   /// プロジェクト未定の行動に付けられるかは[unassignedRecords]で決まる。
   bool get wait => operations.contains('item-wait');

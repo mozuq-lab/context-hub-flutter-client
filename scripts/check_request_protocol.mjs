@@ -1,13 +1,13 @@
-// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
+// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、週次レビューの「見直した」、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-wait','item-someday','someday-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -93,6 +93,14 @@ try{
   assert.deepEqual({target:record.target,id:record.target_id,action:record.action,on:record.on,event:record.source_event_id},{target:packet.target,id:packet.target_id,action:packet.action,on:packet.on,event:packet.request_id});
   const list=JSON.parse(await vault.read(somedayListPath)),listed=list.entries.some(e=>e.kind===packet.target&&(e.idea_id??e.project_id)===packet.target_id);
   assert.equal(listed,['add','keep'].includes(packet.action));
+  assert.ok(Date.parse(list.generated_at)>=Date.parse(record.created_at));
+ }else if(packet.operation==='weekly-review'){
+  // 見直した日が記録され、点検の一覧が記録の後に書き直される（アプリは書いた日時で反映を確かめる）。
+  assert.deepEqual({on:ack.result.on,deduped:ack.result.deduped},{on:packet.on,deduped:false});
+  const record=(await readWeeklyReviews(vault)).records.find(r=>r.id===ack.result.weeklyReviewId);
+  assert.deepEqual({on:record.on,source:record.source,event:record.source_event_id},{on:packet.on,source:packet.source,event:packet.request_id});
+  const list=JSON.parse(await vault.read(weeklyReviewPath));
+  assert.deepEqual(list.last_review,{id:record.id,on:packet.on,created_at:record.created_at});
   assert.ok(Date.parse(list.generated_at)>=Date.parse(record.created_at));
  }else if(packet.operation==='item-occurrence'){
   // 今の回を片付けた記録を残し、項目は欄に残したまま期日を次の回へ進める。

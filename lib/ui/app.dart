@@ -609,6 +609,7 @@ class _HubShellState extends State<HubShell> {
                     },
                     selected:
                         page == item.$1 ||
+                        (item.$1 == 'digest' && page == 'weekly') ||
                         (item.$1 == 'people' && page.startsWith('person:')),
                     onTap: () {
                       show(item.$1);
@@ -902,6 +903,7 @@ class _HubShellState extends State<HubShell> {
                 'next' => '次の一手',
                 'someday' => 'いつかやる',
                 'digest' => 'ふりかえり',
+                'weekly' => '週次レビュー',
                 'recent' => '最近のメモ',
                 'ideas' => 'アイデア',
                 'review' => '確認待ち',
