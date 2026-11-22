@@ -1,12 +1,8 @@
 import 'dart:async';
-
 import 'package:flutter/foundation.dart';
-
 import 'dart:convert';
-
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
-
 import '../storage/vault_access.dart';
 import '../storage/capture_service.dart';
 import '../storage/draft_store.dart';
@@ -24,9 +20,7 @@ import '../core/people.dart';
 import '../core/models.dart';
 import '../core/preferences.dart';
 import '../core/templates.dart';
-
 import 'dart:math' show Random;
-
 import '../core/parser.dart' show clip, projectIdPattern;
 import '../core/secrets.dart' show SecretPolicy;
 import '../ai/guided_services.dart';
@@ -1348,10 +1342,11 @@ class HubController extends ChangeNotifier {
       throw StateError('文字数上限を選び直してください。');
     }
     final syncing = _markPreference('basket');
-    return _setBasket((current) => Basket(ids: current.ids, maxChars: maxChars))
-        .then((_) {
-          if (syncing) _preferenceChangedSaved();
-        });
+    return _setBasket(
+      (current) => Basket(ids: current.ids, maxChars: maxChars),
+    ).then((_) {
+      if (syncing) _preferenceChangedSaved();
+    });
   }
 
   /// かごの記録を、コピーの直前に読み直したVaultから1つの文章にまとめる。
@@ -2196,11 +2191,7 @@ class HubController extends ChangeNotifier {
         operation,
         toScope,
         item.text,
-        from: ActionSource(
-          inputId: item.inputId,
-          text: item.text,
-          key: item.key,
-        ),
+        from: ActionSource(inputId: item.inputId, text: item.text, key: item.key),
       ),
     );
   }
@@ -2424,8 +2415,13 @@ class HubController extends ChangeNotifier {
         }
         return 'someday-review/$target/$targetId/$action/$today/${entry?.reviewed ?? '-'}';
       },
-      (service, parsed, operation) =>
-          service.saveSomedayReview(operation, target, targetId, action, today),
+      (service, parsed, operation) => service.saveSomedayReview(
+        operation,
+        target,
+        targetId,
+        action,
+        today,
+      ),
     );
   }
 
@@ -2832,9 +2828,9 @@ class HubController extends ChangeNotifier {
         _pins = Map<String, dynamic>.from(value['pins'] as Map);
       }
       if (value is Map && value['preferenceSync'] is Map) {
-        _preferenceSync = jsonDecode(
-          jsonEncode(value['preferenceSync']),
-        ) as Map<String, dynamic>;
+        _preferenceSync =
+            jsonDecode(jsonEncode(value['preferenceSync']))
+                as Map<String, dynamic>;
       }
       if (value is Map) autoReload = value['autoReload'] != false;
       if (value is Map && value['today'] is Map) {

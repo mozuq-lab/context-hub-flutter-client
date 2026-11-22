@@ -93,6 +93,9 @@ void main() {
       '-5kg減らす',
     ]);
     expect(normalizeProjectOutcome('  夏\r\n\r\n\t秋  '), '夏\n秋');
+    // 箇条書きの印だけの文は空（外す）として扱う（本体と同じ）。
+    expect(normalizeProjectOutcome('-\n・\n* '), '');
+    expect(projectOutcomeLines('-'), isEmpty);
     final project = HubProject(id: 'garden', title: '菜園', outcome: '夏');
     ProjectDefinitionDraft draft(String? outcome) => ProjectDefinitionDraft(
       title: '菜園',
@@ -103,6 +106,12 @@ void main() {
     );
     expect(draft(null).sameAs(project), isTrue);
     expect(draft(' 夏 ').sameAs(project), isTrue);
+    // 手で書いた今の文は整えてから比べる。
+    expect(
+      draft('夏')
+          .sameAs(HubProject(id: 'garden', title: '菜園', outcome: '  夏\n\n')),
+      isTrue,
+    );
     expect(draft('').sameAs(project), isFalse);
     expect(draft('秋').problem, isNull);
     expect(draft('長' * 11).problem, contains('10文字'));
@@ -316,6 +325,99 @@ void main() {
     final meta = parseMarkdown(access.requests.values.single).meta;
     expect(meta['operation'], 'project-create');
     expect(meta['outcome'], '夏に収穫する');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('対応前の本体では望む結果を書けず送らないが、手で書いた文は示し、登録簿hashに含めない', (tester) async {
+    tester.view.physicalSize = const Size(1280, 1000);
+    tester.view.devicePixelRatio = 1;
+    final features =
+        jsonDecode(fixtureFiles()[intakeFeaturesPath]!) as Map<String, dynamic>
+          ..remove('project_outcome');
+    final files = withProjectLine(
+      {...fixtureFiles(), intakeFeaturesPath: jsonEncode(features)},
+      'context-hub',
+      'outcome: 再開に迷わない',
+    );
+    final repo = HubRepository(fixture(files));
+    expect(repo.intakeFeatures.projectOutcome, isNull);
+    // 対応前の本体は望む結果を読まずに登録簿hashを計算する。
+    final project = repo.projects['context-hub']!;
+    expect(project.outcome, '再開に迷わない');
+    expect(
+      projectRegistryHash(repo.projects.values, withOutcome: false),
+      projectRegistryHash([
+        for (final p in repo.projects.values)
+          p.id == project.id
+              ? HubProject(
+                  id: p.id,
+                  title: p.title,
+                  status: p.status,
+                  aliases: p.aliases,
+                  keywords: p.keywords,
+                )
+              : p,
+      ]),
+    );
+    expect(
+      projectRegistryHash(repo.projects.values),
+      isNot(projectRegistryHash(repo.projects.values, withOutcome: false)),
+    );
+
+    final access = MemoryUIAccess();
+    await access.init();
+    final c = HubController(access, sampleLoader: () async => fixture().files);
+    addTearDown(() async {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    access.current = VaultSnapshot(fixture(files).files);
+    await c.reload();
+    await tester.pumpAndSettle();
+    expect(c.repository!.intakeFeatures.projectOutcome, isNull);
+    await tester.tap(find.byKey(const Key('project-context-hub')).first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('project-outcome-text')), findsOneWidget);
+    expect(find.byKey(const Key('project-outcome-edit')), findsNothing);
+    await openProjectMore(tester);
+    await tester.tap(find.byKey(const Key('project-definition')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('definition-outcome')), findsNothing);
+    await tester.tap(find.text('キャンセル'));
+    await tester.pumpAndSettle();
+
+    // 画面を通さない依頼も、望む結果を含めば保存しない。
+    final current = c.repository!.projects['context-hub']!;
+    await expectLater(
+      c.requestProjectDefinition(
+        current.id,
+        current.definitionHash!,
+        ProjectDefinitionDraft(
+          title: current.title,
+          aliases: current.aliases,
+          keywords: current.keywords,
+          outcome: '別の結果',
+        ),
+      ),
+      throwsA(isA<StateError>()),
+    );
+    await expectLater(
+      c.requestProjectCreate(
+        NewProjectRequest(
+          operationId: outcomeOp,
+          projectId: newProjectId(),
+          title: '家庭菜園',
+          outcome: '夏に収穫する',
+        ),
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect(access.requests, isEmpty);
     expect(tester.takeException(), isNull);
   });
 }

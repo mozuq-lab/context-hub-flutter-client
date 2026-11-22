@@ -1438,7 +1438,7 @@ List<String> projectOutcomeLines(String? outcome) => (outcome ?? '')
       (l) => l
           .replaceAll(RegExp(r'[\u0000-\u001f\u007f-\u009f]+'), ' ')
           .trim()
-          .replaceFirst(RegExp(r'^(?:[-*+]\s+|・\s*)+'), '')
+          .replaceFirst(RegExp(r'^(?:[-*+](?:\s+|$)|・\s*)+'), '')
           .trim(),
     )
     .where((l) => l.isNotEmpty)
@@ -1455,11 +1455,16 @@ String? projectOutcomeForPrompt(String? outcome) {
   return text.isEmpty ? null : text;
 }
 
-/// 送る前の望む結果の正規化（本体の`normalizeOutcome`と同じ）。改行をLFにし、タブを空白にし、各行の前後の空白と空の行を除く。
-String normalizeProjectOutcome(String text) => text
-    .replaceAll(RegExp(r'\r\n?'), '\n')
-    .replaceAll('\t', ' ')
-    .split('\n')
-    .map((l) => l.trim())
-    .where((l) => l.isNotEmpty)
-    .join('\n');
+/// 送る前の望む結果の正規化（本体の`normalizeOutcome`・`cleanOutcome`と同じ）。改行をLFにし、タブを空白にし、
+/// 各行の前後の空白と空の行を除く。表示する行が残らない文（箇条書きの印だけなど）は空文字（外す）にする。
+/// 上限の文字数はUTF-16の単位（`length`）で数える（本体と同じ）。
+String normalizeProjectOutcome(String text) {
+  final value = text
+      .replaceAll(RegExp(r'\r\n?'), '\n')
+      .replaceAll('\t', ' ')
+      .split('\n')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .join('\n');
+  return projectOutcomeLines(value).isEmpty ? '' : value;
+}

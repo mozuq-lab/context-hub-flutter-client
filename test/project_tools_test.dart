@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
@@ -11,6 +12,7 @@ import 'package:context_hub_client/core/repository.dart';
 import 'package:context_hub_client/storage/capture_service.dart';
 import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
+
 import 'capture_test.dart' show TempAccess, location;
 import 'widget_test.dart' show MemoryUIAccess;
 import 'fixtures.dart';
@@ -123,6 +125,7 @@ void main() {
         aliases: const ['菜園'],
         keywords: const ['栽培'],
         firstMemo: 'トマトの苗を植えた',
+        outcome: ' 夏に収穫する \n\n- 苗を枯らさない',
       );
       final service = CaptureService(access, location);
       final saved = await service.saveProjectCreate(request);
@@ -171,6 +174,9 @@ void main() {
       final project = synced.projects[id]!;
       expect(project.title, '家庭菜園');
       expect(project.aliases, ['菜園']);
+      // 望む結果は整えた形で本体のproject.mdに書かれる。
+      expect(project.outcome, '夏に収穫する\n- 苗を枯らさない');
+      expect(project.outcomeLines, ['夏に収穫する', '苗を枯らさない']);
       expect(synced.pendingProjectCreations, isEmpty);
       final item = synced.intake.firstWhere((i) => i.id == saved.requestId);
       expect(item.state, 'accepted');
@@ -214,9 +220,8 @@ void main() {
       expect(meta, containsPair('target_hash', conflict.nowHash));
       // 同期前は依頼済みとして扱う。
       expect(
-        HubRepository(
-          fixture({...files, 'Input/${saved.requestId}.md': raw}),
-        ).conflictRequestIdFor('context-hub'),
+        HubRepository(fixture({...files, 'Input/${saved.requestId}.md': raw}))
+            .conflictRequestIdFor('context-hub'),
         saved.requestId,
       );
       final syncedFiles = await runNode([

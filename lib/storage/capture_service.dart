@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-
 import '../core/happened.dart';
 import '../core/people.dart';
 import '../core/models.dart';
@@ -114,12 +113,13 @@ class ProjectDefinitionDraft {
     return null;
   }
 
-  /// 本体が「変更がない」とする内容か。望む結果は、送るときだけ今の文（手で書いた文はそのまま）と比べる（本体と同じ）。
+  /// 本体が「変更がない」とする内容か。望む結果は、送るときだけ今の文を整えたものと比べる（本体と同じ）。
   bool sameAs(HubProject project) =>
       title == project.title &&
       listEquals(aliases, project.aliases) &&
       listEquals(keywords, project.keywords) &&
-      (outcome == null || outcome == (project.outcome ?? ''));
+      (outcome == null ||
+          outcome == normalizeProjectOutcome(project.outcome ?? ''));
 
   static bool listEquals(List<String> a, List<String> b) =>
       a.length == b.length &&
@@ -263,8 +263,9 @@ class CaptureService {
         !['memo', 'work-summary'].contains(draft.kind) ||
         (draft.project != null && !projectIdPattern.hasMatch(draft.project!)) ||
         (draft.gitDraftId != null &&
-            !RegExp(r'^GDR-[0-9A-HJKMNP-TV-Z]{26}$')
-                .hasMatch(draft.gitDraftId!)) ||
+            !RegExp(
+              r'^GDR-[0-9A-HJKMNP-TV-Z]{26}$',
+            ).hasMatch(draft.gitDraftId!)) ||
         (draft.gitDraftId != null) != (draft.gitDraftHash != null) ||
         (draft.gitDraftHash != null &&
             !RegExp(r'^[a-f0-9]{64}$').hasMatch(draft.gitDraftHash!)) ||
@@ -459,8 +460,9 @@ class CaptureService {
             ].contains(candidate.kind)) ||
         (project &&
             (candidate.confirmationToken == null ||
-                !RegExp(r'^[a-f0-9]{64}$')
-                    .hasMatch(candidate.confirmationToken!)))) {
+                !RegExp(
+                  r'^[a-f0-9]{64}$',
+                ).hasMatch(candidate.confirmationToken!)))) {
       throw const FormatException('候補のID・種別・確認情報が不正です。');
     }
     final fields = <String, dynamic>{
@@ -951,10 +953,7 @@ class CaptureService {
       'item_key': item.key,
       'waiting': waiting == null
           ? null
-          : {
-              if (waiting.who != null) 'who': waiting.who,
-              'since': waiting.since,
-            },
+          : {if (waiting.who != null) 'who': waiting.who, 'since': waiting.since},
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
