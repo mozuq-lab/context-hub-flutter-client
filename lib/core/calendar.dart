@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import 'intake_features.dart' show unassignedScope;
 import 'models.dart';
 
 /// 端末のカレンダーへ入れる、期日の予定1件。日付は本人が付けた期日だけで、AIが推測した日付は使わない。
@@ -81,8 +82,10 @@ String calendarUid(String projectId, String itemKey, String kind) =>
     '${sha256.convert(utf8.encode('$projectId\n$itemKey\n$kind')).toString().substring(0, 32)}-$kind@context-hub';
 
 /// 期日の予定。カレンダーはクラウドへ同期されることが多いため、本文は[hide]（伏せ字）を当ててから切る。
+/// [projectId]と[projectTitle]は項目の置き場。プロジェクト未定の行動は[unassignedScope]と「プロジェクト未定」。
 CalendarEvent? dueEvent(
-  HubProject project,
+  String projectId,
+  String projectTitle,
   NowItemRef item, {
   required String Function(String) hide,
   bool withText = true,
@@ -92,18 +95,18 @@ CalendarEvent? dueEvent(
   final section = item.section == 'next' ? '次の一手' : '未解決';
   final body = hide('${item.label}${item.text}');
   return CalendarEvent(
-    uid: calendarUid(project.id, item.key, 'due'),
+    uid: calendarUid(projectId, item.key, 'due'),
     date: due,
     // 本体の`calendar.titles: project`と同じく、本文を入れない設定では件名をプロジェクト名と欄の名前だけにする。
     title: hide(
-      '[期日] ${project.title}: ${withText ? _clip(body, _titleChars) : section}',
+      '[期日] $projectTitle: ${withText ? _clip(body, _titleChars) : section}',
     ),
     description: hide(
       [
         'ContextHubの$sectionに本人が付けた期日です。',
         if (withText) _clip(body, _descriptionChars),
         if (item.reviewAfter != null) '見直す日: ${item.reviewAfter}',
-        'プロジェクト: ${project.id}',
+        projectId == unassignedScope ? 'プロジェクト: 未定' : 'プロジェクト: $projectId',
       ].join('\n'),
     ),
   );

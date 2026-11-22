@@ -26,6 +26,7 @@ class IntakeFeatures {
     this.actionScopes = const {},
     this.reviewRejects = const {},
     this.itemEfforts = const {},
+    this.itemRecordScopes = const {},
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -58,6 +59,9 @@ class IntakeFeatures {
   /// 手間の目安の依頼（item-effort）で選べる値（`item_efforts`）。
   final Set<String> itemEfforts;
 
+  /// 期日・定例の回・手間の目安の依頼を受け付ける、プロジェクト以外の置き場（`item_record_scopes`）。
+  final Set<String> itemRecordScopes;
+
   /// 次の一手・未解決に手間の目安を付けられる。
   bool get effort =>
       operations.contains('item-effort') &&
@@ -80,6 +84,10 @@ class IntakeFeatures {
   /// プロジェクトを決めずに行動を足せる（プロジェクト未定の次の一手に載り、完了・却下・今日やるが使える）。
   bool get unassignedActions =>
       actions && unassignedItems && actionScopes.contains(unassignedScope);
+
+  /// プロジェクトを決めずに追加した行動に、期日・見直す日・定例の繰り返し・手間の目安を付けられる（AIの行には付けない）。
+  bool get unassignedRecords =>
+      unassignedActions && itemRecordScopes.contains(unassignedScope);
   bool get policyKeep => operations.contains('policy-keep');
 
   /// 人の登録・名前と呼び名の変更・外す依頼（人ごとの見返し）。
@@ -114,7 +122,8 @@ class IntakeFeatures {
           scopes = m['item_scopes'],
           actionScopes = m['action_scopes'],
           rejects = m['review_rejects'],
-          efforts = m['item_efforts'];
+          efforts = m['item_efforts'],
+          recordScopes = m['item_record_scopes'];
       final askMax = ask is Map ? ask['max_question_chars'] : null;
       return IntakeFeatures._(
         itemScheduleFields: {
@@ -145,6 +154,11 @@ class IntakeFeatures {
         itemEfforts: {
           if (efforts is List)
             for (final v in efforts)
+              if (v is String) v,
+        },
+        itemRecordScopes: {
+          if (recordScopes is List)
+            for (final v in recordScopes)
               if (v is String) v,
         },
         askEnabled: ask is Map && ask['enabled'] == true,

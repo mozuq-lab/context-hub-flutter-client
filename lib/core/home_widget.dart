@@ -105,12 +105,26 @@ Map<String, Object?> homeWidgetContent(
         NowEntry('$actionLabel${a.text}'),
       ));
     }
+    // 本人が付けた期日が近い行動はプロジェクトの項目と一緒に先頭へ、見直す日まで休ませている行動は出さない。
+    var order = 0;
     for (final i in repo.unassignedOwnActions) {
-      rest.add((
+      order++;
+      final row = (
         unassignedScope,
         'プロジェクト未定',
         NowEntry(i.display)..itemKey = i.key,
-      ));
+      );
+      if (!i.scheduled) {
+        rest.add(row);
+        continue;
+      }
+      final b = scheduleBucket(i.due, i.reviewAfter, today);
+      if (b.hidden) continue;
+      if (scheduleBucketLabels.containsKey(b.bucket)) {
+        soon.add((row.$1, row.$2, row.$3, i.due!, order));
+      } else {
+        rest.add(row);
+      }
     }
   }
   soon.sort(

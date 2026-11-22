@@ -2124,7 +2124,34 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 期日・手間の目安・定例の回を依頼する項目。見つからなければnull。
+  /// [projectId]が[unassignedScope]なら、プロジェクトを決めずに本人が追加した行動だけを対象にする（AIの行には付けない）。
+  static NowItemRef? _recordTarget(
+    HubRepository parsed,
+    String projectId,
+    String itemKey,
+  ) {
+    if (projectId == unassignedScope) {
+      if (!parsed.intakeFeatures.unassignedRecords) {
+        throw StateError(
+          'Mac miniの本体がプロジェクト未定の行動の期日・手間の目安に対応していません。本体を更新してください。',
+        );
+      }
+      return parsed.unassignedItems
+          .where((i) => i.key == itemKey && i.action)
+          .firstOrNull;
+    }
+    // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
+    if (parsed.projects[projectId] case final owner?) {
+      _refuseMerged(parsed, owner);
+    }
+    return parsed.projects[projectId]?.nowItems
+        .where((i) => i.key == itemKey)
+        .firstOrNull;
+  }
+
   /// NOWの項目に期日・次に見直す日を付ける（両方nullで外す）依頼を保存する。
+  /// [projectId]が[unassignedScope]なら、プロジェクト未定の本人が追加した行動に付ける。
   Future<CaptureResult> requestItemSchedule(
     String projectId,
     String itemKey,
@@ -2139,13 +2166,7 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
-        // 定義だけ先に同期された統合済みのプロジェクトには、古いNOWの項目が残っていても依頼しない（本体が断る）。
-        if (parsed.projects[projectId] case final owner?) {
-          _refuseMerged(parsed, owner);
-        }
-        final found = parsed.projects[projectId]?.nowItems
-            .where((i) => i.key == itemKey)
-            .firstOrNull;
+        final found = _recordTarget(parsed, projectId, itemKey);
         if (found == null || found.resolved) {
           throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
@@ -2198,15 +2219,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
-        if (parsed.projects[projectId] case final owner?) {
-          _refuseMerged(parsed, owner);
-        }
         if (!parsed.intakeFeatures.effort) {
           throw StateError('Mac miniの本体が手間の目安に対応していません。本体を更新してください。');
         }
-        final found = parsed.projects[projectId]?.nowItems
-            .where((i) => i.key == itemKey)
-            .firstOrNull;
+        final found = _recordTarget(parsed, projectId, itemKey);
         if (found == null || found.resolved) {
           throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
@@ -2241,15 +2257,10 @@ class HubController extends ChangeNotifier {
     late NowItemRef item;
     return _confirmedRequest(
       (parsed) {
-        if (parsed.projects[projectId] case final owner?) {
-          _refuseMerged(parsed, owner);
-        }
         if (!parsed.intakeFeatures.occurrence) {
           throw StateError('Mac miniの本体が定例の回の完了に対応していません。本体を更新してください。');
         }
-        final found = parsed.projects[projectId]?.nowItems
-            .where((i) => i.key == itemKey)
-            .firstOrNull;
+        final found = _recordTarget(parsed, projectId, itemKey);
         if (found == null || !found.repeating) {
           throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
