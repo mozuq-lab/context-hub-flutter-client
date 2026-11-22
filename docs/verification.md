@@ -296,7 +296,7 @@
 
 ## 週次レビュー（2026-11-22）
 
-- 本体の固定参照を、週次レビューを加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-kn3g2x`）のコミット（`101f87b`）へ進めた。本体の対応表の`operations`に`weekly-review`が加わり、本体が点検の一覧`90_system/weekly-review.json`を書き、HOMEに最後の見直しからの日数の1行が加わったため、読取fixtureを再生成した（`scripts/check_fixture_drift.mjs`で6件一致）。本体PRのマージ後に、そのマージコミットへ進め直す。
+- 本体の固定参照を、週次レビューを加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-kn3g2x`）のコミット（`101f87b`）へ進めた。本体の対応表の`operations`に`weekly-review`が加わり、本体が点検の一覧`90_system/weekly-review.json`を書き、HOMEに最後の見直しからの日数の1行が加わったため、読取fixtureを再生成した（`scripts/check_fixture_drift.mjs`で6件一致）。本体PR（mozuq-lab/context-hub#50）のマージ後に、そのマージコミット（`a4e18f5`。内容は`101f87b`と同じ）へ進め直した。
 - Dartが保存した`weekly-review`のREQ（見直した日・本文なし）を本体へ渡し、受理・見直した記録・一覧の`last_review`と書き直しの時刻を確認（`scripts/check_request_protocol.mjs`）。一覧の同期前は反映待ち、同期後に反映待ちが外れることも確認。
 - 点検の一覧の読取（壊れた一覧・新しい形式・対応前の本体）、最後の見直しからの日数と7日での強調、ふりかえりの「週次レビューを始める」からの段の移動と端末に残る進み具合（開き直しても再開、別の端末で見直しを報告したら・始めてから7日たったら使わない）、最後の段の「見直した」の依頼と反映待ちの間の抑止、対応前の本体で入口を出さないことをテストで確認。
 - Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通562テスト成功。
