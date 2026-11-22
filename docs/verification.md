@@ -320,7 +320,7 @@
 
 ## 場所・道具の札（2026-11-22）
 
-- 本体の固定参照を、場所・道具の札を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-i6qnwo`）のコミット（`9edb75b`）へ進めた。本体の対応表に`operations`の`item-contexts`、`action_fields`、`item_contexts`が加わったため、サンプルの対応表に足した。
+- 本体の固定参照を、場所・道具の札を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-i6qnwo`）のコミット（`9edb75b`）へ進めた。本体の対応表に`operations`の`item-contexts`、`action_fields`、`item_contexts`が加わったため、サンプルの対応表に足した。本体PR（mozuq-lab/context-hub#53）のマージ後に、そのマージコミット（`bcf8614`。内容は`9edb75b`と同じ）へ進め直した。
 - Dartが保存した`item-contexts`のREQ、手間の目安と札を添えた行動の追加（`capture`・`kind: action`）のREQ、札の語彙（好みの`contexts`）のREQを本体へ渡し、受理・重複排除・項目一覧の`contexts`・NOWの行末「@PC @家」・追加した行動の`effort`と`contexts`・好みの記録の語彙を確認（`scripts/check_request_protocol.mjs`）。同期前は反映待ち、同期後に反映待ちが外れることも確認。
 - 札の規則（本体と同じ。NFC以外・書式文字・`<>`・バッククォートも断る）、不正な`contexts`の一覧を使わないこと、語彙の既定と反映待ちの語彙・記録に載った後の語彙、好みの記録の知らないまとまりを読み飛ばすこと、時計のずれた端末の語彙の依頼と、断られた・失われた依頼の扱い、「…」からの札の依頼と反映待ちの間の抑止、「次の一手」の札・札なしでの絞り込みと外すと元に戻ること、語彙にない札も選択肢に出ること、札の一覧の編集（不正な札を足さない）、行動の追加で目安と札を一緒に選ぶこと、対応前の本体で欄を出さないことをテストで確認。
 - Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通581テスト成功。
