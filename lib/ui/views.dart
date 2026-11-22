@@ -689,7 +689,8 @@ class _HubViewState extends State<HubView> {
                         // 本人が追加して反映待ちの行動は、本体と同じく作業要約の次の一手より前に示す。
                         project.pendingActions.firstOrNull?.text != null
                             ? '$actionLabel${project.pendingActions.first.text}（反映待ち）'
-                            : project.sections['next']?.firstOrNull?.text ??
+                            // 連絡待ちの行は、自分では進められないので先頭の次の一手にしない。
+                            : project.activeEntries('next').firstOrNull?.text ??
                                   '次の一手はまだ作られていません。',
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
@@ -1743,6 +1744,121 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 連絡待ちの印（相手・頼んだ日）を依頼する。見直す日を変えたときは、続けて日付も依頼する（見直す日は期日と同じ記録）。
+  /// [projectId]は項目の置き場（プロジェクト未定もある）。
+  Future<void> waitItem(String projectId, NowItemRef item) async {
+    final choice = await showDialog<({String? who, String since, String? reviewAfter})>(
+      context: context,
+      builder: (_) => WaitDialog(item: item, suggestions: waitingWhoSuggestions()),
+    );
+    if (choice == null || !mounted) return;
+    final changed =
+        !item.waiting ||
+        item.waitingSince != choice.since ||
+        item.waitingWho != choice.who;
+    var sent = false;
+    try {
+      var saved = true;
+      if (changed) {
+        saved = (await c.requestItemWait(
+          projectId,
+          item.key,
+          who: choice.who,
+          since: choice.since,
+        )).saved;
+        sent = true;
+      }
+      // 見直す日は今の日付の記録に重ねる（期日と繰り返しは保つ）。日付の依頼が反映待ちなら送らない。
+      // 期日は、ダイアログを開いている間に別の端末で変わっていることがあるため、読み直した項目のものを使う。
+      final current = currentItem(projectId, item.key) ?? item;
+      final review = choice.reviewAfter != current.reviewAfter;
+      if (saved && review && mounted) {
+        if (repo.scheduleRequestIdFor(item.key) != null) {
+          notice(
+            context,
+            '${sent ? '連絡待ちを依頼しました。' : ''}日付の依頼が反映待ちのため、見直す日は送りませんでした。反映後に「期日を変える」から付けてください。',
+          );
+          return;
+        }
+        saved = (await c.requestItemSchedule(
+          projectId,
+          item.key,
+          current.due,
+          choice.reviewAfter,
+        )).saved;
+      }
+      if (mounted) {
+        notice(
+          context,
+          !saved
+              ? '保存結果を確認できません。保存と反映から同じ操作を確認してください。'
+              : sent
+              ? '連絡待ちを依頼しました。Mac miniで処理されると現状と一覧に反映されます。'
+              : '見直す日を依頼しました。Mac miniで処理されると現状と一覧に反映されます。',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        // 連絡待ちを保存した後に見直す日の依頼が断られたときは、連絡待ちは保存したことも示す。
+        notice(
+          context,
+          sent
+              ? '連絡待ちは依頼しましたが、見直す日は送れませんでした: ${HubController.message(e)}'
+              : HubController.message(e),
+        );
+      }
+    }
+  }
+
+  /// 置き場（プロジェクト未定もある）とキーで、今の一覧の項目を引く。
+  NowItemRef? currentItem(String projectId, String key) {
+    final r = c.repository;
+    if (r == null) return null;
+    final items = projectId == unassignedScope
+        ? [...r.unassignedOwnActions, ...r.unassignedWaitingActions]
+        : r.projects[projectId]?.nowItems ?? const <NowItemRef>[];
+    return items.where((i) => i.key == key).firstOrNull;
+  }
+
+  /// 連絡待ちの印を外すよう依頼する。項目は元の欄（次の一手・未解決）へ戻る。
+  Future<void> unwaitItem(String projectId, NowItemRef item) async {
+    if (!await confirmAction(
+          '連絡待ちを外す',
+          '${item.display}\n\n連絡待ちの印を外し、項目を元の欄へ戻すよう依頼します。返事が来て終わった場合は、外さずに「${item.section == 'next' ? '完了にする' : '解決にする'}」も使えます。',
+          '外す',
+        ) ||
+        !mounted) {
+      return;
+    }
+    try {
+      final result = await c.requestItemWait(projectId, item.key);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '連絡待ちを外す依頼を保存しました。Mac miniで処理されると現状に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 連絡待ちの相手の候補。いま連絡待ちにしている項目の相手から作る（端末には保存しない）。
+  List<String> waitingWhoSuggestions() {
+    final names = <String>{};
+    for (final p in repo.projects.values) {
+      for (final i in p.nowItems) {
+        if (i.waiting && i.waitingWho != null) names.add(i.waitingWho!);
+      }
+    }
+    for (final i in repo.unassignedWaitingActions) {
+      if (i.waitingWho != null) names.add(i.waitingWho!);
+    }
+    return (names.toList()..sort()).take(8).toList();
+  }
+
   /// AIの読み違いなどを、理由を選んで「誤り」として外すよう依頼する。完了・解決には数えない。
   Future<void> excludeItem(HubProject project, NowItemRef item) async {
     final choice = await showDialog<({String reason, String? note})>(
@@ -2737,6 +2853,9 @@ class _HubViewState extends State<HubView> {
             effortPending =
             repo.effortRequestIdFor(key) != null,
         effort = repo.intakeFeatures.effort && !project.merged,
+        // 連絡待ちの印。依頼が反映待ちの間は出さない。
+        waitPending = repo.waitRequestIdFor(key) != null,
+        wait = repo.intakeFeatures.wait && !project.merged,
             // 定例の今の回を片付ける。日付の依頼が反映待ちの間は出さない。
             rounds =
             item.repeating && repo.intakeFeatures.occurrence && !scheduling,
@@ -2759,6 +2878,18 @@ class _HubViewState extends State<HubView> {
           key: Key('effort-$tag'),
           value: () => effortItem(project.id, item),
           child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
+        ),
+      if (wait && !waitPending)
+        PopupMenuItem(
+          key: Key('wait-$tag'),
+          value: () => waitItem(project.id, item),
+          child: Text(item.waiting ? '連絡待ちを変える' : '連絡待ちにする'),
+        ),
+      if (wait && !waitPending && item.waiting)
+        PopupMenuItem(
+          key: Key('unwait-$tag'),
+          value: () => unwaitItem(project.id, item),
+          child: const Text('連絡待ちを外す'),
         ),
       if (rounds)
         PopupMenuItem(
@@ -2821,6 +2952,11 @@ class _HubViewState extends State<HubView> {
           padding: EdgeInsets.symmetric(vertical: 10),
           child: Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         ),
+      if (waitPending)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        ),
       // 今日の3つ（この端末だけ）。
       todayToggle(project.id, key),
       PopupMenuButton<VoidCallback>(
@@ -2868,6 +3004,13 @@ class _HubViewState extends State<HubView> {
               fontSize: 12,
               color: Theme.of(context).colorScheme.error,
             ),
+          ),
+        // 連絡待ちの相手と頼んでからの日数（NOWの本文には相手を書かないため、ここで示す）。
+        if (project.itemOf(entry) case final item? when item.waiting)
+          Text(
+            waitingLabel(item, hubToday()),
+            key: Key('waiting-label-${item.key.substring(0, 12)}'),
+            style: const TextStyle(fontSize: 12),
           ),
         if (entry.itemKey case final key?)
           if (project.nowItems.where((i) => i.key == key).firstOrNull
@@ -2933,14 +3076,14 @@ class _HubViewState extends State<HubView> {
               repo.unassignedActionCount,
           'open': projects.fold<int>(
             0,
-            (n, p) => n + p.entriesWithSource('open').length,
+            (n, p) => n + p.activeEntries('open').length,
           ),
         },
         empty = projects
             .where(
               (p) => section == 'next'
                   ? p.nextCount == 0
-                  : p.entriesWithSource(section).isEmpty,
+                  : p.activeEntries(section).isEmpty,
             )
             .toList();
     // 前回見てから増えた行。この画面では既読にしない。
@@ -2957,7 +3100,12 @@ class _HubViewState extends State<HubView> {
         resting = <(HubProject?, NowEntry?, NowItemRef, int)>[],
         listed = <String, List<NowEntry>>{},
         // プロジェクト未定の行動のうち、期日の欄・休ませている項目に出さないもの。
-        ownListed = <NowItemRef>[];
+        ownListed = <NowItemRef>[],
+        // 本人が連絡待ちの印を付けた項目。一覧・件数・期日の欄から外し、「連絡待ち」にまとめる。
+        // 見直す日が来たものは、先頭の「連絡待ちの確認」にも出す。
+        waits = <(HubProject?, NowEntry?, NowItemRef, int)>[],
+        // 次の一手の画面に出す、未解決の欄の連絡待ち（HOMEと同じく、次の一手の画面でもまとめて示す）。
+        openWaits = Set<NowEntry>.identity();
     // 手間の目安での絞り込み。目安に対応した本体のときだけ使う。
     final efforts = repo.intakeFeatures.effort,
         filter = efforts ? effortFilter : null;
@@ -2967,9 +3115,11 @@ class _HubViewState extends State<HubView> {
       var order = 0;
       for (final entry in project.entriesWithSource(section)) {
         order++;
-        final item = entry.itemKey == null
-            ? null
-            : project.nowItems.where((i) => i.key == entry.itemKey).firstOrNull;
+        final item = project.itemOf(entry);
+        if (item != null && item.waiting) {
+          waits.add((project, entry, item, order));
+          continue;
+        }
         // 項目に結び付かない行は目安が分からないので、絞り込み中は出さない（「目安なし」とも言えない）。
         if (filter != null && item == null) continue;
         if (!effortFits(filter, item?.effort)) continue;
@@ -2995,10 +3145,24 @@ class _HubViewState extends State<HubView> {
         }
       }
       listed[project.id] = rest;
+      if (section == 'next') {
+        var openOrder = 0;
+        for (final entry in project.entriesWithSource('open')) {
+          openOrder++;
+          final item = project.itemOf(entry);
+          if (item == null || !item.waiting) continue;
+          openWaits.add(entry);
+          waits.add((project, entry, item, order + openOrder));
+        }
+      }
     }
     // プロジェクトを決めずに本人が追加した行動も、期日が近いものはプロジェクトの項目と一緒に先頭へ出し、
     // 見直す日が先のものはたたむ（日付は、対応した本体が付けたものだけが載る）。
     if (section == 'next') {
+      var waitOrder = 0;
+      for (final item in repo.unassignedWaitingActions) {
+        waits.add((null, null, item, ++waitOrder));
+      }
       var order = 0;
       for (final item in repo.unassignedOwnActions) {
         order++;
@@ -3030,6 +3194,28 @@ class _HubViewState extends State<HubView> {
             : a.$4.compareTo(b.$4),
       );
     }
+    // 連絡待ちは頼んだ日の古い順（同じ日は置き場とNOWでの並び順）。
+    // 見直す日が来た確認は絞り込みに関係なく先頭に出し、残りの連絡待ちは目安で絞り込んでいる間は出さない。
+    waits.sort(
+      (a, b) => a.$3.waitingSince!.compareTo(b.$3.waitingSince!) != 0
+          ? a.$3.waitingSince!.compareTo(b.$3.waitingSince!)
+          : (a.$1?.id ?? unassignedScope).compareTo(
+                  b.$1?.id ?? unassignedScope,
+                ) !=
+                0
+          ? (a.$1?.id ?? unassignedScope).compareTo(b.$1?.id ?? unassignedScope)
+          : a.$4.compareTo(b.$4),
+    );
+    final checks = [
+          for (final w in waits)
+            if (waitingCheckDue(w.$3, today)) w,
+        ],
+        // 確認に出したものは、下の「連絡待ち」には重ねて出さない（同じ操作が2か所に並ばないように）。
+        waitRest = [
+          if (filter == null)
+            for (final w in waits)
+              if (!waitingCheckDue(w.$3, today)) w,
+        ];
     Widget crossEntry((HubProject?, NowEntry?, NowItemRef, int) e) =>
         switch (e) {
           (final HubProject project, final NowEntry entry, _, _) => Column(
@@ -3038,7 +3224,9 @@ class _HubViewState extends State<HubView> {
               InkWell(
                 onTap: () => widget.onNavigate('project:${project.id}'),
                 child: Text(
-                  project.title,
+                  openWaits.contains(entry)
+                      ? '${project.title}・未解決'
+                      : project.title,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -3046,7 +3234,12 @@ class _HubViewState extends State<HubView> {
                   ),
                 ),
               ),
-              nowEntry(project, section, entry, added[project.id]!),
+              nowEntry(
+                project,
+                openWaits.contains(entry) ? 'open' : section,
+                entry,
+                added[project.id]!,
+              ),
             ],
           ),
           (_, _, final item, _) => Column(
@@ -3122,7 +3315,30 @@ class _HubViewState extends State<HubView> {
           ),
         ),
       const SizedBox(height: 20),
-      if (projects.isEmpty && front.isEmpty && resting.isEmpty)
+      if (checks.isNotEmpty) ...[
+        Text(
+          '連絡待ちの確認（${checks.length}件）',
+          key: const Key('next-waiting-checks'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '見直す日が来た連絡待ちです。返事が来ていれば「連絡待ちを外す」か完了に、まだなら催促して見直す日を付け直してください。',
+          style: TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 18, 22, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [for (final e in checks) crossEntry(e)],
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+      ],
+      if (projects.isEmpty && front.isEmpty && resting.isEmpty && waits.isEmpty)
         const Padding(
           padding: EdgeInsets.only(bottom: 24),
           child: Text('進行中のプロジェクトはありません。'),
@@ -3251,6 +3467,30 @@ class _HubViewState extends State<HubView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [for (final item in ownListed) unassignedOwnRow(item)],
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+      ],
+      // 連絡待ちのまとまり。見直す日が来たものは、先頭の「連絡待ちの確認」に出している。
+      if (waitRest.isNotEmpty) ...[
+        Text(
+          '連絡待ち（${waitRest.length}件）',
+          key: const Key('next-waiting'),
+          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '人に頼んだこと・返事を待っていることです。${sectionLabels[section]}の件数には入れていません。頼んだ日の古い順です。見直す日を付けると、その日に先頭の「連絡待ちの確認」へ出ます。',
+          style: const TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 18, 22, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [for (final e in waitRest) crossEntry(e)],
             ),
           ),
         ),
@@ -3669,6 +3909,8 @@ class _HubViewState extends State<HubView> {
         scheduling = repo.scheduleRequestIdFor(item.key) != null,
         effortPending = repo.effortRequestIdFor(item.key) != null,
         effort = records && repo.intakeFeatures.effort,
+        waitPending = repo.waitRequestIdFor(item.key) != null,
+        wait = records && repo.intakeFeatures.wait,
         rounds =
             records &&
             item.repeating &&
@@ -3691,6 +3933,18 @@ class _HubViewState extends State<HubView> {
           key: Key('unassigned-effort-$tag'),
           value: () => effortItem(unassignedScope, item),
           child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
+        ),
+      if (wait && !waitPending)
+        PopupMenuItem(
+          key: Key('unassigned-wait-$tag'),
+          value: () => waitItem(unassignedScope, item),
+          child: Text(item.waiting ? '連絡待ちを変える' : '連絡待ちにする'),
+        ),
+      if (wait && !waitPending && item.waiting)
+        PopupMenuItem(
+          key: Key('unassigned-unwait-$tag'),
+          value: () => unwaitItem(unassignedScope, item),
+          child: const Text('連絡待ちを外す'),
         ),
       if (rounds)
         PopupMenuItem(
@@ -3736,6 +3990,8 @@ class _HubViewState extends State<HubView> {
           const Text('期日を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         if (effortPending && records)
           const Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        if (waitPending && records)
+          const Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         if (more.isNotEmpty)
           PopupMenuButton<VoidCallback>(
             key: Key('unassigned-more-$tag'),
@@ -3780,6 +4036,12 @@ class _HubViewState extends State<HubView> {
           Text(
             label,
             key: Key('unassigned-label-${item.key.substring(0, 12)}'),
+            style: const TextStyle(fontSize: 12),
+          ),
+        if (item.waiting)
+          Text(
+            waitingLabel(item, hubToday()),
+            key: Key('waiting-label-${item.key.substring(0, 12)}'),
             style: const TextStyle(fontSize: 12),
           ),
         unassignedItemActions(item),
@@ -6229,6 +6491,187 @@ class PinOrderDialog extends StatelessWidget {
       );
     },
   );
+}
+
+/// 連絡待ちの印（相手・頼んだ日）と見直す日を入力する。相手は任意で、AIは推測しない。
+/// 結果の見直す日（reviewAfter）がnullなら見直す日を外す。
+class WaitDialog extends StatefulWidget {
+  const WaitDialog({super.key, required this.item, this.suggestions = const []});
+  final NowItemRef item;
+
+  /// 相手の候補（いま連絡待ちにしている項目の相手）。
+  final List<String> suggestions;
+  @override
+  State<WaitDialog> createState() => _WaitDialogState();
+}
+
+class _WaitDialogState extends State<WaitDialog> {
+  late final who = TextEditingController(text: widget.item.waitingWho ?? ''),
+      since = TextEditingController(
+        text: widget.item.waitingSince ?? hubToday(),
+      ),
+      review = TextEditingController(text: widget.item.reviewAfter ?? '');
+
+  @override
+  void dispose() {
+    who.dispose();
+    since.dispose();
+    review.dispose();
+    super.dispose();
+  }
+
+  String? get whoValue => who.text.trim().isEmpty ? null : who.text.trim();
+  String? get reviewValue =>
+      review.text.trim().isEmpty ? null : review.text.trim();
+  String? get whoProblem {
+    final v = whoValue;
+    return v == null || validWaitWho(v) ? null : '1行・$waitWhoChars文字以内で入力してください。';
+  }
+
+  String? get sinceProblem {
+    final v = since.text.trim();
+    if (!validScheduleDate(v)) return 'YYYY-MM-DDの実在する日で入力してください（2000〜2099年）。';
+    return v.compareTo(hubToday()) > 0 ? '頼んだ日に先の日付は付けられません。' : null;
+  }
+
+  String? get reviewProblem {
+    final v = reviewValue;
+    return v == null || validScheduleDate(v)
+        ? null
+        : 'YYYY-MM-DDの実在する日で入力してください（2000〜2099年）。';
+  }
+
+  Widget dateChips(String key, TextEditingController c, List<(String, int)> choices) =>
+      Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final (label, days) in choices)
+            ActionChip(
+              key: Key('wait-$key-$days'),
+              label: Text(label),
+              onPressed: () =>
+                  setState(() => c.text = addScheduleDays(hubToday(), days)),
+            ),
+        ],
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final valid =
+            whoProblem == null && sinceProblem == null && reviewProblem == null,
+        sinceValue = since.text.trim(),
+        changed =
+            !widget.item.waiting ||
+            widget.item.waitingSince != sinceValue ||
+            widget.item.waitingWho != whoValue ||
+            widget.item.reviewAfter != reviewValue;
+    return AlertDialog(
+      key: const Key('wait-dialog'),
+      title: Text(widget.item.waiting ? '連絡待ちを変える' : '連絡待ちにする'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.item.display,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('wait-who'),
+                controller: who,
+                maxLength: waitWhoChars,
+                decoration: InputDecoration(
+                  labelText: '相手（任意）',
+                  helperText: '名前はVaultに残り、同期先の端末とバックアップにも入ります。気になる場合はイニシャルなどで書いてください。',
+                  helperMaxLines: 3,
+                  errorText: whoProblem,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              if (widget.suggestions.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final name in widget.suggestions)
+                      ActionChip(
+                        key: Key('wait-who-suggestion-$name'),
+                        label: Text(name),
+                        onPressed: () => setState(() => who.text = name),
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 14),
+              TextField(
+                key: const Key('wait-since'),
+                controller: since,
+                decoration: InputDecoration(
+                  labelText: '頼んだ日',
+                  hintText: 'YYYY-MM-DD',
+                  errorText: sinceProblem,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 6),
+              dateChips('since', since, [('今日', 0), ('昨日', -1), ('3日前', -3), ('1週間前', -7)]),
+              const SizedBox(height: 14),
+              TextField(
+                key: const Key('wait-review'),
+                controller: review,
+                decoration: InputDecoration(
+                  labelText: '見直す日（任意）',
+                  hintText: 'YYYY-MM-DD',
+                  helperText: 'この日になると「次の一手」の先頭に、連絡待ちの確認として出ます。',
+                  helperMaxLines: 2,
+                  errorText: reviewProblem,
+                  suffixIcon: review.text.isEmpty
+                      ? null
+                      : IconButton(
+                          key: const Key('wait-review-clear'),
+                          tooltip: '外す',
+                          icon: const Icon(Icons.clear),
+                          onPressed: () => setState(review.clear),
+                        ),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 6),
+              dateChips('review', review, [('3日後', 3), ('1週間後', 7), ('2週間後', 14)]),
+              const SizedBox(height: 12),
+              const Text(
+                '連絡待ちにした項目は、「次の一手」の一覧と件数から外れ、「連絡待ち」にまとまります。返事が来たら印を外すか、完了にしてください。相手の名前は、ホーム画面のウィジェットと、別のAIへ渡す資料には出しません。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('wait-submit'),
+          onPressed: valid && changed
+              ? () => Navigator.pop(context, (
+                  who: whoValue,
+                  since: sinceValue,
+                  reviewAfter: reviewValue,
+                ))
+              : null,
+          child: const Text('依頼する'),
+        ),
+      ],
+    );
+  }
 }
 
 /// NOWの項目の手間の目安を選ぶ。目安は本人が選び、AIは推測しない。結果のeffortがnullなら外す。

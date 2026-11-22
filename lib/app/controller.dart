@@ -2245,6 +2245,53 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 連絡待ちの印を依頼する。[since]（頼んだ日）がnullなら印を外す。[who]（相手）は任意。
+  /// 相手の名前はVaultに残る（同期先とバックアップにも入る）。ホーム画面のウィジェットと通知には出さない。
+  Future<CaptureResult> requestItemWait(
+    String projectId,
+    String itemKey, {
+    String? who,
+    String? since,
+  }) {
+    if ((since != null && !validScheduleDate(since)) ||
+        (who != null && (since == null || !validWaitWho(who)))) {
+      throw StateError('相手と頼んだ日を確認してください。');
+    }
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.wait) {
+          throw StateError('Mac miniの本体が連絡待ちに対応していません。本体を更新してください。');
+        }
+        final found = _recordTarget(parsed, projectId, itemKey);
+        if (found == null || found.resolved) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (since == null
+            ? !found.waiting
+            : found.waitingSince == since && found.waitingWho == who) {
+          throw StateError('連絡待ちは変わっていません。');
+        }
+        if (parsed.waitRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の連絡待ちは依頼済みです。保存と反映を確認してください。');
+        }
+        // 完了・解決の報告が先に反映されると、本体は連絡待ちの依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        // 日付と同じく、外した記録も含む最新の記録IDを含め、同じ内容の再試行だけを同じ操作にする。
+        return 'wait/$projectId/$itemKey/${parsed.latestWaitIdFor(itemKey) ?? '-'}/${found.waitingId ?? '-'}/${since ?? 'none'}/${who ?? '-'}';
+      },
+      (service, parsed, operation) => service.saveItemWait(
+        operation,
+        projectId,
+        item,
+        since == null ? null : (who: who, since: since),
+      ),
+    );
+  }
+
   /// 定例の項目の今の回を完了する（done）・見送る（skip）依頼を保存する。確認した回の期日を添え、本体が次の回へ進める。
   Future<CaptureResult> requestItemOccurrence(
     String projectId,

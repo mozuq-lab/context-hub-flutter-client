@@ -278,6 +278,14 @@
 - Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通542テスト成功。
 - 未検証: Mac・Androidの実アプリでの表示と操作（この環境にXcode・Android SDKがありません）。
 
+## 連絡待ち（2026-11-22）
+
+- 本体の固定参照を、連絡待ちの印を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-jm5vdx`）のコミット（`bc25f88`）へ進めた。本体の対応表の`operations`に`item-wait`が加わったため、読取fixtureの対応表に足した（`scripts/check_fixture_drift.mjs`で6件一致）。本体PR（mozuq-lab/context-hub#48）のマージ後に、そのマージコミット（`a69b248`。内容は`bc25f88`と同じ）へ進め直した。
+- Dartが保存した`item-wait`のREQ（プロジェクトの項目と`project_id: _unassigned`の行動）を本体へ渡し、受理・重複排除・項目一覧の`waiting`（相手と頼んだ日）を確認し、NOW.mdに相手の名前が載らないことを確認（`scripts/check_request_protocol.mjs`）。同期前は反映待ち、同期後に反映待ちが外れることも確認。
+- 連絡待ちの項目を次の一手・未解決の件数とウィジェットから外し、ウィジェットに相手の名前が出ないこと、次の一手の画面の「連絡待ち」（未解決の連絡待ちも含む）、見直す日が来たときの先頭の「連絡待ちの確認」（手間の目安で絞り込んでも出す）、「…」からのダイアログ（先の頼んだ日は送れない）と外す操作、不正な`waiting`の一覧を使わないことをテストで確認。
+- Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通549テスト成功。
+- 未検証: Mac・Androidの実アプリでの表示と操作（この環境にXcode・Android SDKがありません）。
+
 ## 制限・追加確認
 
 - MacのNSOpenPanelによるフォルダー選択、bookmarkの別プロセス再起動復元・再選択は未完了です。サンプルの実bridge検査とは区別します。

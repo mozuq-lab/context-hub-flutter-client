@@ -141,8 +141,18 @@ class NowItemRef {
     this.fromText,
     this.fromKey,
     this.effort,
+    this.waitingId,
+    this.waitingSince,
+    this.waitingWho,
   });
   final String key, section, label, text, inputId;
+
+  /// 本人が付けた連絡待ちの印（本体のitem-waits）。効いている記録のID・頼んだ日（YYYY-MM-DD）・相手（任意）。
+  /// 印のない項目や、連絡待ちを知らない本体ではnull。相手はホーム画面のウィジェットと通知には出さない。
+  final String? waitingId, waitingSince, waitingWho;
+
+  /// 連絡待ちの印が付いている（片付いた項目には付かない）。
+  bool get waiting => waitingSince != null && !resolved;
 
   /// 本人が付けた手間の目安（[itemEfforts]）。目安のない項目や、目安を知らない本体ではnull。
   final String? effort;
@@ -190,14 +200,53 @@ const itemEffortLabels = {
   'half-day': '半日以上',
 };
 
-/// 本人が付けた日付と手間の目安の表示（本体のNOW・HOMEの行末と同じ並び）。どちらもなければ空文字。
-/// 本体がNOWの本文に書かない置き場（プロジェクト未定の行動）で、行の下に示す。
+/// 本人が付けた日付・手間の目安の表示（本体のNOW・HOMEの行末と同じ並び）。どれもなければ空文字。
+/// 連絡待ちは相手と日数を添えたwaitingLabelで別の行に示すので、ここには含めない。
+/// 本体がNOWの本文に書かない置き場（プロジェクト未定の行動）で、行の下に示す。相手の名前は含めない。
 String itemRecordLabel(NowItemRef item) => [
   if (item.due != null)
     '期日 ${item.due}${item.repeat == null ? '' : '（${item.repeat!.label}）'}',
   if (item.reviewAfter != null) '見直す日 ${item.reviewAfter}',
   if (itemEffortLabels[item.effort] case final effort?) '手間 $effort',
 ].join('・');
+
+/// 本体と同じ、連絡待ちの相手の上限（UTF-16の単位で数える）。
+const waitWhoChars = 40;
+
+/// 連絡待ちの相手として送れる文字列か（本体のwaitWhoSchemaと同じ規則: 1行・40文字まで・前後に空白なし）。
+bool validWaitWho(Object? value) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= waitWhoChars &&
+    value.trim() == value &&
+    !RegExp(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]').hasMatch(value);
+
+/// 頼んだ日から今日（YYYY-MM-DD）までの日数。今日頼んだなら0。
+int waitingDays(String since, String today) {
+  DateTime at(String d) => DateTime.utc(
+    int.parse(d.substring(0, 4)),
+    int.parse(d.substring(5, 7)),
+    int.parse(d.substring(8, 10)),
+  );
+  final days = at(today).difference(at(since)).inDays;
+  return days < 0 ? 0 : days;
+}
+
+/// 連絡待ちの行の下に示す表示（相手と、頼んでからの日数）。相手の名前を含むので、アプリの画面の中だけで使う
+/// （ホーム画面のウィジェットと通知には出さない）。印のない項目では空文字。
+String waitingLabel(NowItemRef item, String today) => !item.waiting
+    ? ''
+    : [
+        '連絡待ち',
+        if (item.waitingWho case final who?) '相手: $who',
+        '頼んでから${waitingDays(item.waitingSince!, today)}日',
+      ].join('・');
+
+/// 見直す日が来た連絡待ち（「次の一手」の先頭に、連絡待ちの確認として出す）。
+bool waitingCheckDue(NowItemRef item, String today) =>
+    item.waiting &&
+    item.reviewAfter != null &&
+    item.reviewAfter!.compareTo(today) <= 0;
 
 /// 「次の一手」画面の手間の目安での絞り込み。1時間でできるものには15分でできるものも含める。
 const effortFilters = {'quick': '15分でできる', 'hour': '1時間でできる', 'none': '目安なし'};
@@ -407,8 +456,28 @@ class HubProject {
   /// 本人が追加を依頼し、まだNOWの項目一覧に載っていない行動。
   final List<PendingAction> pendingActions = [];
 
-  /// 次の一手の件数（出典の付いた行と、反映待ちの行動）。
-  int get nextCount => entriesWithSource('next').length + pendingActions.length;
+  /// 行に結び付いた項目（項目一覧にない行・古い本体ではnull）。
+  NowItemRef? itemOf(NowEntry entry) => entry.itemKey == null
+      ? null
+      : nowItems.where((i) => i.key == entry.itemKey).firstOrNull;
+
+  /// 本人が連絡待ちの印を付けた行か。
+  bool waitingEntry(NowEntry entry) => itemOf(entry)?.waiting ?? false;
+
+  /// 出典の付いた行のうち、連絡待ちでないもの（次の一手・未解決の一覧と件数に使う）。
+  List<NowEntry> activeEntries(String section) => [
+    for (final e in entriesWithSource(section))
+      if (!waitingEntry(e)) e,
+  ];
+
+  /// 出典の付いた行のうち、本人が連絡待ちの印を付けたもの。
+  List<NowEntry> waitingEntries(String section) => [
+    for (final e in entriesWithSource(section))
+      if (waitingEntry(e)) e,
+  ];
+
+  /// 次の一手の件数（出典の付いた行と、反映待ちの行動）。連絡待ちの行は数えない。
+  int get nextCount => activeEntries('next').length + pendingActions.length;
 
   /// 確認待ちの作業記録の下書き。
   final List<GitDraft> drafts = [];
