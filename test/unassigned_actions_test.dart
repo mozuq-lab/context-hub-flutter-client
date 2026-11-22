@@ -257,6 +257,13 @@ void main() {
     expect(c.repository!.intakeFeatures.unassignedActions, isFalse);
     await t.tap(find.byKey(const Key('home-unassigned')));
     await t.pumpAndSettle();
+    // 対応前の本体は引き取った行を一覧から外さないため、プロジェクト未定の行に「自分の行動にする」を出さない。
+    for (final item in c.repository!.unassignedItems) {
+      expect(
+        find.byKey(Key('unassigned-take-${item.key.substring(0, 12)}')),
+        findsNothing,
+      );
+    }
     if (find.byKey(const Key('next-add-action')).evaluate().isNotEmpty) {
       await t.tap(find.byKey(const Key('next-add-action')));
       await t.pumpAndSettle();

@@ -526,7 +526,28 @@ class _HubViewState extends State<HubView> {
                       widget.onNavigate('next');
                     },
                   ),
-                  for (final item in own.take(homeUnassigned))
+                  for (final action in repo.unassignedPendingActions.take(
+                    homeUnassigned,
+                  ))
+                    ListTile(
+                      key: Key('home-unassigned-pending-${action.requestId}'),
+                      dense: true,
+                      contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
+                      title: Text(
+                        '$actionLabel${action.text}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text('反映待ち（${intakeStateLabel(action.state)}）'),
+                      onTap: () {
+                        nextSection = 'next';
+                        widget.onNavigate('next');
+                      },
+                    ),
+                  for (final item in own.take(
+                    (homeUnassigned - repo.unassignedPendingActions.length)
+                        .clamp(0, homeUnassigned),
+                  ))
                     ListTile(
                       key: Key(
                         'home-unassigned-action-${item.key.substring(0, 12)}',
@@ -544,7 +565,7 @@ class _HubViewState extends State<HubView> {
                       },
                     ),
                   for (final memo in repo.unassignedMemos.take(
-                    (homeUnassigned - own.length).clamp(0, homeUnassigned),
+                    (homeUnassigned - ownUnassigned).clamp(0, homeUnassigned),
                   ))
                     ListTile(
                       key: Key('home-unassigned-${memo.inputId}'),
@@ -3442,8 +3463,8 @@ class _HubViewState extends State<HubView> {
   Widget unassignedActions(String inputId, String text) {
     final item = repo.unassignedRow(inputId, text);
     if (item == null || item.resolved) return const SizedBox.shrink();
-    // 行動にして反映を待っている行は、操作を出さない（本体が反映すると一覧から外れる）。
-    if (repo.pendingActionFrom(item.inputId, item.text)) {
+    // 行動にした行は、操作を出さない（本体が一覧を作り直すと外れる）。
+    if (repo.takenOver(item.inputId, item.text)) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 6),
         child: Text('自分の行動にしました（反映待ち）', style: TextStyle(fontSize: 12)),
@@ -3461,13 +3482,10 @@ class _HubViewState extends State<HubView> {
       );
     }
     final tag = item.key.substring(0, 12),
-        // 行動にする先は、進行中のプロジェクトか（本体が対応していれば）プロジェクト未定。
+        // 行動にする先は、進行中のプロジェクトかプロジェクト未定。引き取った行を一覧から外すのは
+        // プロジェクトを決めない行動に対応した本体だけなので、対応前の本体には出さない。
         canTake =
-            takeOver &&
-            !item.action &&
-            repo.intakeFeatures.actions &&
-            (repo.intakeFeatures.unassignedActions ||
-                repo.actionableProjects.any((p) => !p.merged));
+            takeOver && !item.action && repo.intakeFeatures.unassignedActions;
     return Wrap(
       spacing: 4,
       children: [
