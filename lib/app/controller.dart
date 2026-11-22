@@ -2245,6 +2245,114 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 項目を「いつかやる」へ移す（[action]がmove）・見直したが今は始めない（keep）・元の欄へ戻す（back）依頼。
+  /// 移した日と見直した日は端末の今日（本体と同じ暦日）にする。AIは移さず、本人の操作だけを送る。
+  Future<CaptureResult> requestItemSomeday(
+    String projectId,
+    String itemKey,
+    String action, {
+    DateTime? now,
+  }) {
+    if (!const ['move', 'keep', 'back'].contains(action)) {
+      throw StateError('項目と操作を確認してください。');
+    }
+    final today = hubToday(now);
+    late NowItemRef item;
+    late ({String since, String reviewed})? someday;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.someday) {
+          throw StateError('Mac miniの本体が「いつかやる」に対応していません。本体を更新してください。');
+        }
+        final found = _recordTarget(parsed, projectId, itemKey);
+        if (found == null || found.resolved) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (action == 'move' ? found.someday : !found.someday) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (action == 'move' && found.waiting) {
+          throw StateError('連絡待ちの項目は「いつかやる」へ移せません。先に連絡待ちの印を外してください。');
+        }
+        if (action == 'keep' && found.somedayReviewed == today) {
+          throw StateError('今日すでに見直しています。');
+        }
+        if (parsed.somedayRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の「いつかやる」は依頼済みです。保存と反映を確認してください。');
+        }
+        // 完了・解決の報告が先に反映されると、本体は依頼を断る。連絡待ちの依頼とも重ねない。
+        if (parsed.itemRequestIdFor(itemKey) != null ||
+            parsed.waitRequestIdFor(itemKey) != null) {
+          throw StateError('この項目への別の依頼が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        someday = switch (action) {
+          'move' => (since: today, reviewed: today),
+          'keep' => (since: found.somedaySince!, reviewed: today),
+          _ => null,
+        };
+        // 外した記録も含む最新の記録IDを含め、同じ内容の再試行だけを同じ操作にする。
+        return 'someday/$projectId/$itemKey/${parsed.latestSomedayIdFor(itemKey) ?? '-'}/${found.somedayId ?? '-'}/$action/$today';
+      },
+      (service, parsed, operation) =>
+          service.saveItemSomeday(operation, projectId, item, someday),
+    );
+  }
+
+  /// アイデアを「いつかやる」に置く（add）・見直した（keep）・始めた（start）・やめた（drop）、
+  /// 休止中のプロジェクトを見直した（[target]がprojectでkeep）ことを依頼する。判断した日は端末の今日。
+  Future<CaptureResult> requestSomedayReview(
+    String target,
+    String targetId,
+    String action, {
+    DateTime? now,
+  }) {
+    if (!const ['idea', 'project'].contains(target) ||
+        !somedayReviewActions.contains(action) ||
+        (target == 'project' && action != 'keep')) {
+      throw StateError('対象と操作を確認してください。');
+    }
+    final today = hubToday(now);
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.someday) {
+          throw StateError('Mac miniの本体が「いつかやる」に対応していません。本体を更新してください。');
+        }
+        final entry = parsed.somedayEntries
+            .where((e) => e.kind == target && e.id == targetId)
+            .firstOrNull;
+        if (target == 'idea' && parsed.ideaRecord(targetId) == null) {
+          throw StateError('アイデアが見つかりません。表示を確認してから操作してください。');
+        }
+        if (target == 'project') {
+          final project = parsed.projects[targetId];
+          if (project == null || project.lifecycle != 'paused') {
+            throw StateError('現状が更新されています。表示を確認してから操作してください。');
+          }
+          _refuseMerged(parsed, project);
+        }
+        // 置くのは一覧にないアイデアだけ、見直す・始める・やめるのは一覧にあるものだけ。
+        if ((action == 'add') != (entry == null)) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (action == 'keep' && entry?.reviewed == today) {
+          throw StateError('今日すでに見直しています。');
+        }
+        if (parsed.somedayReviewRequestIdFor(target, targetId) != null) {
+          throw StateError('この「いつかやる」は依頼済みです。保存と反映を確認してください。');
+        }
+        return 'someday-review/$target/$targetId/$action/$today/${entry?.reviewed ?? '-'}';
+      },
+      (service, parsed, operation) => service.saveSomedayReview(
+        operation,
+        target,
+        targetId,
+        action,
+        today,
+      ),
+    );
+  }
+
   /// 連絡待ちの印を依頼する。[since]（頼んだ日）がnullなら印を外す。[who]（相手）は任意。
   /// 相手の名前はVaultに残る（同期先とバックアップにも入る）。ホーム画面のウィジェットと通知には出さない。
   Future<CaptureResult> requestItemWait(
@@ -2274,6 +2382,12 @@ class HubController extends ChangeNotifier {
         }
         if (parsed.waitRequestIdFor(itemKey) != null) {
           throw StateError('この項目の連絡待ちは依頼済みです。保存と反映を確認してください。');
+        }
+        if (since != null && found.someday) {
+          throw StateError('「いつかやる」の項目には連絡待ちの印を付けられません。先に元の欄へ戻してください。');
+        }
+        if (parsed.somedayRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の「いつかやる」の依頼が反映されるまで待ってから依頼してください。');
         }
         // 完了・解決の報告が先に反映されると、本体は連絡待ちの依頼を断る。
         if (parsed.itemRequestIdFor(itemKey) != null) {

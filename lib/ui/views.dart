@@ -432,6 +432,8 @@ class _HubViewState extends State<HubView> {
       children.addAll(digestView());
     } else if (page == 'next') {
       children.addAll(nextView());
+    } else if (page == 'someday') {
+      children.addAll(somedayView());
     } else if (page == 'home') {
       children.add(
         title(
@@ -601,6 +603,30 @@ class _HubViewState extends State<HubView> {
                       },
                     ),
                 ],
+              ),
+            ),
+          ),
+        );
+      }
+      // 「いつかやる」は件数と、見直していない件数だけを示す（中身は専用の画面で見直す）。
+      if (repo.somedayEntries.isNotEmpty) {
+        final days = repo.intakeFeatures.somedayReviewDays,
+            stale = repo.staleSomedayEntries(hubToday()).length;
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Card(
+              child: ListTile(
+                key: const Key('home-someday'),
+                leading: const Icon(Icons.inventory_2_outlined),
+                title: Text('いつかやる ${repo.somedayEntries.length}件'),
+                subtitle: Text(
+                  stale > 0
+                      ? '$days日以上見直していないもの$stale件 · 始める・そのまま・やめるを選べます'
+                      : '今は取り組まないことの置き場 · すべて$days日以内に見直し済み',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => widget.onNavigate('someday'),
               ),
             ),
           ),
@@ -1810,12 +1836,59 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 項目を「いつかやる」へ移す、または元の欄（次の一手・未解決）へ戻すよう依頼する。移すかは本人が決め、AIは移さない。
+  /// [projectId]は項目の置き場（プロジェクト未定もある）。
+  Future<void> somedayItem(String projectId, NowItemRef item) async {
+    final back = item.someday;
+    if (!await confirmAction(
+          back ? '「いつかやる」から戻す' : '「いつかやる」へ移す',
+          back
+              ? '${item.display}\n\n項目を元の欄（${item.section == 'next' ? '次の一手' : '未解決'}）へ戻すよう依頼します。'
+              : '${item.display}\n\n今は取り組まない項目として「いつかやる」へ移すよう依頼します。次の一手の件数やホーム画面の一覧からは外れ、「いつかやる」の画面でまとめて見直せます。いつでも戻せます。${item.action ? '' : '\n\nAIが書いた行は、次の作業要約で言い回しが変わると「いつかやる」から外れます（Mac miniのHOMEに示します）。長く置くなら、先に「自分の行動にする」で引き取ってください。'}',
+          back ? '戻す' : '移す',
+        ) ||
+        !mounted) {
+      return;
+    }
+    await somedayRequest(
+      () => c.requestItemSomeday(projectId, item.key, back ? 'back' : 'move'),
+      back ? '戻す依頼を保存しました。' : '「いつかやる」へ移す依頼を保存しました。',
+    );
+  }
+
+  /// 「いつかやる」の依頼を送り、結果を知らせる。
+  /// 保存できたかを返す。
+  Future<bool> somedayRequest(
+    Future<CaptureResult> Function() send,
+    String done,
+  ) async {
+    try {
+      final result = await send();
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '${done}Mac miniで処理されると反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+      return result.saved;
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+      return false;
+    }
+  }
+
   /// 置き場（プロジェクト未定もある）とキーで、今の一覧の項目を引く。
   NowItemRef? currentItem(String projectId, String key) {
     final r = c.repository;
     if (r == null) return null;
+    // プロジェクト未定は本人が追加した行動だけ（連絡待ち・「いつかやる」の行動も含む）。
     final items = projectId == unassignedScope
-        ? [...r.unassignedOwnActions, ...r.unassignedWaitingActions]
+        ? [
+            for (final i in r.unassignedItems)
+              if (i.action) i,
+          ]
         : r.projects[projectId]?.nowItems ?? const <NowItemRef>[];
     return items.where((i) => i.key == key).firstOrNull;
   }
@@ -2546,7 +2619,7 @@ class _HubViewState extends State<HubView> {
     Widget pickRow(TodayEntry e) {
       final key = e.pick.itemKey,
           reported = repo.itemRequestIdFor(key) != null,
-          finished = e.done || reported;
+          finished = e.done || reported || e.someday;
       return Padding(
         key: Key('today-pick-${key.substring(0, 12)}'),
         padding: const EdgeInsets.only(bottom: 10),
@@ -2576,7 +2649,9 @@ class _HubViewState extends State<HubView> {
                 style: const TextStyle(fontSize: 12),
               )
             else if (reported)
-              const Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
+              const Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12))
+            else if (e.someday)
+              const Text('「いつかやる」へ移しました', style: TextStyle(fontSize: 12)),
             Wrap(
               spacing: 8,
               children: [
@@ -2608,7 +2683,10 @@ class _HubViewState extends State<HubView> {
       final key = e.pick.itemKey,
               // 日付が変わった後に片付いた・報告した項目は、続けたり日付を付けたりできない。
               closed =
-              e.missing || e.done || repo.itemRequestIdFor(key) != null;
+              e.missing ||
+              e.done ||
+              e.someday ||
+              repo.itemRequestIdFor(key) != null;
       return Padding(
         key: Key('today-carry-${key.substring(0, 12)}'),
         padding: const EdgeInsets.only(bottom: 10),
@@ -2856,6 +2934,13 @@ class _HubViewState extends State<HubView> {
         // 連絡待ちの印。依頼が反映待ちの間は出さない。
         waitPending = repo.waitRequestIdFor(key) != null,
         wait = repo.intakeFeatures.wait && !project.merged,
+        // 「いつかやる」へ移す・戻す。依頼が反映待ちの間は出さない。連絡待ちの項目には出さない。
+        somedayPending = repo.somedayRequestIdFor(key) != null,
+        // 休止中・完了のプロジェクトはプロジェクトごと「いつかやる」に並ぶので、項目を移すのは進行中だけ（戻すのは出す）。
+        someday =
+            repo.intakeFeatures.someday &&
+            !project.merged &&
+            (project.active || item.someday),
             // 定例の今の回を片付ける。日付の依頼が反映待ちの間は出さない。
             rounds =
             item.repeating && repo.intakeFeatures.occurrence && !scheduling,
@@ -2879,7 +2964,7 @@ class _HubViewState extends State<HubView> {
           value: () => effortItem(project.id, item),
           child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
         ),
-      if (wait && !waitPending)
+      if (wait && !waitPending && !somedayPending && !item.someday)
         PopupMenuItem(
           key: Key('wait-$tag'),
           value: () => waitItem(project.id, item),
@@ -2890,6 +2975,12 @@ class _HubViewState extends State<HubView> {
           key: Key('unwait-$tag'),
           value: () => unwaitItem(project.id, item),
           child: const Text('連絡待ちを外す'),
+        ),
+      if (someday && !somedayPending && !waitPending && !item.waiting)
+        PopupMenuItem(
+          key: Key('someday-$tag'),
+          value: () => somedayItem(project.id, item),
+          child: Text(item.someday ? '「いつかやる」から戻す' : '「いつかやる」へ移す'),
         ),
       if (rounds)
         PopupMenuItem(
@@ -2956,6 +3047,11 @@ class _HubViewState extends State<HubView> {
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 10),
           child: Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        ),
+      if (somedayPending)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Text('「いつかやる」を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         ),
       // 今日の3つ（この端末だけ）。
       todayToggle(project.id, key),
@@ -3109,13 +3205,18 @@ class _HubViewState extends State<HubView> {
     // 手間の目安での絞り込み。目安に対応した本体のときだけ使う。
     final efforts = repo.intakeFeatures.effort,
         filter = efforts ? effortFilter : null;
-    var matched = 0;
+    var matched = 0, somedays = 0;
     for (final project in projects) {
       final rest = <NowEntry>[];
       var order = 0;
       for (final entry in project.entriesWithSource(section)) {
         order++;
         final item = project.itemOf(entry);
+        // 「いつかやる」へ移した項目は、件数にも一覧にも出さず、「いつかやる」の画面にまとめる。
+        if (item != null && item.someday) {
+          somedays++;
+          continue;
+        }
         if (item != null && item.waiting) {
           waits.add((project, entry, item, order));
           continue;
@@ -3519,7 +3620,280 @@ class _HubViewState extends State<HubView> {
             style: const TextStyle(fontSize: 12),
           ),
         ),
+      // 移した項目の数（プロジェクト未定の行動は次の一手の画面にだけ数える）。
+      if (somedays + (section == 'next' ? repo.unassignedSomedayCount : 0)
+          case final n when n > 0)
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: InkWell(
+            key: const Key('next-someday'),
+            onTap: () => widget.onNavigate('someday'),
+            child: Text(
+              '「いつかやる」へ移した${sectionLabels[section]}$n件は、「いつかやる」の画面にあります。',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+        ),
     ];
+  }
+
+  /// 「いつかやる」の画面。本人が移した項目・休止中のプロジェクト・置いたアイデアを、見直していない順に並べる。
+  /// 行ごとに「始める・そのまま・やめる」を選ぶ。どれを移すか・始めるかは本人が決め、AIは決めない。
+  List<Widget> somedayView() {
+    final today = hubToday(),
+        entries = repo.somedayEntries,
+        days = repo.intakeFeatures.somedayReviewDays,
+        stale = repo.staleSomedayEntries(today).length;
+    if (!repo.intakeFeatures.someday && entries.isEmpty) {
+      return [
+        title('いつかやる', '今は取り組まないことの置き場です。'),
+        const Text('Mac miniの本体が「いつかやる」に対応していません。本体を更新すると使えます。'),
+      ];
+    }
+    return [
+      title(
+        'いつかやる',
+        '今は取り組まない次の一手・未解決、休止中のプロジェクト、置いておくアイデアです。最後に見直した日の古い順です。'
+            '\n$days日以上見直していないもの: $stale件 · 読み込み: ${timeLabel(repo.snapshot.loadedAt)}',
+      ),
+      if (repo.somedayGeneratedAt == null)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 16),
+          child: Text(
+            '本体がまだ一覧を作っていません。Mac miniで処理されると表示されます。',
+            key: Key('someday-missing'),
+          ),
+        )
+      else if (entries.isEmpty)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 16),
+          child: Text(
+            '「いつかやる」は空です。次の一手・未解決の「…」の「「いつかやる」へ移す」や、アイデアの画面から置けます。',
+            key: Key('someday-empty'),
+          ),
+        ),
+      if (entries.isNotEmpty)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 14, 22, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final e in entries) somedayRow(e, today, days),
+              ],
+            ),
+          ),
+        ),
+      const SizedBox(height: 12),
+      const Text(
+        '始める: 項目は元の欄へ戻し、休止中のプロジェクトは進行中にします。アイデアは始めた記録を残し、続けて次の一手を追加できます。\n'
+        'そのまま: 見直した日だけを今日にします（一覧の後ろへ回ります）。\n'
+        'やめる: 項目は「誤り（古い情報）」として外し、プロジェクトは完了にし、アイデアは一覧から外します。原文のメモは残ります。',
+        style: TextStyle(fontSize: 12),
+      ),
+    ];
+  }
+
+  /// 「いつかやる」の1行。種類ごとの依頼が反映待ちなら、操作の代わりにそう示す。
+  Widget somedayRow(SomedayEntry e, String today, int reviewDays) {
+    final tag = digest(e.ref).substring(0, 12),
+        stale = e.stale(today, reviewDays),
+        project = e.kind == 'project' ? repo.projects[e.id] : null,
+        item = e.kind == 'item' ? currentItem(e.scope!, e.id) : null,
+        pending = switch (e.kind) {
+          'item' =>
+            repo.somedayRequestIdFor(e.id) != null ||
+                repo.itemRequestIdFor(e.id) != null ||
+                repo.waitRequestIdFor(e.id) != null,
+          'project' =>
+            repo.somedayReviewRequestIdFor('project', e.id) != null ||
+                repo.projectStatusRequestIdFor(e.id) != null,
+          _ => repo.somedayReviewRequestIdFor('idea', e.id) != null,
+        },
+        // 操作に使う今の状態が読めない行（項目一覧やプロジェクトの定義が古い・欠けている）には操作を出さない。
+        actionable =
+            repo.intakeFeatures.someday &&
+            switch (e.kind) {
+              'item' => item != null && item.someday,
+              'project' =>
+                project != null &&
+                    !project.merged &&
+                    project.lifecycle == 'paused' &&
+                    project.definitionHash != null,
+              _ => repo.ideaRecord(e.id) != null,
+            },
+        kind = switch (e.kind) {
+          'item' => e.place ?? '',
+          'project' => '休止中のプロジェクト',
+          _ => 'アイデア',
+        },
+        sinceLabel = switch (e.kind) {
+          'item' => '移した日',
+          'project' => '休止した日',
+          _ => '置いた日',
+        },
+        age = e.days(today);
+    return Padding(
+      key: Key('someday-$tag'),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => openSomeday(e),
+            child: Text(
+              e.kind == 'item' ? '${e.label}${e.title}' : e.title,
+              style: const TextStyle(fontSize: 15),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            [
+              if (kind.isNotEmpty) kind,
+              if (e.since != null) '$sinceLabel ${e.since}',
+              age == null
+                  ? '見直した記録なし'
+                  : e.reviewed == e.since
+                  ? '置いてから$age日'
+                  : '見直してから$age日',
+            ].join(' · '),
+            style: TextStyle(
+              fontSize: 12,
+              color: stale ? Theme.of(context).colorScheme.error : null,
+            ),
+          ),
+          if (pending)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            )
+          else if (actionable)
+            Wrap(
+              spacing: 4,
+              children: [
+                TextButton.icon(
+                  key: Key('someday-start-$tag'),
+                  onPressed: busy ? null : () => startSomeday(e, item, project),
+                  icon: const Icon(Icons.play_arrow_outlined, size: 15),
+                  label: const Text('始める'),
+                ),
+                TextButton.icon(
+                  key: Key('someday-keep-$tag'),
+                  onPressed: busy || e.reviewed == today
+                      ? null
+                      : () => keepSomeday(e),
+                  icon: const Icon(Icons.schedule, size: 15),
+                  label: Text(e.reviewed == today ? '今日見直し済み' : 'そのまま'),
+                ),
+                TextButton.icon(
+                  key: Key('someday-drop-$tag'),
+                  onPressed: busy ? null : () => dropSomeday(e, item, project),
+                  icon: const Icon(Icons.close, size: 15),
+                  label: const Text('やめる'),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 「いつかやる」の行の元を開く。項目は置き場、プロジェクトはその画面、アイデアは記録。
+  void openSomeday(SomedayEntry e) {
+    switch (e.kind) {
+      // プロジェクト未定の行動は、移している間はほかの一覧に出ない。この画面で始める・そのまま・やめるを選ぶ。
+      case 'item' when e.scope == unassignedScope:
+        notice(context, 'プロジェクト未定の行動です。この画面の「始める」で次の一手へ戻せます。');
+      case 'item':
+        widget.onNavigate('project:${e.scope}');
+      case 'project':
+        widget.onNavigate('project:${e.id}');
+      default:
+        if (repo.ideaRecord(e.id) case final record?) open(record.id);
+    }
+  }
+
+  /// 始める。項目は元の欄へ戻し、プロジェクトは進行中にし、アイデアは始めた記録を残して次の一手の追加を開く。
+  Future<void> startSomeday(
+    SomedayEntry e,
+    NowItemRef? item,
+    HubProject? project,
+  ) async {
+    final (body, ok) = switch (e.kind) {
+      'item' => ('この項目を元の欄（${e.section == 'open' ? '未解決' : '次の一手'}）へ戻すよう依頼します。', '戻す'),
+      'project' => ('このプロジェクトを進行中に戻すよう依頼します。', '進行中にする'),
+      _ => (
+        repo.intakeFeatures.actions
+            ? 'このアイデアを始めたと記録し、「いつかやる」から外すよう依頼します。続けて最初の次の一手を追加できます（追加しなくても構いません）。'
+            : 'このアイデアを始めたと記録し、「いつかやる」から外すよう依頼します。',
+        '始める',
+      ),
+    };
+    if (!await confirmAction('始める', '${e.title}\n\n$body', ok) || !mounted) {
+      return;
+    }
+    switch (e.kind) {
+      case 'item':
+        await somedayRequest(
+          () => c.requestItemSomeday(e.scope!, e.id, 'back'),
+          '元の欄へ戻す依頼を保存しました。',
+        );
+      case 'project':
+        await somedayRequest(
+          () => c.requestProjectStatus(e.id, project!.definitionHash!, 'active'),
+          '進行中にする依頼を保存しました。',
+        );
+      default:
+        final saved = await somedayRequest(
+          () => c.requestSomedayReview('idea', e.id, 'start'),
+          '始めた記録を依頼しました。',
+        );
+        if (saved && mounted && repo.intakeFeatures.actions) await addAction();
+    }
+  }
+
+  /// そのまま（見直した日だけを今日にする）。
+  Future<void> keepSomeday(SomedayEntry e) => somedayRequest(
+    () => e.kind == 'item'
+        ? c.requestItemSomeday(e.scope!, e.id, 'keep')
+        : c.requestSomedayReview(e.kind, e.id, 'keep'),
+    '見直した日を依頼しました。',
+  );
+
+  /// やめる。項目は「誤り（古い情報）」として外し、プロジェクトは完了にし、アイデアは一覧から外す。
+  Future<void> dropSomeday(
+    SomedayEntry e,
+    NowItemRef? item,
+    HubProject? project,
+  ) async {
+    final (body, ok) = switch (e.kind) {
+      'item' => ('この項目はやらないものとして、「誤り（古い情報）」として外すよう依頼します。元のメモは残り、外した項目は元に戻せます。', '外す'),
+      'project' => ('このプロジェクトを完了にするよう依頼します。記録は残り、あとで進行中に戻せます。', '完了にする'),
+      _ => ('このアイデアをやめたと記録し、「いつかやる」から外すよう依頼します。アイデアの記録は残ります。', 'やめる'),
+    };
+    if (!await confirmAction('やめる', '${e.title}\n\n$body', ok) || !mounted) {
+      return;
+    }
+    await somedayRequest(
+      () => switch (e.kind) {
+        'item' => c.requestItemResolution(
+          e.scope!,
+          e.id,
+          'exclude',
+          reason: 'outdated',
+        ),
+        'project' => c.requestProjectStatus(
+          e.id,
+          project!.definitionHash!,
+          'done',
+        ),
+        _ => c.requestSomedayReview('idea', e.id, 'drop'),
+      },
+      'やめる依頼を保存しました。',
+    );
   }
 
   /// ホームの「今週の気づき」。本体の週次の統合が、たまったメモをまとめて読み直した結果（AI生成・未検証）。
@@ -3911,6 +4285,8 @@ class _HubViewState extends State<HubView> {
         effort = records && repo.intakeFeatures.effort,
         waitPending = repo.waitRequestIdFor(item.key) != null,
         wait = records && repo.intakeFeatures.wait,
+        somedayPending = repo.somedayRequestIdFor(item.key) != null,
+        someday = records && repo.intakeFeatures.someday,
         rounds =
             records &&
             item.repeating &&
@@ -3934,7 +4310,7 @@ class _HubViewState extends State<HubView> {
           value: () => effortItem(unassignedScope, item),
           child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
         ),
-      if (wait && !waitPending)
+      if (wait && !waitPending && !somedayPending && !item.someday)
         PopupMenuItem(
           key: Key('unassigned-wait-$tag'),
           value: () => waitItem(unassignedScope, item),
@@ -3945,6 +4321,12 @@ class _HubViewState extends State<HubView> {
           key: Key('unassigned-unwait-$tag'),
           value: () => unwaitItem(unassignedScope, item),
           child: const Text('連絡待ちを外す'),
+        ),
+      if (someday && !somedayPending && !waitPending && !item.waiting)
+        PopupMenuItem(
+          key: Key('unassigned-someday-$tag'),
+          value: () => somedayItem(unassignedScope, item),
+          child: Text(item.someday ? '「いつかやる」から戻す' : '「いつかやる」へ移す'),
         ),
       if (rounds)
         PopupMenuItem(
@@ -3992,6 +4374,8 @@ class _HubViewState extends State<HubView> {
           const Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         if (waitPending && records)
           const Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        if (somedayPending && records)
+          const Text('「いつかやる」を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         if (more.isNotEmpty)
           PopupMenuButton<VoidCallback>(
             key: Key('unassigned-more-$tag'),
@@ -4756,6 +5140,38 @@ class RecordView extends StatelessWidget {
   }
 
   /// 似ているアイデアと束ねたアイデア。束ねる・別の話にする判断を依頼できる。
+  /// アイデアを「いつかやる」に置く操作。置いてあれば、そう示す（見直しは「いつかやる」の画面で行う）。
+  Widget ideaSomedayPanel(BuildContext context) {
+    final repo = controller.repository;
+    final id = record.sourceId;
+    if (repo == null || !repo.intakeFeatures.someday) {
+      return const SizedBox.shrink();
+    }
+    final Widget child;
+    if (repo.somedayReviewRequestIdFor('idea', id) != null) {
+      child = const Text('「いつかやる」を依頼済み（反映待ち）', style: TextStyle(fontSize: 12));
+    } else if (repo.somedayIdea(id)) {
+      child = const Text(
+        '「いつかやる」に置いています。見直しは「いつかやる」の画面で行います。',
+        key: Key('idea-someday-listed'),
+        style: TextStyle(fontSize: 12),
+      );
+    } else if (repo.somedayGeneratedAt == null) {
+      // 本体の一覧がまだないときは、置いてあるか分からないので操作を出さない。
+      return const SizedBox.shrink();
+    } else {
+      child = OutlinedButton.icon(
+        key: const Key('idea-someday'),
+        onPressed: controller.saving || controller.loading
+            ? null
+            : () => sendIdeaSomeday(context, controller, id, record.title),
+        icon: const Icon(Icons.inventory_2_outlined, size: 18),
+        label: const Text('「いつかやる」に置く'),
+      );
+    }
+    return Padding(padding: const EdgeInsets.only(top: 16), child: child);
+  }
+
   Widget ideaPanel(BuildContext context) {
     final repo = controller.repository;
     if (repo == null) return const SizedBox.shrink();
@@ -4924,6 +5340,11 @@ class RecordView extends StatelessWidget {
             if (record.kind == 'idea')
               ListenableBuilder(
                 listenable: controller,
+                builder: (context, _) => ideaSomedayPanel(context),
+              ),
+            if (record.kind == 'idea')
+              ListenableBuilder(
+                listenable: controller,
                 builder: (context, _) => ideaPanel(context),
               ),
             if (const [
@@ -4974,6 +5395,49 @@ extension on String {
 }
 
 /// 似ているアイデアの組を束ねる・別の話にする依頼を、確認してから保存する。
+/// アイデアを「いつかやる」に置く依頼。置くかは本人が決め、AIは置かない。
+Future<void> sendIdeaSomeday(
+  BuildContext context,
+  HubController c,
+  String ideaId,
+  String title,
+) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dialog) => AlertDialog(
+      title: const Text('「いつかやる」に置く'),
+      content: Text(
+        '「$title」を、今は取り組まないアイデアとして「いつかやる」に置くよう依頼します。「いつかやる」の画面で、ほかの項目と一緒に見直せます。アイデアと元のメモは変わりません。',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialog, false),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('idea-someday-confirm'),
+          onPressed: () => Navigator.pop(dialog, true),
+          child: const Text('置く'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  try {
+    final result = await c.requestSomedayReview('idea', ideaId, 'add');
+    if (context.mounted) {
+      notice(
+        context,
+        result.saved
+            ? '「いつかやる」に置く依頼を保存しました。Mac miniで処理されると反映されます。'
+            : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+      );
+    }
+  } catch (e) {
+    if (context.mounted) notice(context, HubController.message(e));
+  }
+}
+
 Future<void> sendIdeaLink(
   BuildContext context,
   HubController c,

@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'happened.dart' show defaultMaxBackdateDays;
 import 'models.dart' as models show itemEfforts;
-import 'models.dart' show askQuestionChars;
+import 'models.dart' show askQuestionChars, somedayReviewDaysDefault;
 
 /// 本体の「プロジェクト未定」の行を指す、項目の置き場（記録と依頼の`project_id`に入る）。
 const unassignedScope = '_unassigned';
@@ -27,6 +27,7 @@ class IntakeFeatures {
     this.reviewRejects = const {},
     this.itemEfforts = const {},
     this.itemRecordScopes = const {},
+    this.somedayReviewDays = somedayReviewDaysDefault,
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -66,6 +67,15 @@ class IntakeFeatures {
   bool get effort =>
       operations.contains('item-effort') &&
       itemEfforts.containsAll(models.itemEfforts);
+
+  /// 「いつかやる」で見直していないとみなす日数（`someday_review_days`）。書かれていなければ30日。
+  final int somedayReviewDays;
+
+  /// 次の一手・未解決を「いつかやる」へ移し・戻し、アイデアを置き、一覧で見直せる（item-someday・someday-review）。
+  /// プロジェクト未定の行動を移せるかは[unassignedRecords]で決まる。
+  bool get someday =>
+      operations.contains('item-someday') &&
+      operations.contains('someday-review');
 
   /// 次の一手・未解決に連絡待ちの印（相手・頼んだ日）を付け外しできる（item-wait）。
   /// プロジェクト未定の行動に付けられるかは[unassignedRecords]で決まる。
@@ -129,6 +139,7 @@ class IntakeFeatures {
           efforts = m['item_efforts'],
           recordScopes = m['item_record_scopes'];
       final askMax = ask is Map ? ask['max_question_chars'] : null;
+      final reviewDays = m['someday_review_days'];
       return IntakeFeatures._(
         itemScheduleFields: {
           if (schedule is List)
@@ -165,6 +176,9 @@ class IntakeFeatures {
             for (final v in recordScopes)
               if (v is String) v,
         },
+        somedayReviewDays: reviewDays is int && reviewDays >= 1 && reviewDays <= 3650
+            ? reviewDays
+            : somedayReviewDaysDefault,
         askEnabled: ask is Map && ask['enabled'] == true,
         askMaxChars: askMax is int && askMax > 0 && askMax <= askQuestionChars
             ? askMax

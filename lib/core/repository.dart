@@ -63,6 +63,21 @@ class HubRepository {
   final Map<String, DateTime> _waitTimes = {};
   final Map<String, String> _outstandingWaits = {};
   final Map<String, String> _latestWaits = {};
+
+  /// 「いつかやる」へ移した記録の作成時刻（記録IDごと）と、反映を待っている依頼・最新の記録（項目キーごと）。
+  final Map<String, DateTime> _somedayTimes = {};
+  final Map<String, String> _outstandingSomedays = {};
+  final Map<String, String> _latestSomedays = {};
+
+  /// アイデア・休止中のプロジェクトの見直しの記録の作成時刻（記録IDごと）と、反映を待っている依頼（[SomedayEntry.ref]の対象ごと）。
+  final Map<String, DateTime> _somedayReviewTimes = {};
+  final Map<String, String> _outstandingSomedayReviews = {};
+
+  /// 本体が書く「いつかやる」の一覧（最後に見直した日の古い順）。一覧がない・読めない本体では空。
+  final List<SomedayEntry> somedayEntries = [];
+
+  /// 「いつかやる」の一覧を本体が書いた日時。見直しの依頼の反映を確かめるのに使う。
+  DateTime? somedayGeneratedAt;
   final Map<String, String> _outstandingHintDismissals = {};
 
   /// 「記録に聞く」の問いと答え（新しい順）。この端末から送った問いと、CLIなどほかから聞いた問いの答え。
@@ -157,10 +172,10 @@ class HubRepository {
       .firstOrNull;
 
   /// プロジェクトを決めずに本人が追加した行動のうち、片付いていないもの（追加した順）。対応前の本体では空。
-  /// 本人が連絡待ちの印を付けた行動は含めない（[unassignedWaitingActions]）。
+  /// 本人が連絡待ちの印を付けた行動（[unassignedWaitingActions]）と、「いつかやる」へ移した行動は含めない。
   List<NowItemRef> get unassignedOwnActions => [
     for (final i in unassignedItems)
-      if (i.action && !i.resolved && !i.waiting) i,
+      if (i.action && !i.resolved && !i.waiting && !i.someday) i,
   ];
 
   /// プロジェクトを決めずに本人が追加した行動のうち、連絡待ちの印を付けたもの（追加した順）。
@@ -168,6 +183,12 @@ class HubRepository {
     for (final i in unassignedItems)
       if (i.action && i.waiting) i,
   ];
+
+  /// プロジェクトを決めずに本人が追加した行動のうち、「いつかやる」へ移したものの数。
+  int get unassignedSomedayCount => [
+    for (final i in unassignedItems)
+      if (i.action && i.someday) i,
+  ].length;
 
   /// プロジェクトを決めずに追加を依頼し、まだ項目一覧に載っていない行動（端末に保存した依頼・Miniが受け付けた依頼）。
   final List<PendingAction> unassignedPendingActions = [];
@@ -460,6 +481,7 @@ class HubRepository {
     _readInsights();
     _readAnswers();
     _readSharedPreferences();
+    _readSomeday();
     _readIntake();
     _hideTakenOver();
     _readDigest();
@@ -621,7 +643,17 @@ class HubRepository {
         effort = itemEfforts.contains(rawEffort) ? rawEffort as String : null;
     // 本人が付けた連絡待ちの印。旧版の一覧と印のない項目にはない。
     final wait = i['waiting'];
-    if ((wait != null &&
+    // 本人が「いつかやる」へ移した記録。旧版の一覧と移していない項目にはない。
+    final someday = i['someday'];
+    if ((someday != null &&
+            (someday is! Map ||
+                someday['id'] is! String ||
+                !RegExp(
+                  r'^SMD-[0-9A-HJKMNP-TV-Z]{26}$',
+                ).hasMatch(someday['id']) ||
+                !validScheduleDate(someday['since']) ||
+                !validScheduleDate(someday['reviewed']))) ||
+        (wait != null &&
             (wait is! Map ||
                 wait['id'] is! String ||
                 !RegExp(
@@ -692,6 +724,9 @@ class HubRepository {
       waitingId: wait is Map ? wait['id'] as String : null,
       waitingSince: wait is Map ? wait['since'] as String : null,
       waitingWho: wait is Map ? wait['who'] as String? : null,
+      somedayId: someday is Map ? someday['id'] as String : null,
+      somedaySince: someday is Map ? someday['since'] as String : null,
+      somedayReviewed: someday is Map ? someday['reviewed'] as String : null,
     );
   }
 
@@ -1196,6 +1231,143 @@ class HubRepository {
     }
   }
 
+  /// 「いつかやる」の記録（反映を確かめる時刻と、項目ごとの最新の記録ID）と、本体が書く一覧を読む。
+  /// 有効な状態は、項目は項目一覧のsomeday、アイデア・プロジェクトは一覧（90_system/someday.json）を使う。
+  void _readSomeday() {
+    final itemRecord = RegExp(
+      r'^90_system/item-somedays/(SMD-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    final reviewRecord = RegExp(
+      r'^90_system/someday-reviews/(SDR-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final item = itemRecord.firstMatch(e.key),
+          review = item == null ? reviewRecord.firstMatch(e.key) : null;
+      if (item == null && review == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']);
+        if (j['schema_version'] != 1 ||
+            j['id'] != (item ?? review)!.group(1) ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String;
+        if (review != null) {
+          if (!const ['idea', 'project'].contains(j['target']) ||
+              j['target_id'] is! String ||
+              !somedayReviewActions.contains(j['action'])) {
+            throw const FormatException();
+          }
+          _somedayReviewTimes[id] = at;
+          continue;
+        }
+        final d = j['someday'];
+        if (j['item_key'] is! String ||
+            !j.containsKey('someday') ||
+            (d != null && (d is! Map || !validScheduleDate(d['since'])))) {
+          throw const FormatException();
+        }
+        final key = j['item_key'] as String;
+        _somedayTimes[id] = at;
+        final last = _latestSomedays[key];
+        if (last == null || id.compareTo(last) > 0) _latestSomedays[key] = id;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    const path = '90_system/someday.json';
+    final raw = snapshot.files[path];
+    if (raw == null) return;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      if (newerSchema(j)) {
+        _noteNewer(path);
+        return;
+      }
+      final generated = timestamp(j['generated_at']);
+      if (j['schema_version'] != 1 || j['entries'] is! List || generated == null) {
+        throw const FormatException();
+      }
+      final entries = <SomedayEntry>[];
+      String? date(Object? v, {bool nullable = false}) {
+        if (v == null && nullable) return null;
+        if (!validScheduleDate(v)) throw const FormatException();
+        return v as String;
+      }
+
+      for (final e in j['entries'] as List) {
+        if (e is! Map) throw const FormatException();
+        switch (e['kind']) {
+          case 'item':
+            if (e['scope'] is! String ||
+                e['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(e['item_key']) ||
+                !const ['next', 'open'].contains(e['section']) ||
+                e['label'] is! String ||
+                e['text'] is! String ||
+                e['title'] is! String) {
+              throw const FormatException();
+            }
+            entries.add(
+              SomedayEntry(
+                kind: 'item',
+                id: e['item_key'] as String,
+                title: e['text'] as String,
+                label: e['label'] as String,
+                scope: e['scope'] as String,
+                section: e['section'] as String,
+                since: date(e['since']),
+                reviewed: date(e['reviewed']),
+                place: e['title'] as String,
+              ),
+            );
+          case 'project':
+            if (e['project_id'] is! String ||
+                !projectIdPattern.hasMatch(e['project_id']) ||
+                e['title'] is! String) {
+              throw const FormatException();
+            }
+            entries.add(
+              SomedayEntry(
+                kind: 'project',
+                id: e['project_id'] as String,
+                title: e['title'] as String,
+                since: date(e['since'], nullable: true),
+                reviewed: date(e['reviewed'], nullable: true),
+              ),
+            );
+          case 'idea':
+            if (e['idea_id'] is! String ||
+                !RegExp(
+                  r'^IDEA-[0-9A-HJKMNP-TV-Z]{26}$',
+                ).hasMatch(e['idea_id']) ||
+                e['summary'] is! String ||
+                e['path'] is! String) {
+              throw const FormatException();
+            }
+            entries.add(
+              SomedayEntry(
+                kind: 'idea',
+                id: e['idea_id'] as String,
+                title: e['summary'] as String,
+                since: date(e['since']),
+                reviewed: date(e['reviewed']),
+                path: e['path'] as String,
+              ),
+            );
+          default:
+            // 新しい本体が足した種類は読み飛ばす（一覧全体は捨てない）。
+            continue;
+        }
+      }
+      somedayEntries.addAll(entries);
+      somedayGeneratedAt = generated;
+    } catch (_) {
+      _problem(path);
+    }
+  }
+
   /// 本体が書く似ているアイデアの索引を読む。今読めているアイデアの組・束だけを使う。
   void _readIdeaIndex() {
     const path = '90_system/idea-index.json';
@@ -1324,6 +1496,26 @@ class HubRepository {
 
   /// この項目の最新の連絡待ちの記録のID（外した記録を含む）。記録がなければnull。
   String? latestWaitIdFor(String itemKey) => _latestWaits[itemKey];
+
+  /// 反映を待っている、この項目への「いつかやる」の依頼（移す・そのまま・戻す）。
+  String? somedayRequestIdFor(String itemKey) => _outstandingSomedays[itemKey];
+
+  /// この項目の最新の「いつかやる」の記録のID（戻した記録を含む）。記録がなければnull。
+  String? latestSomedayIdFor(String itemKey) => _latestSomedays[itemKey];
+
+  /// 反映を待っている、アイデア・休止中のプロジェクトの見直しの依頼（[target]はideaかproject）。
+  String? somedayReviewRequestIdFor(String target, String id) =>
+      _outstandingSomedayReviews['$target:$id'];
+
+  /// 「いつかやる」に置いているアイデアか（本体の一覧に載っている）。
+  bool somedayIdea(String ideaId) =>
+      somedayEntries.any((e) => e.kind == 'idea' && e.id == ideaId);
+
+  /// 「いつかやる」の一覧のうち、見直していないとみなす行（最後に見直してから既定の日数以上）。
+  List<SomedayEntry> staleSomedayEntries(String today) => [
+    for (final e in somedayEntries)
+      if (e.stale(today, intakeFeatures.somedayReviewDays)) e,
+  ];
 
   /// この項目の最新の手間の目安の記録のID（外した記録を含む）。記録がなければnull。
   String? latestEffortIdFor(String itemKey) => _latestEfforts[itemKey];
@@ -2105,6 +2297,8 @@ class HubRepository {
               'item-occurrence',
               'item-effort',
               'item-wait',
+              'item-someday',
+              'someday-review',
               'item-hint-dismiss',
               'git-draft-dismiss',
               'project-create',
@@ -2257,6 +2451,42 @@ class HubRepository {
                         ))))) {
           throw const FormatException();
         }
+        final itemSomeday = m['operation'] == 'item-someday';
+        final somedayValue = m['someday'];
+        if (itemSomeday &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('someday') ||
+                (somedayValue != null &&
+                    (somedayValue is! Map ||
+                        !validScheduleDate(somedayValue['since']) ||
+                        (somedayValue['reviewed'] != null &&
+                            !validScheduleDate(somedayValue['reviewed'])) ||
+                        somedayValue.keys.any(
+                          (k) => k != 'since' && k != 'reviewed',
+                        ))))) {
+          throw const FormatException();
+        }
+        final somedayReview = m['operation'] == 'someday-review';
+        if (somedayReview &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                !const ['idea', 'project'].contains(m['target']) ||
+                m['target_id'] is! String ||
+                !(m['target'] == 'idea'
+                        ? RegExp(r'^IDEA-[0-9A-HJKMNP-TV-Z]{26}$')
+                        : projectIdPattern)
+                    .hasMatch(m['target_id']) ||
+                !somedayReviewActions.contains(m['action']) ||
+                (m['target'] == 'project' && m['action'] != 'keep') ||
+                !validScheduleDate(m['on']))) {
+          throw const FormatException();
+        }
         final occurrence = m['operation'] == 'item-occurrence';
         if (occurrence &&
             (doc.body.trim().isNotEmpty ||
@@ -2399,6 +2629,8 @@ class HubRepository {
             scheduleId,
             effortId,
             waitId,
+            somedayId,
+            reviewId,
             ideaLinkId,
             occurrenceNext,
             askId;
@@ -2525,6 +2757,15 @@ class HubRepository {
               ? '${m['effort'] == null ? '手間の目安を外す依頼' : '手間の目安の依頼（${itemEffortLabels[m['effort']]}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemWait
               ? '${waitValue == null ? '連絡待ちを外す依頼' : '連絡待ちの依頼（${(waitValue as Map)['who'] == null ? '' : '相手: ${waitValue['who']}・'}頼んだ日 ${waitValue['since']}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemSomeday
+              ? '${somedayValue == null ? '「いつかやる」から戻す依頼' : (somedayValue as Map)['reviewed'] != null && somedayValue['reviewed'] != somedayValue['since'] ? '「いつかやる」を見直した（そのまま）' : '「いつかやる」へ移す依頼'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : somedayReview
+              ? '${m['target'] == 'project' ? '休止中のプロジェクトを見直した（そのまま）' : switch (m['action']) {
+                      'add' => 'アイデアを「いつかやる」に置く依頼',
+                      'keep' => '「いつかやる」のアイデアを見直した（そのまま）',
+                      'start' => '「いつかやる」のアイデアを始めた',
+                      _ => '「いつかやる」のアイデアをやめた',
+                    }}: ${_somedayTargetTitle(m['target'] as String, m['target_id'] as String)}'
               : hintDismiss
               ? '「片付いたかも」の見送り: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
@@ -2690,6 +2931,33 @@ class HubRepository {
                 throw const FormatException();
               }
               waitId = r['waitId'] as String;
+            }
+            if (itemSomeday) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['somedayId'] is! String ||
+                  !RegExp(
+                    r'^SMD-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['somedayId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              somedayId = r['somedayId'] as String;
+            }
+            if (somedayReview) {
+              final r = ack['result'] as Map;
+              if (r['target'] != m['target'] ||
+                  r['targetId'] != m['target_id'] ||
+                  r['action'] != m['action'] ||
+                  r['reviewId'] is! String ||
+                  !RegExp(
+                    r'^SDR-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['reviewId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              reviewId = r['reviewId'] as String;
             }
             if (occurrence) {
               final r = ack['result'] as Map;
@@ -2996,6 +3264,17 @@ class HubRepository {
             what: '連絡待ち',
           );
         }
+        if (itemSomeday) {
+          _itemRequest(
+            item,
+            m,
+            somedayId,
+            times: _somedayTimes,
+            outstanding: _outstandingSomedays,
+            what: '「いつかやる」',
+          );
+        }
+        if (somedayReview) _somedayReviewRequest(item, m, reviewId);
         if (hintDismiss) _hintDismissRequest(item, m);
         if (occurrence) {
           _occurrenceRequest(item, m, occurrenceNext, occurrenceAt);
@@ -3489,6 +3768,34 @@ class HubRepository {
       if (id != null) return id;
     }
     return null;
+  }
+
+  /// 見直しの依頼の対象の表示名（アイデアの題か、プロジェクトの名前）。
+  String _somedayTargetTitle(String target, String id) => target == 'project'
+      ? projects[id]?.title ?? id
+      : clip(ideaRecord(id)?.title ?? id, 80);
+
+  /// アイデア・休止中のプロジェクトの見直しの反映状況。記録の作成後に本体が「いつかやる」の一覧を書き、同期されていれば反映済みとする。
+  void _somedayReviewRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String? recordId,
+  ) {
+    var waiting = false;
+    if (item.state == 'accepted') {
+      final at = _somedayReviewTimes[recordId], generated = somedayGeneratedAt;
+      if (at == null || generated == null || generated.isBefore(at)) {
+        waiting = true;
+        item.detail = 'Mac miniが受け取り済み。現状の同期を待っています。';
+      } else {
+        item.detail = '「いつかやる」の見直しをMac miniが反映しました。';
+      }
+    } else if (item.state == 'waiting') {
+      waiting = true;
+    }
+    if (waiting) {
+      _outstandingSomedayReviews['${m['target']}:${m['target_id']}'] = item.id;
+    }
   }
 
   String _itemTitle(String projectId, String key) {

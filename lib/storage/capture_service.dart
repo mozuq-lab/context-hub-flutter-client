@@ -802,6 +802,79 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// NOWの項目を「いつかやる」へ移す・見直した（そのまま）・戻す依頼。[someday]は変更後の全体
+  /// （移した日と、最後に見直した日。見直していなければ移した日と同じ）で、nullで元の欄へ戻す。
+  Future<CaptureResult> saveItemSomeday(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    ({String since, String reviewed})? someday,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        // プロジェクト未定の本人が追加した行動は、置き場_unassignedで依頼する。
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        (someday == null && !item.someday) ||
+        (someday != null &&
+            (!validScheduleDate(someday.since) ||
+                !validScheduleDate(someday.reviewed) ||
+                someday.reviewed.compareTo(someday.since) < 0 ||
+                // 連絡待ちの項目は移さない（本体も断る）。
+                (!item.someday && item.waiting) ||
+                (item.someday &&
+                    (item.somedaySince != someday.since ||
+                        item.somedayReviewed == someday.reviewed))))) {
+      throw const FormatException('項目と「いつかやる」の日付を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-someday',
+      'project_id': projectId,
+      'item_key': item.key,
+      'someday': someday == null
+          ? null
+          : {
+              'since': someday.since,
+              if (someday.reviewed != someday.since)
+                'reviewed': someday.reviewed,
+            },
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// アイデアを「いつかやる」に置く（add）・見直した（keep）・始めた（start）・やめた（drop）、
+  /// 休止中のプロジェクトを見直した（keep）ことを記録する依頼。[on]は判断した日（YYYY-MM-DD）。
+  Future<CaptureResult> saveSomedayReview(
+    String operationId,
+    String target,
+    String targetId,
+    String action,
+    String on,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !const ['idea', 'project'].contains(target) ||
+        !(target == 'idea'
+                ? RegExp(r'^IDEA-[0-9A-HJKMNP-TV-Z]{26}$')
+                : projectIdPattern)
+            .hasMatch(targetId) ||
+        !somedayReviewActions.contains(action) ||
+        (target == 'project' && action != 'keep') ||
+        !validScheduleDate(on)) {
+      throw const FormatException('「いつかやる」の見直しを確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'someday-review',
+      'target': target,
+      'target_id': targetId,
+      'action': action,
+      'on': on,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// NOWの項目に連絡待ちの印を付ける依頼。[waiting]は変更後の全体（相手は任意）で、nullで外す。
   Future<CaptureResult> saveItemWait(
     String operationId,

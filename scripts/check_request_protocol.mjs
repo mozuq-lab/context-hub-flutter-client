@@ -1,13 +1,13 @@
-// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・連絡待ちの依頼、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
+// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemWaits} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-wait','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-wait','item-someday','someday-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -76,6 +76,24 @@ try{
   if(packet.waiting?.who){
    for(const p of await vault.files('10_projects')) if(p.endsWith('/NOW.md')) assert.ok(!(await vault.read(p)).includes(packet.waiting.who));
   }
+ }else if(packet.operation==='item-someday'){
+  // 移した日と見直した日がそのまま記録され、項目一覧に反映される。nullなら戻す。移した項目は「いつかやる」の一覧に並ぶ。
+  assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});
+  const record=(await readItemSomedays(vault)).records.find(r=>r.id===ack.result.somedayId);
+  assert.deepEqual({someday:record.someday,source:record.source,event:record.source_event_id},{someday:packet.someday,source:packet.source,event:packet.request_id});
+  const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
+  assert.deepEqual(item.someday??null,packet.someday?{id:record.id,since:packet.someday.since,reviewed:packet.someday.reviewed??packet.someday.since}:null);
+  const list=JSON.parse(await vault.read(somedayListPath));
+  assert.equal(list.entries.some(e=>e.kind==='item'&&e.item_key===packet.item_key),packet.someday!==null);
+  assert.ok(Date.parse(list.generated_at)>=Date.parse(record.created_at));
+ }else if(packet.operation==='someday-review'){
+  // 見直しの記録が残り、「いつかやる」の一覧が記録の後に書き直される（アプリは書いた日時で反映を確かめる）。
+  assert.deepEqual({target:ack.result.target,targetId:ack.result.targetId,action:ack.result.action,deduped:ack.result.deduped},{target:packet.target,targetId:packet.target_id,action:packet.action,deduped:false});
+  const record=(await readSomedayReviews(vault)).records.find(r=>r.id===ack.result.reviewId);
+  assert.deepEqual({target:record.target,id:record.target_id,action:record.action,on:record.on,event:record.source_event_id},{target:packet.target,id:packet.target_id,action:packet.action,on:packet.on,event:packet.request_id});
+  const list=JSON.parse(await vault.read(somedayListPath)),listed=list.entries.some(e=>e.kind===packet.target&&(e.idea_id??e.project_id)===packet.target_id);
+  assert.equal(listed,['add','keep'].includes(packet.action));
+  assert.ok(Date.parse(list.generated_at)>=Date.parse(record.created_at));
  }else if(packet.operation==='item-occurrence'){
   // 今の回を片付けた記録を残し、項目は欄に残したまま期日を次の回へ進める。
   assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,action:ack.result.action,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,action:packet.action,deduped:false});

@@ -180,6 +180,9 @@ class TodayEntry {
   /// 完了・解決した（誤りとして外したものも含む）。
   bool get done => item?.resolved ?? false;
 
+  /// 「いつかやる」へ移した。
+  bool get someday => item?.someday ?? false;
+
   /// 表示する本文。見つからないときは選んだときの本文。
   String get text => item?.text.trim() ?? pick.text;
 }
@@ -207,5 +210,8 @@ bool todayOpen(HubRepository repo, TodayPick pick) {
   final entry = todayEntry(repo, pick);
   if (entry.missing) return true;
   // 完了・解決や誤りとして外す報告を送って反映を待っている項目も、片付いたものとして扱う。
-  return !entry.done && repo.itemRequestIdFor(pick.itemKey) == null;
+  // 「いつかやる」へ移した項目は、今はやらないと決めたものなので持ち越さない。
+  return !entry.done &&
+      !entry.someday &&
+      repo.itemRequestIdFor(pick.itemKey) == null;
 }
