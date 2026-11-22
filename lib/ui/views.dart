@@ -17,6 +17,7 @@ import '../storage/basket_store.dart';
 import '../storage/draft_store.dart';
 import '../core/people.dart';
 import '../core/related.dart';
+import '../core/parser.dart' show clip;
 import 'markdown_view.dart';
 import 'people_view.dart';
 import 'template_view.dart';
@@ -189,6 +190,9 @@ class _HubViewState extends State<HubView> {
 
   /// 「次の一手」画面で表示する欄（next または open）。
   String nextSection = 'next';
+
+  /// 「次の一手」画面の手間の目安での絞り込み（[effortFilters]のキー）。nullならすべて。
+  String? effortFilter;
 
   /// 「次の一手」画面のプロジェクト未定のメモは[unassignedPageSize]件ずつ並べ、「さらに表示」で残りを出す。
   static const unassignedPageSize = 10;
@@ -1709,6 +1713,32 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 手間の目安を選んで依頼する。目安は本人が選び、AIは推測しない。
+  Future<void> effortItem(HubProject project, NowItemRef item) async {
+    final choice = await showDialog<({String? effort})>(
+      context: context,
+      builder: (_) => EffortDialog(item: item),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      final result = await c.requestItemEffort(
+        project.id,
+        item.key,
+        choice.effort,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '手間の目安を依頼しました。Mac miniで処理されると現状と一覧に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   /// AIの読み違いなどを、理由を選んで「誤り」として外すよう依頼する。完了・解決には数えない。
   Future<void> excludeItem(HubProject project, NowItemRef item) async {
     final choice = await showDialog<({String reason, String? note})>(
@@ -2690,6 +2720,10 @@ class _HubViewState extends State<HubView> {
       ];
     }
     final scheduling = repo.scheduleRequestIdFor(key) != null,
+            // 手間の目安。依頼が反映待ちの間は出さない。
+            effortPending =
+            repo.effortRequestIdFor(key) != null,
+        effort = repo.intakeFeatures.effort && !project.merged,
             // 定例の今の回を片付ける。日付の依頼が反映待ちの間は出さない。
             rounds =
             item.repeating && repo.intakeFeatures.occurrence && !scheduling,
@@ -2706,6 +2740,12 @@ class _HubViewState extends State<HubView> {
           key: Key('schedule-$tag'),
           value: () => scheduleItem(project, item),
           child: Text(item.scheduled ? '期日を変える' : '期日を付ける'),
+        ),
+      if (effort && !effortPending)
+        PopupMenuItem(
+          key: Key('effort-$tag'),
+          value: () => effortItem(project, item),
+          child: Text(item.effort == null ? '手間の目安を付ける' : '手間の目安を変える'),
         ),
       if (rounds)
         PopupMenuItem(
@@ -2760,6 +2800,11 @@ class _HubViewState extends State<HubView> {
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 10),
           child: Text('期日を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        ),
+      if (effortPending)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         ),
       // 今日の3つ（この端末だけ）。
       todayToggle(project.id, key),
@@ -2895,6 +2940,10 @@ class _HubViewState extends State<HubView> {
             <ScheduleBucket, List<(HubProject, NowEntry, NowItemRef, int)>>{},
         resting = <(HubProject, NowEntry, NowItemRef, int)>[],
         listed = <String, List<NowEntry>>{};
+    // 手間の目安での絞り込み。目安に対応した本体のときだけ使う。
+    final efforts = repo.intakeFeatures.effort,
+        filter = efforts ? effortFilter : null;
+    var matched = 0;
     for (final project in projects) {
       final rest = <NowEntry>[];
       var order = 0;
@@ -2903,11 +2952,17 @@ class _HubViewState extends State<HubView> {
         final item = entry.itemKey == null
             ? null
             : project.nowItems.where((i) => i.key == entry.itemKey).firstOrNull;
+        // 項目に結び付かない行は目安が分からないので、絞り込み中は出さない（「目安なし」とも言えない）。
+        if (filter != null && item == null) continue;
+        if (!effortFits(filter, item?.effort)) continue;
         if (item == null || !item.scheduled) {
+          matched++;
           rest.add(entry);
           continue;
         }
         final b = scheduleBucket(item.due, item.reviewAfter, today);
+        // 見直す日まで休ませている項目は畳んで示すので、絞り込みの「該当なし」の判定には数えない。
+        if (!b.hidden) matched++;
         if (b.hidden) {
           resting.add((project, entry, item, order));
         } else if (scheduleBucketLabels.containsKey(b.bucket)) {
@@ -2984,11 +3039,41 @@ class _HubViewState extends State<HubView> {
             ),
           ),
         ),
+      if (efforts && count[section] != 0)
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text('手間の目安', style: TextStyle(fontSize: 12)),
+              for (final (value, label) in [
+                (null, 'すべて'),
+                for (final e in effortFilters.entries) (e.key, e.value),
+              ])
+                ChoiceChip(
+                  key: Key('effort-filter-${value ?? 'all'}'),
+                  label: Text(label),
+                  selected: filter == value,
+                  onSelected: (_) => setState(() => effortFilter = value),
+                ),
+            ],
+          ),
+        ),
       const SizedBox(height: 20),
       if (projects.isEmpty)
         const Padding(
           padding: EdgeInsets.only(bottom: 24),
           child: Text('進行中のプロジェクトはありません。'),
+        )
+      else if (filter != null && count[section] != 0 && matched == 0)
+        Padding(
+          key: const Key('effort-filter-empty'),
+          padding: const EdgeInsets.only(bottom: 24),
+          child: Text(
+            '「${effortFilters[filter]}」に合う${sectionLabels[section]}はありません。目安は各項目の「…」から付けられます。',
+          ),
         )
       else if (count[section] == 0)
         Padding(
@@ -3031,7 +3116,9 @@ class _HubViewState extends State<HubView> {
       for (final project in projects)
         if (listed[project.id]! case final entries
             when entries.isNotEmpty ||
-                (section == 'next' && project.pendingActions.isNotEmpty)) ...[
+                (section == 'next' &&
+                    filter == null &&
+                    project.pendingActions.isNotEmpty)) ...[
           InkWell(
             key: Key('next-project-${project.id}'),
             onTap: () => widget.onNavigate('project:${project.id}'),
@@ -3070,7 +3157,7 @@ class _HubViewState extends State<HubView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (section == 'next')
+                  if (section == 'next' && filter == null)
                     for (final action in project.pendingActions)
                       pendingActionRow(action),
                   for (final entry in entries)
@@ -3081,8 +3168,9 @@ class _HubViewState extends State<HubView> {
           ),
           const SizedBox(height: 24),
         ],
-      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。
+      // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。目安で絞り込んでいる間は出さない。
       if (section == 'next' &&
+          filter == null &&
           (repo.unassignedMemos.isNotEmpty ||
               repo.unassignedActionCount > 0 ||
               (repo.intakeFeatures.unassignedItems &&
@@ -4181,6 +4269,69 @@ class RecordView extends StatelessWidget {
     );
   }
 
+  /// 続き。前のメモとこのメモの続きをたどり、このメモの続きを書ける（訂正とは別に、前のメモを残したまま追記する）。
+  Widget continuationPanel(BuildContext context) {
+    final repo = controller.repository;
+    final chain = repo?.correctionChainOf(record.id);
+    if (repo == null || chain == null) return const SizedBox.shrink();
+    final root = chain.first;
+    if (root.kind != 'memo' && root.kind != 'work-summary') {
+      return const SizedBox.shrink();
+    }
+    final previous = repo.previousOf(root),
+        missing = root.metadata['continues_input_id'],
+        later = repo.continuationsOf(root.sourceId),
+        supported = repo.intakeFeatures.continues;
+    if (!supported && previous == null && missing == null && later.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    Widget link(HubRecord r) => TextButton(
+      key: Key('continuation-${r.sourceId}'),
+      style: TextButton.styleFrom(
+        padding: EdgeInsets.zero,
+        alignment: Alignment.centerLeft,
+      ),
+      onPressed: () => open(context, r.id),
+      child: Text(
+        '${timeLabel(r.at)} ${clip(r.title.replaceAll(RegExp(r'\s+'), ' '), 60)}',
+        textAlign: TextAlign.left,
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (previous != null) ...[
+            const Text('前のメモ', style: TextStyle(fontSize: 12)),
+            link(previous),
+          ] else if (missing is String)
+            Text(
+              '前のメモ（$missing）はまだ届いていません。',
+              style: const TextStyle(fontSize: 12),
+            ),
+          if (later.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('続き（${later.length}件）', style: const TextStyle(fontSize: 12)),
+            for (final r in later) link(r),
+          ],
+          if (supported)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                key: const Key('write-continuation'),
+                icon: const Icon(Icons.subdirectory_arrow_right),
+                label: const Text('続きを書く'),
+                onPressed: controller.saving || controller.composing
+                    ? null
+                    : () => showCapture(context, controller, continues: root),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// 似ているアイデアと束ねたアイデア。束ねる・別の話にする判断を依頼できる。
   Widget ideaPanel(BuildContext context) {
     final repo = controller.repository;
@@ -4362,6 +4513,15 @@ class RecordView extends StatelessWidget {
                 listenable: controller,
                 builder: (context, _) => correctionPanel(context),
               ),
+            if (const [
+              'memo',
+              'work-summary',
+              'correction',
+            ].contains(record.kind))
+              ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => continuationPanel(context),
+              ),
             const SizedBox(height: 32),
             const Divider(),
             const SizedBox(height: 16),
@@ -4527,6 +4687,7 @@ Future<void> showCapture(
   HubController c, {
   GitDraft? draft,
   InsightAnswerTarget? answer,
+  HubRecord? continues,
 }) async {
   if (c.composing) {
     return;
@@ -4536,8 +4697,12 @@ Future<void> showCapture(
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) =>
-          CaptureDialog(controller: c, draft: draft, answer: answer),
+      builder: (_) => CaptureDialog(
+        controller: c,
+        draft: draft,
+        answer: answer,
+        continues: continues,
+      ),
     );
   } finally {
     c.composing = false;
@@ -4795,8 +4960,12 @@ class CaptureDialog extends StatefulWidget {
     required this.controller,
     this.draft,
     this.answer,
+    this.continues,
   });
   final HubController controller;
+
+  /// 続きとして書く前のメモ（訂正を除いた元の入力の記録）。前のメモで指定したプロジェクトを初期値にする。
+  final HubRecord? continues;
 
   /// 作業記録の下書きから入力を作る場合の下書き。本文とプロジェクトを初期値にする。
   final GitDraft? draft;
@@ -5134,6 +5303,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
     _draftKey = widget.controller.draftKey(
       gitDraftId: widget.draft?.id,
       answerTo: answer == null ? null : '${answer.runId}/${answer.itemKey}',
+      continues: widget.continues?.sourceId,
     );
     text.addListener(_schedulePersist);
     text.addListener(_scheduleRelated);
@@ -5149,8 +5319,17 @@ class _CaptureDialogState extends State<CaptureDialog> {
     final draft = widget.draft;
     text.text = draft?.text ?? '';
     kind = 'memo';
+    // 続きは、プロジェクトを指定しなければ本体が前のメモのプロジェクトを引き継ぐ（統合を戻したときも前のメモと一緒に動く）。
     project = draft?.projectId;
     happenedOn = null;
+  }
+
+  /// 続きでプロジェクトを指定しないときに引き継ぐ、前のメモのプロジェクトの名前（統合済みなら統合先）。続きでない・指定がなければnull。
+  String? get _inheritedTitle {
+    final repo = widget.controller.repository,
+        id = widget.continues?.metadata['project'];
+    if (repo == null || id is! String) return null;
+    return repo.projects[repo.resolveProject(id)]?.title;
   }
 
   /// 前回の書きかけを戻す。保存済みの操作の書きかけは消し、保存結果が不明なものは確認へ戻す。
@@ -5347,6 +5526,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
           meta: widget.answer?.meta,
           happenedOn: _canBackdate ? happenedOn : null,
           maxBackdateDays: _maxBackdateDays,
+          continues: widget.continues?.sourceId,
         ),
       );
       await _settled(r);
@@ -5412,6 +5592,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
           title: Text(
             widget.answer != null
                 ? '問いに答える'
+                : widget.continues != null
+                ? '続きを書く'
                 : widget.draft == null
                 ? '思いつきを、そのまま。'
                 : '下書きから入力を作る',
@@ -5453,6 +5635,13 @@ class _CaptureDialogState extends State<CaptureDialog> {
                                 ),
                               ),
                             ),
+                        ],
+                        if (widget.continues case final previous?) ...[
+                          const SizedBox(height: 12),
+                          NoticeBox(
+                            '前のメモの続きとして保存します。前のメモは変わりません。Mac miniのAI読み取りでは、前のメモを前提として読みます。\n前のメモ: ${clip(previous.title.replaceAll(RegExp(r'\s+'), ' '), 80)}',
+                            key: const Key('continues-previous'),
+                          ),
                         ],
                         if (widget.answer case final answer?) ...[
                           const SizedBox(height: 12),
@@ -5628,9 +5817,14 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             labelText: 'プロジェクト（任意）',
                           ),
                           items: [
-                            const DropdownMenuItem(
+                            // 続きでは、指定しなければ本体が前のメモのプロジェクトを引き継ぐので、そのとおりに示す。
+                            DropdownMenuItem(
                               value: '',
-                              child: Text('指定しない'),
+                              child: Text(
+                                _inheritedTitle == null
+                                    ? '指定しない'
+                                    : '前のメモと同じ（$_inheritedTitle）',
+                              ),
                             ),
                             // 統合済みのプロジェクトは選ばせない（統合先を選ぶ）。
                             for (final p
@@ -5873,6 +6067,78 @@ class PinOrderDialog extends StatelessWidget {
         ],
       );
     },
+  );
+}
+
+/// NOWの項目の手間の目安を選ぶ。目安は本人が選び、AIは推測しない。結果のeffortがnullなら外す。
+class EffortDialog extends StatefulWidget {
+  const EffortDialog({super.key, required this.item});
+  final NowItemRef item;
+  @override
+  State<EffortDialog> createState() => _EffortDialogState();
+}
+
+class _EffortDialogState extends State<EffortDialog> {
+  late String? effort = widget.item.effort;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('effort-dialog'),
+    title: const Text('手間の目安'),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 480),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.item.display,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final e in itemEfforts)
+                  ChoiceChip(
+                    key: Key('effort-choice-$e'),
+                    label: Text(itemEffortLabels[e]!),
+                    selected: effort == e,
+                    onSelected: (_) => setState(() => effort = e),
+                  ),
+                if (widget.item.effort != null)
+                  ChoiceChip(
+                    key: const Key('effort-choice-none'),
+                    label: const Text('目安を外す'),
+                    selected: effort == null,
+                    onSelected: (_) => setState(() => effort = null),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '空いた時間に合う項目を「次の一手」で絞り込むための目安です。Mac miniで処理されると現状に反映され、同じ本文の項目には新しい報告が届いても引き継がれます。',
+              style: TextStyle(fontSize: 12, height: 1.6),
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('やめる'),
+      ),
+      FilledButton(
+        key: const Key('effort-submit'),
+        onPressed: effort == widget.item.effort
+            ? null
+            : () => Navigator.pop(context, (effort: effort)),
+        child: const Text('依頼する'),
+      ),
+    ],
   );
 }
 

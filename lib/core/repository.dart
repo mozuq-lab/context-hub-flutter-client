@@ -53,6 +53,11 @@ class HubRepository {
   final Map<String, DateTime> _scheduleTimes = {};
   final Map<String, String> _latestSchedules = {};
   final Map<String, String> _outstandingSchedules = {};
+
+  /// 手間の目安の記録の作成時刻（記録IDごと）と、反映を待っている目安の依頼（項目キーごと）。
+  final Map<String, DateTime> _effortTimes = {};
+  final Map<String, String> _outstandingEfforts = {};
+  final Map<String, String> _latestEfforts = {};
   final Map<String, String> _outstandingHintDismissals = {};
 
   /// 「記録に聞く」の問いと答え（新しい順）。この端末から送った問いと、CLIなどほかから聞いた問いの答え。
@@ -598,7 +603,12 @@ class HubRepository {
     }
     // 本人が追加した行動（本体の入力の種類action）。fromは行動にした元の行。旧版の一覧にはない。
     final act = i['action'], from = act is Map ? act['from'] : null;
-    if ((act != null && act is! Map) ||
+    // 本人が付けた手間の目安。旧版の一覧と目安のない項目にはない。
+    // 新しい本体が段階を足しても項目一覧全体は捨てず、知らない段階は目安なしとして読む。
+    final rawEffort = i['effort'],
+        effort = itemEfforts.contains(rawEffort) ? rawEffort as String : null;
+    if ((rawEffort != null && rawEffort is! String) ||
+        (act != null && act is! Map) ||
         (from != null &&
             (from is! Map ||
                 from['input_id'] is! String ||
@@ -656,6 +666,7 @@ class HubRepository {
       fromInputId: from is Map ? from['input_id'] as String : null,
       fromText: from is Map ? from['text'] as String : null,
       fromKey: from is Map ? from['key'] as String? : null,
+      effort: effort,
     );
   }
 
@@ -684,6 +695,31 @@ class HubRepository {
         _scheduleTimes[id] = at;
         final last = _latestSchedules[key];
         if (last == null || id.compareTo(last) > 0) _latestSchedules[key] = id;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    // 手間の目安の記録。依頼の反映を確かめる時刻だけを読む（有効な目安は項目一覧のeffortを使う）。
+    final effort = RegExp(
+      r'^90_system/item-efforts/(EFF-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = effort.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']);
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['item_key'] is! String ||
+            (j['effort'] != null && !itemEfforts.contains(j['effort'])) ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _effortTimes[id] = at;
+        final last = _latestEfforts[key];
+        if (last == null || id.compareTo(last) > 0) _latestEfforts[key] = id;
       } catch (_) {
         _problem(e.key);
       }
@@ -1229,6 +1265,12 @@ class HubRepository {
   String? scheduleRequestIdFor(String itemKey) =>
       _outstandingSchedules[itemKey];
 
+  /// 反映を待っている、この項目への手間の目安の依頼。
+  String? effortRequestIdFor(String itemKey) => _outstandingEfforts[itemKey];
+
+  /// この項目の最新の手間の目安の記録のID（外した記録を含む）。記録がなければnull。
+  String? latestEffortIdFor(String itemKey) => _latestEfforts[itemKey];
+
   /// この項目の最新の期日・見直す日の記録のID（外した記録を含む）。記録がなければnull。
   String? latestScheduleIdFor(String itemKey) => _latestSchedules[itemKey];
 
@@ -1238,6 +1280,19 @@ class HubRepository {
 
   /// 本体の入力ID（IN-…）に対応する記録。見つからなければnull。
   HubRecord? inputRecord(String inputId) => _inputs[inputId];
+
+  /// 続きとして書かれた記録の前のメモ（元の入力）。続きでない・前のメモが届いていなければnull。
+  HubRecord? previousOf(HubRecord record) {
+    final id = record.metadata['continues_input_id'];
+    return id is String ? _inputs[id] : null;
+  }
+
+  /// このメモ（元の入力ID）の続きとして書かれた記録。古い順。
+  List<HubRecord> continuationsOf(String inputId) =>
+      _inputs.values
+          .where((r) => r.metadata['continues_input_id'] == inputId)
+          .toList()
+        ..sort((a, b) => (a.at ?? DateTime(0)).compareTo(b.at ?? DateTime(0)));
 
   /// この項目の最新の解決・再開記録のID。記録がなければnull。
   String? latestResolutionIdFor(String itemKey) => _latestResolutions[itemKey];
@@ -1991,6 +2046,7 @@ class HubRepository {
               'item-resolution',
               'item-schedule',
               'item-occurrence',
+              'item-effort',
               'item-hint-dismiss',
               'git-draft-dismiss',
               'project-create',
@@ -2106,6 +2162,18 @@ class HubRepository {
                     !validScheduleDate(m['review_after'])) ||
                 (m['repeat'] != null &&
                     (m['due'] == null || !_validRepeatRequest(m['repeat']))))) {
+          throw const FormatException();
+        }
+        final itemEffort = m['operation'] == 'item-effort';
+        if (itemEffort &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('effort') ||
+                (m['effort'] != null && !itemEfforts.contains(m['effort'])))) {
           throw const FormatException();
         }
         final occurrence = m['operation'] == 'item-occurrence';
@@ -2245,7 +2313,12 @@ class HubRepository {
         final usedDraft = m['operation'] == 'capture' && m['meta'] is Map
             ? (m['meta'] as Map)['git_draft']
             : null;
-        String? resolutionId, scheduleId, ideaLinkId, occurrenceNext, askId;
+        String? resolutionId,
+            scheduleId,
+            effortId,
+            ideaLinkId,
+            occurrenceNext,
+            askId;
         DateTime? occurrenceAt, askReceived;
         final decision = [
           'project-approve',
@@ -2365,6 +2438,8 @@ class HubRepository {
                     : '未解決に戻す'}報告: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemSchedule
               ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}${m['repeat'] is Map ? '・${_repeatLabelOf(m['repeat'])}' : ''}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemEffort
+              ? '${m['effort'] == null ? '手間の目安を外す依頼' : '手間の目安の依頼（${itemEffortLabels[m['effort']]}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : hintDismiss
               ? '「片付いたかも」の見送り: ${_itemTitle(m['project_id'], m['item_key'])}'
               : draftDismiss
@@ -2504,6 +2579,19 @@ class HubRepository {
                 throw const FormatException();
               }
               scheduleId = r['scheduleId'] as String;
+            }
+            if (itemEffort) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['effortId'] is! String ||
+                  !RegExp(
+                    r'^EFF-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['effortId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              effortId = r['effortId'] as String;
             }
             if (occurrence) {
               final r = ack['result'] as Map;
@@ -2788,6 +2876,16 @@ class HubRepository {
             times: _scheduleTimes,
             outstanding: _outstandingSchedules,
             what: '日付',
+          );
+        }
+        if (itemEffort) {
+          _itemRequest(
+            item,
+            m,
+            effortId,
+            times: _effortTimes,
+            outstanding: _outstandingEfforts,
+            what: '手間の目安',
           );
         }
         if (hintDismiss) _hintDismissRequest(item, m);

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'happened.dart' show defaultMaxBackdateDays;
+import 'models.dart' as models show itemEfforts;
 import 'models.dart' show askQuestionChars;
 
 /// 本体の「プロジェクト未定」の行を指す、項目の置き場（記録と依頼の`project_id`に入る）。
@@ -24,6 +25,7 @@ class IntakeFeatures {
     this.itemScopes = const {},
     this.actionScopes = const {},
     this.reviewRejects = const {},
+    this.itemEfforts = const {},
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -52,6 +54,17 @@ class IntakeFeatures {
 
   /// 確認待ち以外で却下を受け付ける候補の状態（`review_rejects`）。`stale`は古くなった候補。
   final Set<String> reviewRejects;
+
+  /// 手間の目安の依頼（item-effort）で選べる値（`item_efforts`）。
+  final Set<String> itemEfforts;
+
+  /// 次の一手・未解決に手間の目安を付けられる。
+  bool get effort =>
+      operations.contains('item-effort') &&
+      itemEfforts.containsAll(models.itemEfforts);
+
+  /// メモ・作業要約を、前のメモの続きとして送れる（`continues`）。
+  bool get continues => captureFields.contains('continues');
 
   /// 古くなった候補を却下できる。
   bool get staleReject => reviewRejects.contains('stale');
@@ -100,7 +113,8 @@ class IntakeFeatures {
       final kinds = m['capture_kinds'],
           scopes = m['item_scopes'],
           actionScopes = m['action_scopes'],
-          rejects = m['review_rejects'];
+          rejects = m['review_rejects'],
+          efforts = m['item_efforts'];
       final askMax = ask is Map ? ask['max_question_chars'] : null;
       return IntakeFeatures._(
         itemScheduleFields: {
@@ -126,6 +140,11 @@ class IntakeFeatures {
         reviewRejects: {
           if (rejects is List)
             for (final v in rejects)
+              if (v is String) v,
+        },
+        itemEfforts: {
+          if (efforts is List)
+            for (final v in efforts)
               if (v is String) v,
         },
         askEnabled: ask is Map && ask['enabled'] == true,

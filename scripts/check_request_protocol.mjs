@@ -1,13 +1,13 @@
-// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）の依頼、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの訂正のREQを、
+// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安の依頼、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -59,6 +59,13 @@ try{
   if(packet.repeat!==undefined)assert.deepEqual(record.repeat??null,packet.repeat&&packet.due?{...packet.repeat,...(packet.repeat.unit==='month'?{day:Number(packet.due.slice(8))}:{})}:null);
   assert.deepEqual(item.schedule,clearing?null:{id:record.id,due:packet.due,review_after:packet.review_after,...(record.repeat?{repeat:record.repeat}:{})});
   assert.equal(activeSchedules((await readItemSchedules(vault)).records).has(packet.item_key),!clearing);
+ }else if(packet.operation==='item-effort'){
+  // 変更後の目安がそのまま記録され、NOWの項目一覧に反映される。nullなら外す。
+  assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});
+  const record=(await readItemEfforts(vault)).records.find(r=>r.id===ack.result.effortId);
+  assert.deepEqual({effort:record.effort,source:record.source,event:record.source_event_id},{effort:packet.effort,source:packet.source,event:packet.request_id});
+  const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
+  assert.equal(item.effort??null,packet.effort);
  }else if(packet.operation==='item-occurrence'){
   // 今の回を片付けた記録を残し、項目は欄に残したまま期日を次の回へ進める。
   assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,action:ack.result.action,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,action:packet.action,deduped:false});
@@ -99,6 +106,13 @@ try{
   const llm=new MockLlm();let calls=0;const complete=llm.complete.bind(llm);llm.complete=(...a)=>{calls++;return complete(...a);};
   await organize(config,llm);assert.equal(calls,0);
   if(packet.meta&&packet.project)assert.ok(!(await vault.read(`10_projects/${packet.project}/NOW.md`)).includes(`${packet.meta.action_from_text} [${packet.meta.action_from_input}](`));
+ }else if(packet.continues!==undefined){
+  // 続きは前のメモにつながり、プロジェクトを選ばなければ前のメモで指定したプロジェクトを引き継ぐ。
+  const inputs=await readInputs(config),saved=inputs.find(i=>i.id===ack.result.inputId),parent=inputs.find(i=>i.id===packet.continues);
+  assert.ok(parent);
+  assert.deepEqual({continues:saved.continues_input_id,text:saved.text,kind:saved.kind},{continues:packet.continues,text:packet.text,kind:packet.kind??'memo'});
+  assert.equal(saved.project,packet.project??parent.project);
+  await organize(config,new MockLlm());
  }else{
   // 下書きから作った入力は、確認した下書きのhashが一致すれば使用済みになる。
   await organize(config,new MockLlm());
