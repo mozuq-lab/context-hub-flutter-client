@@ -315,7 +315,8 @@ class _HubShellState extends State<HubShell> {
       case HubCommand.copyContext:
         await copyContext();
       case HubCommand.settings:
-        if (c.location != null) show('settings');
+        // Vaultを読めていないときは、ようこそ画面（Vaultを選ぶ・サンプル）から進める。
+        if (c.repository != null) show('settings');
       case HubCommand.keyboardHelp:
         await showKeyboardHelp(context);
     }
@@ -379,7 +380,7 @@ class _HubShellState extends State<HubShell> {
             ],
           ),
           PlatformMenuItemGroup(
-            members: [item(HubCommand.settings, c.location != null)],
+            members: [item(HubCommand.settings, has)],
           ),
           if (hasMenu(PlatformProvidedMenuItemType.servicesSubmenu))
             PlatformMenuItemGroup(
@@ -928,6 +929,34 @@ class _HubShellState extends State<HubShell> {
     );
   }
 
+  /// 本文の領域に詳細などを重ねているか。右下の「メモを追加」を隠すのに使う。
+  bool detailOpen = false;
+
+  /// 本文の領域の画面の重なりの変化を受けて、[detailOpen]を更新する。
+  late final _contentObserver = _ContentObserver(() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final open = contentNavigator.currentState?.canPop() ?? false;
+      if (open != detailOpen) setState(() => detailOpen = open);
+    });
+  });
+
+  /// 狭い画面の右下の「メモを追加」。押せないとき（読込中・保存の確認情報を読めないとき）は薄く示す。
+  Widget memoButton() {
+    final scheme = Theme.of(context).colorScheme;
+    final enabled = c.captureWarning == null && !c.loading;
+    return FloatingActionButton.extended(
+      key: const Key('new-memo'),
+      onPressed: enabled ? () => showCapture(context, c) : null,
+      backgroundColor: enabled ? null : scheme.surfaceContainerHighest,
+      foregroundColor: enabled
+          ? null
+          : scheme.onSurface.withValues(alpha: .38),
+      icon: const Icon(Icons.edit_outlined),
+      label: const Text('メモを追加'),
+    );
+  }
+
   /// 狭い画面の下のタブ。毎日使う4つの画面と、それ以外を開く「その他」。
   Widget bottomBar() {
     final index = primaryPages.indexWhere((p) => selectedPage(p.$1));
@@ -938,6 +967,8 @@ class _HubShellState extends State<HubShell> {
       selectedIndex: index < 0 ? primaryPages.length : index,
       labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
       onDestinationSelected: (i) {
+        // 本文の領域に選択肢の一覧などを開いている間は、ほかの画面へ移らない（サイドバー以外の移動と同じ扱い）。
+        if (!idle) return;
         if (i == primaryPages.length) {
           shellScaffold.currentState?.openDrawer();
         } else {
@@ -952,9 +983,13 @@ class _HubShellState extends State<HubShell> {
                 ? Badge(
                     key: const Key('badge-review'),
                     label: Text('$reviewCount'),
+                    // 新着がなければ、目立たない色にする（メニューの件数と同じ）。
                     backgroundColor: reviewFresh > 0
                         ? null
-                        : Theme.of(context).colorScheme.outline,
+                        : Theme.of(context).colorScheme.surfaceContainerHighest,
+                    textColor: reviewFresh > 0
+                        ? null
+                        : Theme.of(context).colorScheme.onSurface,
                     child: Icon(icon),
                   )
                 : Icon(icon),
@@ -1122,6 +1157,11 @@ class _HubShellState extends State<HubShell> {
           drawer: wide || !has ? null : Drawer(child: navigation(true)),
           onDrawerChanged: (open) => setState(() => drawerOpen = open),
           bottomNavigationBar: wide || !has ? null : bottomBar(),
+          // 狭い画面では、メモの追加を右下のボタンから行う。案内（SnackBar）と位置を調整し合うよう、外側に置く。
+          // 詳細や一覧を本文の領域に重ねている間と設定の画面では出さない。
+          floatingActionButton: has && !wide && page != 'settings' && !detailOpen
+              ? memoButton()
+              : null,
           body: Row(
             children: [
               if (wide && has)
@@ -1153,6 +1193,7 @@ class _HubShellState extends State<HubShell> {
                   },
                   child: Navigator(
                     key: contentNavigator,
+                    observers: [_contentObserver],
                     pages: [
                       MaterialPage<void>(
                         key: const ValueKey('hub-main'),
@@ -1225,17 +1266,6 @@ class _HubShellState extends State<HubShell> {
         const SizedBox(width: 8),
       ],
     ),
-    // 狭い画面では、メモの追加を右下の丸いボタンから行う。
-    floatingActionButton: has && !wide && page != 'settings'
-        ? FloatingActionButton.extended(
-            key: const Key('new-memo'),
-            onPressed: c.captureWarning != null || c.loading
-                ? null
-                : () => showCapture(context, c),
-            icon: const Icon(Icons.edit_outlined),
-            label: const Text('メモを追加'),
-          )
-        : null,
     body: Column(
       children: [
         if (c.loading) const LinearProgressIndicator(minHeight: 2),
@@ -1251,7 +1281,8 @@ class _HubShellState extends State<HubShell> {
             child: notice,
           ),
         Expanded(
-          child: !has && page != 'settings'
+          // Vaultを読めていないときは、設定を開いていても、ようこそ画面（Vaultを選ぶ・サンプル）を出す。
+          child: !has
               ? _welcome()
               : page == 'settings'
               ? settingsView(wide: wide)
@@ -1491,4 +1522,22 @@ Future<void> showAttentionSettings(
       ),
     ),
   );
+}
+
+/// 本文の領域の画面が重なったり閉じたりしたことを知らせる。
+class _ContentObserver extends NavigatorObserver {
+  _ContentObserver(this.changed);
+  final VoidCallback changed;
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      changed();
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      changed();
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      changed();
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      changed();
 }

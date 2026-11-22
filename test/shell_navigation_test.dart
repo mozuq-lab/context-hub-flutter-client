@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:context_hub_client/app/controller.dart';
 import 'package:context_hub_client/core/models.dart';
 import 'package:context_hub_client/storage/capture_service.dart';
+import 'package:context_hub_client/storage/vault_access.dart';
 import 'package:context_hub_client/ui/app.dart';
 import 'package:context_hub_client/ui/notice.dart';
 import 'package:context_hub_client/ui/theme.dart';
@@ -44,7 +45,86 @@ Future<void> openRecordWide(WidgetTester tester) async {
   expect(find.text('出典・日時'), findsOneWidget);
 }
 
+/// 指定した場所だけ読めないVault。
+class _BadAccess extends MemoryUIAccess {
+  @override
+  Future<VaultSnapshot> readSnapshot(VaultLocation location) {
+    if (location.handle == 'bad') throw StateError('読めません');
+    return super.readSnapshot(location);
+  }
+}
+
 void main() {
+  testWidgets('狭い画面では、操作付きの案内が出ていても右下の「メモを追加」を押せ、詳細を開いている間は隠す', (
+    tester,
+  ) async {
+    await openSample(tester, const Size(390, 800));
+    final fab = find.byKey(const Key('new-memo'));
+    // 操作付きの案内は閉じるまで残るので、ボタンと重ならないことを確かめる。
+    notice(
+      tester.element(fab),
+      '受け付けられました',
+      action: (label: '最近のメモ', onPressed: () {}),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getRect(find.byType(SnackBar))
+          .overlaps(tester.getRect(fab)),
+      isFalse,
+    );
+    await tester.tap(fab);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('memo-text')), findsOneWidget);
+    await tester.tap(find.text('フォームを閉じる'));
+    await tester.pumpAndSettle();
+    // 詳細を開いている間は出さず、閉じると戻る。
+    await tester.tap(find.byKey(const Key('nav-recent')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(memoTitle).first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('new-memo')), findsNothing);
+    expect(await tester.binding.handlePopRoute(), isTrue);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('new-memo')), findsOneWidget);
+  });
+
+  for (final size in [const Size(390, 800), const Size(1200, 800)]) {
+    testWidgets('設定を開いたままVaultを読めなくなったら、ようこそ画面に戻る（${size.width.toInt()}幅）', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      final access = _BadAccess();
+      await access.init();
+      final c = HubController(
+        access,
+        sampleLoader: () async => fixture().files,
+      );
+      addTearDown(() {
+        c.dispose();
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      await tester.pumpWidget(ContextHubApp(controller: c));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('サンプルで試す'));
+      await tester.pumpAndSettle();
+      if (size.width < 820) {
+        await tester.tap(find.byKey(const Key('nav-more')));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const Key('nav-settings')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('choose-vault')), findsOneWidget);
+      await c.activate(const VaultLocation('bad', 'Bad'));
+      await tester.pumpAndSettle();
+      expect(c.repository, isNull);
+      expect(find.byKey(const Key('choose-vault')), findsNothing);
+      expect(find.text('サンプルで試す'), findsOneWidget);
+    });
+  }
+
   testWidgets('広い画面では、記録の詳細を開いたままサイドバーからほかの画面へ移れる', (tester) async {
     await openSample(tester, const Size(1280, 900));
     await openRecordWide(tester);
