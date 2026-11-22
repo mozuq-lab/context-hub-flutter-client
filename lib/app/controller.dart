@@ -2049,6 +2049,7 @@ class HubController extends ChangeNotifier {
   }
 
   /// 本人が決めた行動を、プロジェクトの「次の一手」へ直接載せる依頼を保存する（モデルを通さない）。
+  /// [projectId]が[unassignedScope]なら、プロジェクトを決めずにプロジェクト未定の次の一手へ載せる。
   /// [from]はAIが読み取った行（提案・作業要約の次の一手）を行動にするときの元の行。文面は本人が直したもの。
   Future<CaptureResult> requestAction(
     String projectId,
@@ -2063,12 +2064,24 @@ class HubController extends ChangeNotifier {
         if (!parsed.intakeFeatures.actions) {
           throw StateError('Mac miniの本体が次の一手の直接追加に対応していません。本体を更新してください。');
         }
-        final owner = parsed.projects[projectId];
-        if (owner == null) throw StateError('プロジェクトが見つかりません。再読込してください。');
+        // プロジェクト未定の置き場を指定したときは、プロジェクトを付けずに追加する（対応した本体だけが受け付ける）。
+        final unassigned = projectId == unassignedScope;
+        if (unassigned && !parsed.intakeFeatures.unassignedActions) {
+          throw StateError('Mac miniの本体がプロジェクト未定の行動に対応していません。本体を更新してください。');
+        }
+        final owner = unassigned ? null : parsed.projects[projectId];
+        if (!unassigned && owner == null) {
+          throw StateError('プロジェクトが見つかりません。再読込してください。');
+        }
         // 統合済みのプロジェクトには追加しない（本体が断る）。統合先へ追加してもらう。
-        _refuseMerged(parsed, owner);
+        if (owner != null) _refuseMerged(parsed, owner);
+        // 元の行は、どのプロジェクトのNOW・プロジェクト未定の一覧にあってもよい（追加先と違う置き場から引き取れる）。
+        final items = [
+          for (final p in parsed.projects.values) ...p.nowItems,
+          ...parsed.unassignedItems,
+        ];
         if (from?.key case final key?) {
-          final found = owner.nowItems.where((i) => i.key == key).firstOrNull;
+          final found = items.where((i) => i.key == key).firstOrNull;
           if (found == null ||
               found.resolved ||
               found.action ||
@@ -2086,19 +2099,17 @@ class HubController extends ChangeNotifier {
             throw StateError('この項目の日付の依頼が反映待ちです。保存と反映を確認してください。');
           }
         } else if (from != null &&
-            !owner.sections['proposals']!.any((e) {
-              final shown = parsed.proposalSource(e);
-              return shown?.inputId == from.inputId && shown?.text == from.text;
-            })) {
+            !parsed.projects.values.any(
+              (p) => p.sections['proposals']!.any((e) {
+                final shown = parsed.proposalSource(e);
+                return shown?.inputId == from.inputId &&
+                    shown?.text == from.text;
+              }),
+            )) {
           // 「提案」の行は、今のNOWにまだ載っているときだけ行動にする。
           throw StateError('現状が更新されています。表示を確認してから操作してください。');
         }
-        if (from != null &&
-            (parsed.pendingActionFrom(from.inputId, from.text) ||
-                owner.nowItems.any(
-                  (i) =>
-                      i.fromInputId == from.inputId && i.fromText == from.text,
-                ))) {
+        if (from != null && parsed.takenOver(from.inputId, from.text)) {
           throw StateError('この行は既に行動にしています。次の一手を確認してください。');
         }
         // 同じ内容の再試行だけを同じ操作として扱う。保存できたら操作IDを外すので、同じ文面を改めて足すこともできる。
