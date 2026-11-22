@@ -288,7 +288,7 @@
 
 ## いつかやる（2026-11-22）
 
-- 本体の固定参照を、「いつかやる」を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-fxlr7q`）のコミット（`07f2bbc`）へ進めた。本体の対応表の`operations`に`item-someday`と`someday-review`、`someday_review_days`が加わり、本体が`90_system/someday.json`を書くようになったため、読取fixtureの対応表と一覧に足した（`scripts/check_fixture_drift.mjs`で6件一致）。本体PRのマージ後に、そのマージコミットへ進め直す。
+- 本体の固定参照を、「いつかやる」を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-fxlr7q`）のコミット（`07f2bbc`）へ進めた。本体の対応表の`operations`に`item-someday`と`someday-review`、`someday_review_days`が加わり、本体が`90_system/someday.json`を書くようになったため、読取fixtureの対応表と一覧に足した（`scripts/check_fixture_drift.mjs`で6件一致）。本体PR（mozuq-lab/context-hub#49）のマージ後に、そのマージコミット（`6d77360`。内容は`07f2bbc`と同じ）へ進め直した。
 - Dartが保存した`item-someday`のREQ（プロジェクトの項目と`project_id: _unassigned`の行動。移す・戻す）と`someday-review`のREQ（アイデアを置く・やめる）を本体へ渡し、受理・記録・項目一覧の`someday`・一覧`someday.json`の行と書き直しの時刻を確認（`scripts/check_request_protocol.mjs`）。同期前は反映待ち、同期後に反映待ちが外れることも確認。
 - 移した項目を次の一手・未解決の件数とウィジェットから外すこと、ホームの件数と見直していない件数、「いつかやる」画面の行と「そのまま」「始める」の依頼、項目の「…」からの移す操作と反映待ちの間の操作の抑止、アイデアの画面から置く操作、対応前の本体・連絡待ちの項目・今日見直した項目に依頼しないことをテストで確認。
 - Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通557テスト成功。
