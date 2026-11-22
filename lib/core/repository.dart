@@ -418,9 +418,12 @@ class HubRepository {
               m['status'] is! String ||
               (m.containsKey('merged_into') &&
                   (m['merged_into'] is! String ||
-                      !projectIdPattern.hasMatch(m['merged_into'])))) {
+                      !projectIdPattern.hasMatch(m['merged_into']))) ||
+              // 望む結果は任意。空・nullは書いていないものとして読み、文字列でない値は本体と同じく不正な定義とする。
+              (m['outcome'] != null && m['outcome'] is! String)) {
             throw const FormatException();
           }
+          final outcome = m['outcome'] as String?;
           final project = HubProject(
             id: id,
             title: m['title'],
@@ -429,6 +432,7 @@ class HubRepository {
             keywords: List<String>.from(m['keywords']),
             definitionHash: digest(entry.value),
             mergedInto: m['merged_into'] as String?,
+            outcome: projectOutcomeLines(outcome).isEmpty ? null : outcome,
           );
           projects[id] = project;
           _readNow(project);
@@ -2199,28 +2203,10 @@ class HubRepository {
     }
     // 登録簿hashは、元メモごとに変わらないので1回だけ計算する。
     String? registryCache;
-    String registryHash() {
-      final cached = registryCache;
-      if (cached != null) return cached;
-      final defs = projects.values.toList()
-        ..sort((a, b) => a.id.compareTo(b.id));
-      return registryCache = digest(
-        jsonEncode(
-          defs
-              .map(
-                (p) => {
-                  'id': p.id,
-                  'title': p.title,
-                  'aliases': [...p.aliases]..sort(),
-                  'keywords': [...p.keywords]..sort(),
-                  // 本体と同じく、休止・完了は登録簿hashでは進行中として扱う。
-                  'status': p.lifecycle == 'active' ? p.status : 'active',
-                },
-              )
-              .toList(),
-        ),
-      );
-    }
+    String registryHash() => registryCache ??= projectRegistryHash(
+      projects.values,
+      withOutcome: intakeFeatures.projectOutcome != null,
+    );
 
     // ファイルのhashも、訂正の連なりごとに計算し直さない。
     final fileHashes = <String, String>{};
@@ -2515,7 +2501,8 @@ class HubRepository {
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
                 m['title'] is! String ||
                 !terms(m['aliases']) ||
-                !terms(m['keywords']))) {
+                !terms(m['keywords']) ||
+                (m.containsKey('outcome') && m['outcome'] is! String))) {
           throw const FormatException();
         }
         final personChange = m['operation'] == 'person-definition';
@@ -2744,7 +2731,8 @@ class HubRepository {
                 m['aliases'] is! List ||
                 m['keywords'] is! List ||
                 (m['aliases'] as List).any((a) => a is! String) ||
-                (m['keywords'] as List).any((k) => k is! String))) {
+                (m['keywords'] as List).any((k) => k is! String) ||
+                (m.containsKey('outcome') && m['outcome'] is! String))) {
           throw const FormatException();
         }
         String? conflictProject;
@@ -2903,7 +2891,7 @@ class HubRepository {
               : statusChange
               ? '状態変更依頼: ${projects[m['project_id']]?.title ?? m['project_id']} → ${projectLifecycleLabels[m['status']]}'
               : definitionChange
-              ? '呼び名とキーワードの変更依頼: ${m['title']}'
+              ? '${m.containsKey('outcome') ? '呼び名・キーワード・望む結果' : '呼び名とキーワード'}の変更依頼: ${m['title']}'
               : personChange
               ? '${switch (m['action']) {
                   'add' => '人の登録依頼',
@@ -3351,7 +3339,9 @@ class HubRepository {
             records: _definitionChanges,
             latest: latestDefinitionChangeId,
             outstanding: _outstandingDefinition,
-            what: '呼び名とキーワードの変更',
+            what: m.containsKey('outcome')
+                ? '呼び名・キーワード・望む結果の変更'
+                : '呼び名とキーワードの変更',
           );
         }
         if (personChange) _personRequest(item, m, personChangeId);
@@ -4665,13 +4655,20 @@ class HubRepository {
         w.contains('競合'),
   );
 
-  /// NOWの「現在地・次の一手・未解決・提案」を出典付きで書く。[level]は見出しの記号。
+  /// 望む結果と、NOWの「現在地・次の一手・未解決・提案」を出典付きで書く。[level]は見出しの記号。
   void _writeNowSections(
     StringBuffer out,
     HubProject project,
     String level, {
     bool notices = false,
   }) {
+    // 本人が書いた望む結果を先頭に置く（本体のresume・contextと同じ）。
+    if (project.outcomeLines.isNotEmpty) {
+      out.writeln('\n$level 望む結果（本人が書いた完了の基準）');
+      for (final line in project.outcomeLines) {
+        out.writeln('- $line');
+      }
+    }
     for (final entry in const {
       'current': '現在地',
       'next': '次の一手',
@@ -4975,4 +4972,30 @@ String displayTime(DateTime? date) {
   final t = date.toUtc().add(const Duration(hours: 9));
   String two(int n) => n.toString().padLeft(2, '0');
   return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)} JST';
+}
+
+/// 本体の登録簿hash（`projectRegistryHash`）と同じ値。関連の見直しが今の定義に対するものかを照合するのに使う。
+/// 本体と同じく、休止・完了は進行中として扱い、望む結果は書いてあるときだけ含める（AIへ渡すため）。
+/// 望む結果に対応する前の本体は望む結果を読まずに計算するため、`withOutcome`をfalseにして合わせる。
+String projectRegistryHash(
+  Iterable<HubProject> projects, {
+  bool withOutcome = true,
+}) {
+  final defs = projects.toList()..sort((a, b) => a.id.compareTo(b.id));
+  return digest(
+    jsonEncode(
+      defs
+          .map(
+            (p) => {
+              'id': p.id,
+              'title': p.title,
+              'aliases': [...p.aliases]..sort(),
+              'keywords': [...p.keywords]..sort(),
+              'status': p.lifecycle == 'active' ? p.status : 'active',
+              if (withOutcome) 'outcome': ?projectOutcomeForPrompt(p.outcome),
+            },
+          )
+          .toList(),
+    ),
+  );
 }

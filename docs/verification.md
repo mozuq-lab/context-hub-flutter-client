@@ -310,6 +310,14 @@
 - Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通568テスト成功。
 - 未検証: Mac・Androidの実アプリでの表示と操作（この環境にXcode・Android SDKがありません）。
 
+## 望む結果（2026-11-22）
+
+- 本体の固定参照を、望む結果（`outcome`）を加えた本体のブランチ（mozuq-lab/context-hub の `claude/project-thread-9u3h1f`）のコミット（`c6ca7a4`）へ進めた。本体の対応表に`project_outcome`（上限の文字数・行数）が加わったため、読取fixtureを再生成した（`scripts/check_fixture_drift.mjs`で6件一致）。本体PR（mozuq-lab/context-hub#52）のマージ後に、そのマージコミット（`9482c02`。内容は`c6ca7a4`と同じ）へ進め直した。
+- Dartが保存した、望む結果を含む呼び名・キーワードの変更（`project-definition`）とプロジェクト作成（`project-create`）のREQを本体へ渡し、受理・project.mdの`outcome`・NOWの先頭の望む結果を確認（`scripts/check_project_definition_protocol.mjs`・`scripts/check_project_tools_protocol.mjs`）。反映後の登録簿hashを本体が計算した値と比べ、一致することも確認。望む結果を送らない変更で手で書いた望む結果が消えないことも確認。
+- 望む結果の整え方（改行・タブ・前後の空白・空の行・行頭の箇条書きの印・印だけの文）と上限、プロジェクト画面の表示と「望む結果を書く」、完了・休止の確認と「いつかやる」の「やめる」での表示、対応前の本体で欄を出さず依頼も保存しないこと、対応前の本体では登録簿hashに含めないことをテストで確認。
+- Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通575テスト成功。
+- 未検証: Mac・Androidの実アプリでの表示と操作（この環境にXcode・Android SDKがありません）。
+
 ## 制限・追加確認
 
 - MacのNSOpenPanelによるフォルダー選択、bookmarkの別プロセス再起動復元・再選択は未完了です。サンプルの実bridge検査とは区別します。
