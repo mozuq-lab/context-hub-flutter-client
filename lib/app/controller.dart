@@ -2060,18 +2060,29 @@ class HubController extends ChangeNotifier {
   /// 本人が決めた行動を、プロジェクトの「次の一手」へ直接載せる依頼を保存する（モデルを通さない）。
   /// [projectId]が[unassignedScope]なら、プロジェクトを決めずにプロジェクト未定の次の一手へ載せる。
   /// [from]はAIが読み取った行（提案・作業要約の次の一手）を行動にするときの元の行。文面は本人が直したもの。
+  /// [effort]と[contexts]は、追加と一緒に付ける手間の目安と場所・道具の札（本人が選んだときだけ）。
   Future<CaptureResult> requestAction(
     String projectId,
     String text, {
     ActionSource? from,
+    String? effort,
+    List<String>? contexts,
   }) {
     if (!validActionText(text)) {
       throw StateError('行動は1行・$actionTextChars文字以内で、前後に空白を付けずに入力してください。');
+    }
+    if ((effort != null && !itemEfforts.contains(effort)) ||
+        (contexts != null && !validContextTags(contexts))) {
+      throw StateError('手間の目安と札を選び直してください。');
     }
     return _confirmedRequest(
       (parsed) {
         if (!parsed.intakeFeatures.actions) {
           throw StateError('Mac miniの本体が次の一手の直接追加に対応していません。本体を更新してください。');
+        }
+        if ((effort != null && !parsed.intakeFeatures.actionEffort) ||
+            (contexts != null && !parsed.intakeFeatures.actionContexts)) {
+          throw StateError('Mac miniの本体が、追加と一緒に手間の目安や札を付けることに対応していません。本体を更新してください。');
         }
         // プロジェクト未定の置き場を指定したときは、プロジェクトを付けずに追加する（対応した本体だけが受け付ける）。
         final unassigned = projectId == unassignedScope;
@@ -2122,10 +2133,16 @@ class HubController extends ChangeNotifier {
           throw StateError('この行は既に行動にしています。次の一手を確認してください。');
         }
         // 同じ内容の再試行だけを同じ操作として扱う。保存できたら操作IDを外すので、同じ文面を改めて足すこともできる。
-        return 'action/$projectId/${digest(jsonEncode([text, from?.inputId, from?.text, from?.key]))}';
+        return 'action/$projectId/${digest(jsonEncode([text, from?.inputId, from?.text, from?.key, effort, contexts]))}';
       },
-      (service, parsed, operation) =>
-          service.saveAction(operation, projectId, text, from: from),
+      (service, parsed, operation) => service.saveAction(
+        operation,
+        projectId,
+        text,
+        from: from,
+        effort: effort,
+        contexts: contexts,
+      ),
     );
   }
 
@@ -2176,6 +2193,7 @@ class HubController extends ChangeNotifier {
         if (parsed.itemRequestIdFor(itemKey) != null ||
             parsed.scheduleRequestIdFor(itemKey) != null ||
             parsed.effortRequestIdFor(itemKey) != null ||
+            parsed.contextsRequestIdFor(itemKey) != null ||
             parsed.waitRequestIdFor(itemKey) != null ||
             parsed.somedayRequestIdFor(itemKey) != null ||
             parsed.correctionRequestIdForInput(found.inputId) != null) {
@@ -2314,6 +2332,78 @@ class HubController extends ChangeNotifier {
       },
       (service, parsed, operation) =>
           service.saveItemEffort(operation, projectId, item, effort),
+    );
+  }
+
+  /// 場所・道具の札を、[contexts]の全体に置き換える依頼。nullなら外す。札は本人が選び、AIは付けない。
+  Future<CaptureResult> requestItemContexts(
+    String projectId,
+    String itemKey,
+    List<String>? contexts,
+  ) {
+    if (contexts != null && !validContextTags(contexts)) {
+      throw StateError('札を選び直してください（$contextTagsMax個まで）。');
+    }
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.contexts) {
+          throw StateError('Mac miniの本体が場所・道具の札に対応していません。本体を更新してください。');
+        }
+        final found = _recordTarget(parsed, projectId, itemKey);
+        if (found == null || found.resolved) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (listEquals(found.contexts, contexts ?? const <String>[])) {
+          throw StateError('札は変わっていません。');
+        }
+        if (parsed.contextsRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の札は依頼済みです。保存と反映を確認してください。');
+        }
+        // 完了・解決の報告が先に反映されると、本体は札の依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        // 外した記録も含む最新の記録IDを含め、同じ内容の再試行だけを同じ操作にする。
+        return 'contexts/$projectId/$itemKey/${parsed.latestContextIdFor(itemKey) ?? '-'}/${digest(jsonEncode([found.contexts, contexts]))}';
+      },
+      (service, parsed, operation) =>
+          service.saveItemContexts(operation, projectId, item, contexts),
+    );
+  }
+
+  /// 場所・道具の札の語彙（札を選ぶときの一覧、並びも含む）を変える依頼。Vaultの好みに置き、すべての端末で同じ一覧を使う。
+  /// 好みをそろえる設定とは関係なく送る。語彙から外した札は、付いている項目に残る。
+  Future<CaptureResult> requestContextVocabulary(List<String> items) {
+    if (items.length > contextVocabularyMax ||
+        !items.every(validContextTag) ||
+        items.toSet().length != items.length) {
+      throw StateError('札は$contextVocabularyMax個まで、同じ札を重ねずに入力してください。');
+    }
+    late String payload;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.contexts) {
+          throw StateError('Mac miniの本体が場所・道具の札に対応していません。本体を更新してください。');
+        }
+        if (listEquals(parsed.contextVocabulary, items)) {
+          throw StateError('札の一覧は変わっていません。');
+        }
+        // 変えた日時は、知っている版（Vaultの版・反映待ちの版）より必ず後にする（遅れて届いた古い変更で巻き戻さないため）。
+        final known = parsed.sharedPreferences['contexts']?.updatedAt;
+        final now = DateTime.now().toUtc(),
+            after = known?.add(const Duration(milliseconds: 1));
+        payload = encodePreferencesPayload(_deviceName, {
+          'contexts': (
+            at: after != null && after.isAfter(now) ? after : now,
+            value: {'items': items},
+          ),
+        });
+        return 'contexts-vocabulary/${digest(jsonEncode([parsed.sharedPreferences['contexts']?.requestId, items]))}';
+      },
+      (service, parsed, operation) =>
+          service.savePreferences(operation, payload),
     );
   }
 

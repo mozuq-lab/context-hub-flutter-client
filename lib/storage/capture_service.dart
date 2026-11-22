@@ -341,16 +341,21 @@ class CaptureService {
   /// 本人が決めた行動を、モデルを通さずにプロジェクトの「次の一手」へ載せる依頼（capture・kind: action）。
   /// [projectId]が[unassignedScope]ならプロジェクトを付けず、プロジェクト未定の次の一手に載せる。
   /// [from]はAIが読み取った行を行動にしたときの元の行。本文は本人が確かめた1行の文面。作業ツールは付けない。
+  /// [effort]と[contexts]は、追加と一緒に付ける手間の目安と場所・道具の札（対応した本体だけに送る）。
   Future<CaptureResult> saveAction(
     String operationId,
     String projectId,
     String text, {
     ActionSource? from,
+    String? effort,
+    List<String>? contexts,
   }) => _serial(() async {
     final unassigned = projectId == unassignedScope;
     if (!_uuid.hasMatch(operationId) ||
         (!unassigned && !projectIdPattern.hasMatch(projectId)) ||
         !validActionText(text) ||
+        (effort != null && !itemEfforts.contains(effort)) ||
+        (contexts != null && !validContextTags(contexts)) ||
         (from != null &&
             (!inputIdPattern.hasMatch(from.inputId) ||
                 from.text.isEmpty ||
@@ -369,12 +374,15 @@ class CaptureService {
           projectId,
           text,
           if (from != null) [from.inputId, from.text, from.key],
+          if (effort != null || contexts != null) [effort, contexts],
         ]),
       ),
       {
         'operation': 'capture',
         'kind': 'action',
         if (!unassigned) 'project': projectId,
+        'effort': ?effort,
+        'contexts': ?contexts,
         if (from != null)
           'meta': {
             'action_from_input': from.inputId,
@@ -828,6 +836,36 @@ class CaptureService {
       'project_id': projectId,
       'item_key': item.key,
       'effort': effort,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// NOWの項目の場所・道具の札を、[contexts]の全体に置き換える依頼。nullで外す。
+  Future<CaptureResult> saveItemContexts(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    List<String>? contexts,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        // プロジェクト未定の本人が追加した行動は、置き場_unassignedで依頼する。
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        (contexts != null && !validContextTags(contexts)) ||
+        (contexts == null && item.contexts.isEmpty) ||
+        (contexts != null &&
+            contexts.length == item.contexts.length &&
+            contexts.indexed.every((e) => item.contexts[e.$1] == e.$2))) {
+      throw const FormatException('項目と場所・道具の札を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-contexts',
+      'project_id': projectId,
+      'item_key': item.key,
+      'contexts': contexts,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

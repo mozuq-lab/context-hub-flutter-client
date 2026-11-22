@@ -30,6 +30,8 @@ class IntakeFeatures {
     this.somedayReviewDays = somedayReviewDaysDefault,
     this.actionMoveSupport = false,
     this.projectOutcome,
+    this.actionFields = const {},
+    this.contextLimits,
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -71,6 +73,26 @@ class IntakeFeatures {
   /// プロジェクトの望む結果（`outcome`）を、定義の変更・作成・案の採用の依頼で送れるときの上限（`project_outcome`）。
   /// 対応前の本体はnull。対応前の本体へ送ると依頼ごと断られるので、望む結果の欄を出さない。
   final ({int maxChars, int maxLines})? projectOutcome;
+
+  /// 行動の追加（kind: action）に添えて、行動の記録として一緒に付けられる欄（`action_fields`）。
+  /// `effort`は手間の目安、`contexts`は場所・道具の札。
+  final Set<String> actionFields;
+
+  /// 場所・道具の札の上限（`item_contexts`）。1項目の札の数・札の文字数・語彙の数。対応前の本体はnull。
+  final ({int maxTags, int maxChars, int vocabularyMax})? contextLimits;
+
+  /// 次の一手・未解決に場所・道具の札を付け外しでき、札の語彙を好みとしてVaultに置ける（item-contexts）。
+  bool get contexts =>
+      operations.contains('item-contexts') &&
+      contextLimits != null &&
+      operations.contains('client-preferences');
+
+  /// 行動を追加するときに、手間の目安を一緒に付けられる。
+  bool get actionEffort => actions && effort && actionFields.contains('effort');
+
+  /// 行動を追加するときに、場所・道具の札を一緒に付けられる。
+  bool get actionContexts =>
+      actions && contexts && actionFields.contains('contexts');
 
   /// 本人が追加した行動を、別のプロジェクト・プロジェクト未定へ移せる（移す先へ元の行動を指す行動を足す）。
   /// 対応前の本体は元の行動を一覧から外さず二重に並ぶため、移す操作を出さない。
@@ -210,6 +232,21 @@ class IntakeFeatures {
           {'max_chars': final int chars, 'max_lines': final int lines}
               when chars >= 1 && lines >= 1 =>
             (maxChars: chars, maxLines: lines),
+          _ => null,
+        },
+        actionFields: {
+          if (m['action_fields'] case final List fields)
+            for (final v in fields)
+              if (v is String) v,
+        },
+        contextLimits: switch (m['item_contexts']) {
+          {
+                'max_tags': final int tags,
+                'max_chars': final int chars,
+                'vocabulary_max': final int vocabulary,
+              }
+              when tags >= 1 && chars >= 1 && vocabulary >= 1 =>
+            (maxTags: tags, maxChars: chars, vocabularyMax: vocabulary),
           _ => null,
         },
         {

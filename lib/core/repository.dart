@@ -59,6 +59,14 @@ class HubRepository {
   final Map<String, String> _outstandingEfforts = {};
   final Map<String, String> _latestEfforts = {};
 
+  /// 場所・道具の札の記録の作成時刻（記録IDごと）と、反映を待っている札の依頼・最新の記録（項目キーごと）。
+  final Map<String, DateTime> _contextTimes = {};
+  final Map<String, String> _outstandingContexts = {};
+  final Map<String, String> _latestContexts = {};
+
+  /// 反映を待っている札の語彙の変更（受付ファイルの値）。なければnull。
+  List<String>? _pendingVocabulary;
+
   /// 連絡待ちの記録の作成時刻（記録IDごと）と、反映を待っている印の依頼・最新の記録（項目キーごと）。
   final Map<String, DateTime> _waitTimes = {};
   final Map<String, String> _outstandingWaits = {};
@@ -656,6 +664,16 @@ class HubRepository {
     // 新しい本体が段階を足しても項目一覧全体は捨てず、知らない段階は目安なしとして読む。
     final rawEffort = i['effort'],
         effort = itemEfforts.contains(rawEffort) ? rawEffort as String : null;
+    // 本人が付けた場所・道具の札。旧版の一覧と札のない項目にはない。
+    final rawContexts = i['contexts'];
+    if (rawContexts != null &&
+        (rawContexts is! List ||
+            !validContextTags([
+              for (final t in rawContexts)
+                if (t is String) t else '',
+            ]))) {
+      throw const FormatException();
+    }
     // 本人が付けた連絡待ちの印。旧版の一覧と印のない項目にはない。
     final wait = i['waiting'];
     // 本人が「いつかやる」へ移した記録。旧版の一覧と移していない項目にはない。
@@ -736,6 +754,7 @@ class HubRepository {
       fromText: from is Map ? from['text'] as String : null,
       fromKey: from is Map ? from['key'] as String? : null,
       effort: effort,
+      contexts: rawContexts is List ? List<String>.from(rawContexts) : const [],
       waitingId: wait is Map ? wait['id'] as String : null,
       waitingSince: wait is Map ? wait['since'] as String : null,
       waitingWho: wait is Map ? wait['who'] as String? : null,
@@ -795,6 +814,37 @@ class HubRepository {
         _effortTimes[id] = at;
         final last = _latestEfforts[key];
         if (last == null || id.compareTo(last) > 0) _latestEfforts[key] = id;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    // 場所・道具の札の記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（有効な札は項目一覧のcontextsを使う）。
+    final contextRecord = RegExp(
+      r'^90_system/item-contexts/(CTX-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = contextRecord.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']), t = j['contexts'];
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['item_key'] is! String ||
+            !j.containsKey('contexts') ||
+            (t != null &&
+                (t is! List ||
+                    !validContextTags([
+                      for (final x in t)
+                        if (x is String) x else '',
+                    ]))) ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _contextTimes[id] = at;
+        final last = _latestContexts[key];
+        if (last == null || id.compareTo(last) > 0) _latestContexts[key] = id;
       } catch (_) {
         _problem(e.key);
       }
@@ -1505,6 +1555,45 @@ class HubRepository {
 
   /// 反映を待っている、この項目への手間の目安の依頼。
   String? effortRequestIdFor(String itemKey) => _outstandingEfforts[itemKey];
+
+  /// 反映を待っている、この項目への場所・道具の札の依頼。
+  String? contextsRequestIdFor(String itemKey) =>
+      _outstandingContexts[itemKey];
+
+  /// この項目の最新の場所・道具の札の記録のID（外した記録を含む）。記録がなければnull。
+  String? latestContextIdFor(String itemKey) => _latestContexts[itemKey];
+
+  /// 札を選ぶときの語彙（本人が決めた並び）。反映を待っている変更があればそれを、なければVaultの好み、
+  /// どちらもなければ既定の例を使う。
+  List<String> get contextVocabulary {
+    if (_pendingVocabulary case final pending?) return pending;
+    final shared = sharedPreferences['contexts'];
+    final items = shared == null ? null : contextsValue(shared.value);
+    return items ?? defaultContextVocabulary;
+  }
+
+  /// 札の語彙の変更が、まだ本体に反映されていない。
+  bool get contextVocabularyPending => _pendingVocabulary != null;
+
+  /// 語彙と、今の項目に付いている札（語彙から外した札を含む）。絞り込みと札を選ぶ画面で使う。
+  List<String> get contextTagsInUse {
+    final out = [...contextVocabulary];
+    void add(NowItemRef i) {
+      if (i.resolved) return;
+      for (final t in i.contexts) {
+        if (!out.contains(t)) out.add(t);
+      }
+    }
+    for (final p in projects.values) {
+      for (final i in p.nowItems) {
+        add(i);
+      }
+    }
+    for (final i in unassignedItems) {
+      add(i);
+    }
+    return out;
+  }
 
   /// 反映を待っている、この項目への連絡待ちの依頼。
   String? waitRequestIdFor(String itemKey) => _outstandingWaits[itemKey];
@@ -2415,6 +2504,9 @@ class HubRepository {
 
   void _readIntake() {
     final ideaLinkItems = <(IntakeStatus, Map, String?)>[];
+    // 札の語彙を変える依頼（好みのcontexts）。最後の依頼が反映されるまで、その値を語彙として使う。
+    final vocabularyItems =
+        <(IntakeStatus, ({DateTime at, Map<String, dynamic> value}))>[];
     final reactionItems = <(IntakeStatus, Map, String?)>[];
     for (final e in _files.entries.where(
       (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
@@ -2439,6 +2531,7 @@ class HubRepository {
               'item-schedule',
               'item-occurrence',
               'item-effort',
+              'item-contexts',
               'item-wait',
               'item-someday',
               'someday-review',
@@ -2573,6 +2666,25 @@ class HubRepository {
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
                 !m.containsKey('effort') ||
                 (m['effort'] != null && !itemEfforts.contains(m['effort'])))) {
+          throw const FormatException();
+        }
+        final itemContexts = m['operation'] == 'item-contexts';
+        final contextsValueOf = m['contexts'];
+        if (itemContexts &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('contexts') ||
+                (contextsValueOf != null &&
+                    (contextsValueOf is! List ||
+                        !validContextTags([
+                          for (final t in contextsValueOf)
+                            if (t is String) t else '',
+                        ]))))) {
           throw const FormatException();
         }
         final itemWait = m['operation'] == 'item-wait';
@@ -2782,6 +2894,7 @@ class HubRepository {
         String? resolutionId,
             scheduleId,
             effortId,
+            contextId,
             waitId,
             somedayId,
             reviewId,
@@ -2910,6 +3023,8 @@ class HubRepository {
               ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}${m['repeat'] is Map ? '・${_repeatLabelOf(m['repeat'])}' : ''}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemEffort
               ? '${m['effort'] == null ? '手間の目安を外す依頼' : '手間の目安の依頼（${itemEffortLabels[m['effort']]}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemContexts
+              ? '${contextsValueOf == null ? '場所・道具の札を外す依頼' : '場所・道具の札の依頼（${contextsLabel(List<String>.from(contextsValueOf as List))}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemWait
               ? '${waitValue == null ? '連絡待ちを外す依頼' : '連絡待ちの依頼（${(waitValue as Map)['who'] == null ? '' : '相手: ${waitValue['who']}・'}頼んだ日 ${waitValue['since']}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemSomeday
@@ -3076,6 +3191,19 @@ class HubRepository {
               }
               effortId = r['effortId'] as String;
             }
+            if (itemContexts) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['contextId'] is! String ||
+                  !RegExp(
+                    r'^CTX-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['contextId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              contextId = r['contextId'] as String;
+            }
             if (itemWait) {
               final r = ack['result'] as Map;
               if (r['projectId'] != m['project_id'] ||
@@ -3158,7 +3286,7 @@ class HubRepository {
             if (preferring) {
               final r = ack['result'] as Map, applied = r['applied'];
               if (applied is! List ||
-                  !applied.every(preferenceGroups.contains) ||
+                  !applied.every(sharedPreferenceGroups.contains) ||
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
@@ -3403,6 +3531,11 @@ class HubRepository {
         if (itemReport) _itemRequest(item, m, resolutionId);
         if (actionCapture) _actionRequest(item, m, doc.body, capturedInputId);
         if (ideaLink) ideaLinkItems.add((item, m, ideaLinkId));
+        if (preferring) {
+          if (preferenceEntryOf(doc.body, 'contexts') case final entry?) {
+            vocabularyItems.add((item, entry));
+          }
+        }
         if (reacting) reactionItems.add((item, m, reactionId));
         if (itemSchedule) {
           _itemRequest(
@@ -3422,6 +3555,16 @@ class HubRepository {
             times: _effortTimes,
             outstanding: _outstandingEfforts,
             what: '手間の目安',
+          );
+        }
+        if (itemContexts) {
+          _itemRequest(
+            item,
+            m,
+            contextId,
+            times: _contextTimes,
+            outstanding: _outstandingContexts,
+            what: '場所・道具の札',
           );
         }
         if (itemWait) {
@@ -3467,6 +3610,19 @@ class HubRepository {
       }
     }
     intake.sort((a, b) => b.at?.compareTo(a.at ?? DateTime(0)) ?? 0);
+    // 札の語彙は、記録より新しい最後の変更が受け付け前か、受け付けたが記録に載る前なら、その値を使う。
+    // 断られた変更と、ほかの端末のより新しい変更に負けた変更は使わない。
+    final shared = sharedPreferences['contexts'];
+    (IntakeStatus, ({DateTime at, Map<String, dynamic> value}))? newest;
+    for (final v in vocabularyItems) {
+      if (newest == null || v.$2.at.isAfter(newest.$2.at)) newest = v;
+    }
+    if (newest case (final item, final entry)?
+        when const ['waiting', 'accepted'].contains(item.state) &&
+            shared?.requestId != item.id &&
+            (shared == null || entry.at.isAfter(shared.updatedAt))) {
+      _pendingVocabulary = contextsValue(entry.value);
+    }
     // 同じ組への判断は最後の依頼だけが有効。古い依頼が索引と食い違っても反映待ちにしない。
     final latest = <String, IntakeStatus>{};
     for (final (item, m, _) in ideaLinkItems) {

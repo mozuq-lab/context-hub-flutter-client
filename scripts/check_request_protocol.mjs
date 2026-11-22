@@ -1,13 +1,13 @@
-// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、週次レビューの「見直した」、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
+// Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・場所・道具の札・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、週次レビューの「見直した」、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -66,6 +66,14 @@ try{
   assert.deepEqual({effort:record.effort,source:record.source,event:record.source_event_id},{effort:packet.effort,source:packet.source,event:packet.request_id});
   const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
   assert.equal(item.effort??null,packet.effort);
+ }else if(packet.operation==='item-contexts'){
+  // 変更後の札の全体がそのまま記録され、項目一覧とNOWの行末（@札）に反映される。nullなら外す。
+  assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});
+  const record=(await readItemContexts(vault)).records.find(r=>r.id===ack.result.contextId);
+  assert.deepEqual({contexts:record.contexts,source:record.source,event:record.source_event_id},{contexts:packet.contexts,source:packet.source,event:packet.request_id});
+  const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
+  assert.deepEqual(item.contexts??null,packet.contexts);
+  if(packet.contexts&&packet.project_id!=='_unassigned')assert.ok((await vault.read(`10_projects/${packet.project_id}/NOW.md`)).includes(packet.contexts.map(t=>`@${t}`).join(' ')));
  }else if(packet.operation==='item-wait'){
   // 変更後の印（相手と頼んだ日）がそのまま記録され、項目一覧に反映される。nullなら外す。NOW.mdには相手の名前を載せない。
   assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});
@@ -139,6 +147,9 @@ try{
   assert.deepEqual({section:item.section,label:item.label,text:item.text,resolution:item.resolution},{section:'next',label:'本人が追加: ',text:packet.text,resolution:null});
   assert.deepEqual(item.action,packet.meta?{from:{input_id:packet.meta.action_from_input,text:packet.meta.action_from_text,...(packet.meta.action_from_key?{key:packet.meta.action_from_key}:{})}}:{});
   if(packet.meta?.action_from_key)assert.ok(!items.some(i=>i.key===packet.meta.action_from_key));
+  // 追加と一緒に付けた手間の目安と札は、行動の記録として項目に載る。
+  if(packet.effort!==undefined)assert.equal(item.effort,packet.effort);
+  if(packet.contexts!==undefined)assert.deepEqual(item.contexts,packet.contexts);
   // 本人が追加した行動を移した（元の行が行動の）ときは、元の行動はどの置き場の一覧からも外れる。
   if(packet.meta)for(const p of ['_unassigned',...(await vault.files('90_system/now-items')).map(f=>basename(f,'.json')).filter(x=>x!=='_unassigned')])assert.ok(!((await readNowItems(vault,p))?.items??[]).some(i=>i.action&&i.input_id===packet.meta.action_from_input));
   const llm=new MockLlm();let calls=0;const complete=llm.complete.bind(llm);llm.complete=(...a)=>{calls++;return complete(...a);};
