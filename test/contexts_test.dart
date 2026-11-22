@@ -101,7 +101,22 @@ void main() {
 
   test('札の規則と絞り込みは本体と同じ', () {
     expect(validContextTag('元気なとき'), isTrue);
-    for (final bad in ['', '外 出', '@家', '家・PC', 'a,b', '（家）', 'x' * 21]) {
+    expect(normalizeContextTag(' \u30ab\u3099 '), 'ガ');
+    expect(validContextTag(normalizeContextTag('\u30ab\u3099')), isTrue);
+    for (final bad in [
+      '',
+      '外 出',
+      '@家',
+      '家・PC',
+      'a,b',
+      '（家）',
+      'x' * 21,
+      '<b>',
+      '`x`',
+      'P\u200bC',
+      '\u30ab\u3099',
+      'a\u3000b',
+    ]) {
       expect(validContextTag(bad), isFalse, reason: bad);
     }
     expect(validContextTags(['家', 'PC']), isTrue);
@@ -144,6 +159,46 @@ void main() {
       }),
     );
     expect(synced.contextVocabularyPending, isFalse);
+    // 時計の進んだ端末の変更は、本体が受け付けた時刻で記録される。その後のほかの端末の変更が記録にあれば、反映待ちにしない。
+    String ack(List<String> applied, String received) => jsonEncode({
+      'schema_version': 1,
+      'request_id': id,
+      'request_hash': digest(request),
+      'path': 'Input/$id.md',
+      'operation': 'client-preferences',
+      'status': 'accepted',
+      'received_at': received,
+      'result': {'applied': applied, 'deduped': false},
+    });
+    final skewed = HubRepository(
+      fixture({
+        ...withVocabulary(files, ['B']),
+        'Input/$id.md': request,
+        '90_system/intake/$id.json': ack(['contexts'], '2026-11-22T00:30:00Z'),
+      }),
+    );
+    expect(skewed.intake.firstWhere((i) => i.id == id).state, 'accepted');
+    expect(skewed.contextVocabulary, ['B']);
+    expect(skewed.contextVocabularyPending, isFalse);
+    // 語彙を記録しなかった受付（ほかの端末の変更の方が新しい）も、反映待ちにしない。
+    final lost = HubRepository(
+      fixture({
+        ...files,
+        'Input/$id.md': request,
+        '90_system/intake/$id.json': ack([], '2026-11-22T02:00:00Z'),
+      }),
+    );
+    expect(lost.contextVocabulary, ['家', '電話']);
+    // 受け付けたが、記録の同期がまだなら反映待ち。次の変更の日時はその後にする。
+    final accepted = HubRepository(
+      fixture({
+        ...files,
+        'Input/$id.md': request,
+        '90_system/intake/$id.json': ack(['contexts'], '2026-11-22T03:00:00Z'),
+      }),
+    );
+    expect(accepted.contextVocabularyPending, isTrue);
+    expect(accepted.contextVocabularyAt, DateTime.utc(2026, 11, 22, 2));
     // 知らないまとまりがあっても、知っているまとまりは読む。
     final newer = jsonDecode(files[clientPreferencesPath]!) as Map;
     (newer['groups'] as Map)['future'] = {'x': 1};
@@ -346,14 +401,14 @@ void main() {
     await tester.tap(find.byKey(const Key('nav-next')).last);
     await tester.pumpAndSettle();
     final line = c.repository!.projects[projectId]!.sections['next']!.single;
-    expect(find.byKey(const Key('context-filter-図書館')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('context-filter-')));
+    expect(find.byKey(const Key('context-filter-tag-図書館')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('context-filter-none')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('effort-filter-empty')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('context-filter-PC')));
+    await tester.tap(find.byKey(const Key('context-filter-tag-PC')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('effort-filter-empty')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('context-filter-家')));
+    await tester.tap(find.byKey(const Key('context-filter-tag-家')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('effort-filter-empty')), findsNothing);
     expect(find.textContaining(line.text.split(' — ').first), findsWidgets);

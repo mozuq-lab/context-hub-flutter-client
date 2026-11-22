@@ -2391,7 +2391,7 @@ class HubController extends ChangeNotifier {
           throw StateError('札の一覧は変わっていません。');
         }
         // 変えた日時は、知っている版（Vaultの版・反映待ちの版）より必ず後にする（遅れて届いた古い変更で巻き戻さないため）。
-        final known = parsed.sharedPreferences['contexts']?.updatedAt;
+        final known = parsed.contextVocabularyAt;
         final now = DateTime.now().toUtc(),
             after = known?.add(const Duration(milliseconds: 1));
         payload = encodePreferencesPayload(_deviceName, {
@@ -2400,7 +2400,7 @@ class HubController extends ChangeNotifier {
             value: {'items': items},
           ),
         });
-        return 'contexts-vocabulary/${digest(jsonEncode([parsed.sharedPreferences['contexts']?.requestId, items]))}';
+        return 'contexts-vocabulary/${digest(jsonEncode([parsed.sharedPreferences['contexts']?.requestId, parsed.contextVocabularyAt?.toIso8601String(), items]))}';
       },
       (service, parsed, operation) =>
           service.savePreferences(operation, payload),

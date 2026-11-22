@@ -235,14 +235,22 @@ const defaultContextVocabulary = ['家', '外出先', 'PC', '電話'];
 /// 本体のNOWの行末と同じ、札の表示（「@家 @PC」）。
 String contextsLabel(List<String> tags) => tags.map((t) => '@$t').join(' ');
 
-/// 札として送れる文字列か（本体のcontextTagSchemaと同じ規則: 1〜20文字、空白・制御文字・「@・、,」・括弧を含まない）。
+/// 札として送れる文字列か（本体のcontextTagSchemaと同じ規則: 1〜20文字、NFC、空白・制御文字・書式文字・「@・、,<>`」・括弧を含まない）。
 bool validContextTag(Object? value) =>
     value is String &&
     value.isNotEmpty &&
     value.length <= contextTagChars &&
-    !RegExp(
-      r'[\s\x00-\x1f\x7f-\x9f\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000@＠、,，・()（）\[\]［］]',
-    ).hasMatch(value);
+    unicode.nfc(value) == value &&
+    !_contextTagForbidden.hasMatch(value);
+
+/// 入力した札を送る形に整える（前後の空白を除き、NFCにする）。
+String normalizeContextTag(String value) => unicode.nfc(value.trim());
+
+/// 札に使えない文字（本体の`contextTagSchema`と同じ。制御・書式・空白の各文字と、表示の区切りやMarkdownと紛れる文字）。
+final _contextTagForbidden = RegExp(
+  r'[\p{Cc}\p{Cf}\p{Z}\s@＠、,，・()（）\[\]［］<>`]',
+  unicode: true,
+);
 
 /// 項目の札の全体として送れるか（1〜8個、同じ札を重ねない）。
 bool validContextTags(List<String> tags) =>

@@ -66,6 +66,7 @@ class HubRepository {
 
   /// 反映を待っている札の語彙の変更（受付ファイルの値）。なければnull。
   List<String>? _pendingVocabulary;
+  DateTime? _pendingVocabularyAt;
 
   /// 連絡待ちの記録の作成時刻（記録IDごと）と、反映を待っている印の依頼・最新の記録（項目キーごと）。
   final Map<String, DateTime> _waitTimes = {};
@@ -1575,16 +1576,27 @@ class HubRepository {
   /// 札の語彙の変更が、まだ本体に反映されていない。
   bool get contextVocabularyPending => _pendingVocabulary != null;
 
+  /// 札の語彙の、知っている最も新しい版の日時（Vaultの記録と反映待ちの変更のうち新しい方）。次の変更はこれより後にする。
+  DateTime? get contextVocabularyAt {
+    final shared = sharedPreferences['contexts']?.updatedAt,
+        pending = _pendingVocabularyAt;
+    if (shared == null) return pending;
+    if (pending == null) return shared;
+    return pending.isAfter(shared) ? pending : shared;
+  }
+
   /// 語彙と、今の項目に付いている札（語彙から外した札を含む）。絞り込みと札を選ぶ画面で使う。
   List<String> get contextTagsInUse {
     final out = [...contextVocabulary];
+    // 「次の一手」画面に並ぶ項目（進行中のプロジェクトの、連絡待ち・「いつかやる」でない項目）の札だけを足す。
     void add(NowItemRef i) {
-      if (i.resolved) return;
+      if (i.resolved || i.waiting || i.someday) return;
       for (final t in i.contexts) {
         if (!out.contains(t)) out.add(t);
       }
     }
     for (final p in projects.values) {
+      if (!p.active) continue;
       for (final i in p.nowItems) {
         add(i);
       }
@@ -2505,6 +2517,7 @@ class HubRepository {
   void _readIntake() {
     final ideaLinkItems = <(IntakeStatus, Map, String?)>[];
     // 札の語彙を変える依頼（好みのcontexts）。最後の依頼が反映されるまで、その値を語彙として使う。
+    // 2番目は依頼の変えた日時（受け付けた後は本体が記録した日時: 受け付けた時刻より先なら受け付けた時刻）と値。
     final vocabularyItems =
         <(IntakeStatus, ({DateTime at, Map<String, dynamic> value}))>[];
     final reactionItems = <(IntakeStatus, Map, String?)>[];
@@ -2903,6 +2916,8 @@ class HubRepository {
             occurrenceNext,
             askId;
         DateTime? occurrenceAt, askReceived;
+        // 好みの依頼の受領記録: 札の語彙（contexts）を記録したかと、受け付けた時刻。
+        ({bool vocabulary, DateTime? received})? preferenceAck;
         final decision = [
           'project-approve',
           'project-reject',
@@ -2990,7 +3005,9 @@ class HubRepository {
               : asking
               ? '記録に聞く: ${clip(doc.body.trim().replaceAll(RegExp(r'\s+'), ' '), 60)}'
               : preferring
-              ? '好みをほかの端末とそろえる（${preferenceGroupsOf(doc.body)!.map((g) => preferenceGroupLabels[g]).join('・')}）'
+              ? preferenceGroupsOf(doc.body)!.every(vaultPreferenceGroups.contains)
+                    ? '${preferenceGroupsOf(doc.body)!.map((g) => preferenceGroupLabels[g]).join('・')}を変える'
+                    : '好みをほかの端末とそろえる（${preferenceGroupsOf(doc.body)!.map((g) => preferenceGroupLabels[g]).join('・')}）'
               : reacting
               ? '今週の気づきへの反応（${insightReactionLabels[m['reaction']] ?? '反応を外す'}）: ${_insightTitle(m['run_id'], m['item_key'])}'
               : ideaLink
@@ -3290,6 +3307,10 @@ class HubRepository {
                   r['deduped'] is! bool) {
                 throw const FormatException();
               }
+              preferenceAck = (
+                vocabulary: applied.contains('contexts'),
+                received: timestamp(ack['received_at']),
+              );
               item.detail = applied.isEmpty
                   ? 'Mac miniが受け取り済み。ほかの端末の変更の方が新しいか、同じ内容のため、記録は変わりませんでした。'
                   : 'Mac miniが記録しました（${applied.map((g) => preferenceGroupLabels[g]).join('・')}）。';
@@ -3533,7 +3554,20 @@ class HubRepository {
         if (ideaLink) ideaLinkItems.add((item, m, ideaLinkId));
         if (preferring) {
           if (preferenceEntryOf(doc.body, 'contexts') case final entry?) {
-            vocabularyItems.add((item, entry));
+            final ack = preferenceAck, received = ack?.received;
+            // 受け付けたが語彙を記録しなかった依頼（ほかの端末の変更の方が新しい）は、反映待ちにしない。
+            if (item.state == 'waiting' ||
+                (item.state == 'accepted' && ack != null && ack.vocabulary)) {
+              vocabularyItems.add((
+                item,
+                (
+                  at: received != null && entry.at.isAfter(received)
+                      ? received
+                      : entry.at,
+                  value: entry.value,
+                ),
+              ));
+            }
           }
         }
         if (reacting) reactionItems.add((item, m, reactionId));
@@ -3615,13 +3649,18 @@ class HubRepository {
     final shared = sharedPreferences['contexts'];
     (IntakeStatus, ({DateTime at, Map<String, dynamic> value}))? newest;
     for (final v in vocabularyItems) {
-      if (newest == null || v.$2.at.isAfter(newest.$2.at)) newest = v;
+      // 同じ日時なら、本体と同じく先に届いた方（受付IDの小さい方）を残す。
+      if (newest == null ||
+          v.$2.at.isAfter(newest.$2.at) ||
+          (v.$2.at == newest.$2.at && v.$1.id.compareTo(newest.$1.id) < 0)) {
+        newest = v;
+      }
     }
     if (newest case (final item, final entry)?
-        when const ['waiting', 'accepted'].contains(item.state) &&
-            shared?.requestId != item.id &&
+        when shared?.requestId != item.id &&
             (shared == null || entry.at.isAfter(shared.updatedAt))) {
       _pendingVocabulary = contextsValue(entry.value);
+      _pendingVocabularyAt = entry.at;
     }
     // 同じ組への判断は最後の依頼だけが有効。古い依頼が索引と食い違っても反映待ちにしない。
     final latest = <String, IntakeStatus>{};

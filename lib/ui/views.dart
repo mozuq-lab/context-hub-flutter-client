@@ -3481,6 +3481,14 @@ class _HubViewState extends State<HubView> {
                   : null)
             : null,
         filtering = filter != null || contextChoice != null;
+    // 選んでいた札が選択肢から消えたら、絞り込みを外したことにする（後で札が戻っても、黙って絞り込み直さない）。
+    if (contextFilter != null && contextChoice == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && contextFilter != null) {
+          setState(() => contextFilter = null);
+        }
+      });
+    }
     var matched = 0, somedays = 0;
     for (final project in projects) {
       final rest = <NowEntry>[];
@@ -3708,7 +3716,11 @@ class _HubViewState extends State<HubView> {
                 (contextFilterNone, '札なし'),
               ])
                 ChoiceChip(
-                  key: Key('context-filter-${value ?? 'all'}'),
+                  key: Key(switch (value) {
+                    null => 'context-filter-all',
+                    contextFilterNone => 'context-filter-none',
+                    final t => 'context-filter-tag-$t',
+                  }),
                   label: Text(label),
                   selected: contextChoice == value,
                   onSelected: (_) => setState(() => contextFilter = value),
@@ -8338,7 +8350,10 @@ class _ContextsDialogState extends State<ContextsDialog> {
       if (!vocabulary.contains(t)) t,
   }.toList();
 
-  bool get unchanged => listEquals(selected, widget.item.contexts);
+  // 札の並びだけが違う（語彙の順に並べ直した）ときは、変えていないものとする。
+  bool get unchanged =>
+      selected.length == widget.item.contexts.length &&
+      selected.toSet().containsAll(widget.item.contexts);
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -8448,12 +8463,12 @@ class _ContextVocabularyDialogState extends State<ContextVocabularyDialog> {
   }
 
   void add() {
-    final t = input.text.trim();
+    final t = normalizeContextTag(input.text);
     setState(() {
       if (t.isEmpty) {
         error = null;
       } else if (!validContextTag(t)) {
-        error = '札は$contextTagChars文字以内で、空白・「@・、,」・括弧を使わずに入力してください。';
+        error = '札は$contextTagChars文字以内で、空白・「@・、,<>`」・括弧を使わずに入力してください。';
       } else if (items.contains(t)) {
         error = '同じ札が一覧にあります。';
       } else if (items.length >= contextVocabularyMax) {
