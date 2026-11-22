@@ -2172,7 +2172,8 @@ class HubController extends ChangeNotifier {
             parsed.scheduleRequestIdFor(itemKey) != null ||
             parsed.effortRequestIdFor(itemKey) != null ||
             parsed.waitRequestIdFor(itemKey) != null ||
-            parsed.somedayRequestIdFor(itemKey) != null) {
+            parsed.somedayRequestIdFor(itemKey) != null ||
+            parsed.correctionRequestIdForInput(found.inputId) != null) {
           throw StateError('この行動への依頼が反映待ちです。保存と反映を確認してください。');
         }
         if (parsed.takenOver(found.inputId, found.text)) {

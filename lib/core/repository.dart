@@ -3942,6 +3942,12 @@ class HubRepository {
     return _unitBySource[record.sourceId]?.chain;
   }
 
+  /// 入力（訂正前の元の入力のID）への訂正で、まだ反映されていない依頼のREQ ID。
+  String? correctionRequestIdForInput(String inputId) {
+    final record = _inputs[inputId];
+    return record == null ? null : correctionRequestIdFor(record.id);
+  }
+
   /// このチェーンへの訂正で、まだ反映されていない依頼のREQ ID。
   String? correctionRequestIdFor(String recordId) {
     for (final r in correctionChainOf(recordId) ?? const <HubRecord>[]) {
@@ -4095,7 +4101,10 @@ class HubRepository {
     }
     final from = m['meta'] == null ? null : _actionSourceOf(m['meta']);
     // 断られていない依頼の元の行（行動を移した依頼なら、移した元の行動の入力ID）。
-    if (from != null && const ['waiting', 'accepted'].contains(item.state)) {
+    // 移す先のプロジェクトがこの端末にまだない依頼では、元の行動を隠さない（移した先にも反映待ちとして出せないため）。
+    if (from != null &&
+        (project != null || unassigned) &&
+        const ['waiting', 'accepted'].contains(item.state)) {
       _actionFromInputs.add(from.inputId);
     }
     if ((project == null && !unassigned) ||
@@ -4114,6 +4123,9 @@ class HubRepository {
     (project?.pendingActions ?? unassignedPendingActions).add(pending);
     _pendingActionStatus[item.id] = item;
   }
+
+  /// 別の置き場へ移して一覧から外した行動が、引き取っていた元の行（根拠の入力IDと本文の組）。
+  final Set<String> _movedRefs = {};
 
   /// 行動の追加の依頼が指す元の行の入力ID（送った・受け付けた依頼。断られた依頼は含めない）。
   final Set<String> _actionFromInputs = {};
@@ -4207,6 +4219,11 @@ class HubRepository {
   void _hideMovedActions() {
     final moved = <String>{
       ..._actionFromInputs,
+      // 本体と同じく、同期済みの行動の入力の元の行も含める（本体のCLIで移した行動や、移した後にさらに移した行動）。
+      for (final r in _inputs.values)
+        if (_actionSourceOf(r.metadata['meta']) case final from?
+            when r.kind == 'action')
+          from.inputId,
       for (final i in [
         for (final p in projects.values) ...p.nowItems,
         ...unassignedItems,
@@ -4215,6 +4232,15 @@ class HubRepository {
     };
     if (moved.isEmpty) return;
     bool gone(NowItemRef i) => i.action && moved.contains(i.inputId);
+    // 外す行動が引き取った元の行（AIの行）は、引き取ったものとして覚えておく（本体も元の行を隠し続ける）。
+    for (final i in [
+      for (final p in projects.values) ...p.nowItems,
+      ...unassignedItems,
+    ]) {
+      if (gone(i) && i.fromInputId != null && i.fromText != null) {
+        _movedRefs.add('${i.fromInputId}\n${i.fromText}');
+      }
+    }
     for (final p in projects.values) {
       final keys = {
         for (final i in p.nowItems)
@@ -4240,6 +4266,7 @@ class HubRepository {
 
   /// 行動にした行（反映待ちの行動の元と、どの置き場の行動にも記録された元の行）の、根拠の入力IDと本文の組。
   Set<String> get _takenRefs => {
+    ..._movedRefs,
     for (final a in [
       for (final p in projects.values) ...p.pendingActions,
       ...unassignedPendingActions,

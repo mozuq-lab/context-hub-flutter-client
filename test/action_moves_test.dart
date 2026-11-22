@@ -126,6 +126,18 @@ void main() {
       expect(repo.unassignedOwnActions.single.fromKey, target.key);
       expect(repo.unassignedPendingActions, isEmpty);
       expect(repo.projects[projectId]!.pendingActions, isEmpty);
+      // 移す依頼がこの端末の受付にない（本体のCLIで移したなど）ときも、同期済みの入力から移したと分かり、
+      // 元の行動の追加の依頼を反映待ちに戻さない。
+      final viaCli = HubRepository(
+        VaultSnapshot({
+          for (final e in files.entries)
+            if (e.key != 'Input/${moved.requestId}.md' &&
+                e.key != 'Input/${back.requestId}.md')
+              e.key: e.value,
+        }),
+      );
+      expect(viaCli.unassignedPendingActions, isEmpty);
+      expect(viaCli.unassignedOwnActions.single.fromKey, target.key);
     } finally {
       await access.directory.delete(recursive: true);
     }
@@ -186,6 +198,33 @@ void main() {
       throwsA(isA<StateError>()),
     );
     expect(a.requests, isEmpty);
+    // 文面の訂正が反映待ちの行動は移さない（訂正前の文面で移してしまうため）。
+    final correction = await CaptureService(access, location).saveCorrection(
+      '65111111-2222-4333-8444-666666666666',
+      own.inputId,
+      '見積もりを2社に頼む',
+    );
+    final withCorrection = {
+      ...files,
+      'Input/${correction.requestId}.md': (await access.readRequest(
+        location,
+        correction.requestId,
+      ))!,
+    };
+    final correcting = MemoryUIAccess()
+      ..current = VaultSnapshot(withCorrection);
+    final e = HubController(
+      correcting,
+      sampleLoader: () async => withCorrection,
+    );
+    addTearDown(e.dispose);
+    await e.useSample();
+    expect(e.repository!.correctionRequestIdForInput(own.inputId), isNotNull);
+    await expectLater(
+      e.requestMoveAction(unassignedScope, own.key, projectId),
+      throwsA(isA<StateError>()),
+    );
+    expect(correcting.requests, isEmpty);
     final saved = await c.requestMoveAction(unassignedScope, own.key, projectId);
     expect(saved.saved, isTrue);
     final meta = parseMarkdown(a.requests.values.single).meta;

@@ -1926,7 +1926,10 @@ class _HubViewState extends State<HubView> {
     final unassigned = repo.intakeFeatures.unassignedActions;
     final targets = [
       for (final p in repo.actionableProjects)
-        if (!p.merged && p.id != fromScope) (id: p.id, title: p.title),
+        if (!p.merged &&
+            p.id != fromScope &&
+            repo.projectMergeRequestIdFor(p.id) == null)
+          (id: p.id, title: p.title),
       if (fromScope != unassignedScope && unassigned)
         (id: unassignedScope, title: 'プロジェクト未定'),
     ];
@@ -1945,7 +1948,7 @@ class _HubViewState extends State<HubView> {
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
             child: Text(
-              '${item.display}\n\n移す先を選んでください。期日・見直す日・繰り返し・手間の目安・連絡待ち・「いつかやる」は、移した先の行動に引き継ぎます。元に戻すときは、移した先でもう一度移します。「今日の3つ」に選んでいたときは、移した後に選び直してください。',
+              '${item.display}\n\n移す先を選んでください。期日・見直す日・繰り返し・手間の目安・連絡待ち・「いつかやる」は、移した先の行動に引き継ぎます。元に戻すときは、移した先でもう一度移します。「今日の3つ」に選んでいたときは外すので、移した後に選び直してください。',
               style: const TextStyle(fontSize: 13, height: 1.6),
             ),
           ),
@@ -1972,6 +1975,17 @@ class _HubViewState extends State<HubView> {
     if (to == null || !mounted) return;
     try {
       final result = await c.requestMoveAction(fromScope, item.key, to);
+      // 移すと項目キーが変わり、元の選択は見つからなくなるため、今日の3つ・持ち越しから外す。
+      final today = c.today;
+      if (result.saved &&
+          (today.picked(item.key) ||
+              today.carry.any((p) => p.itemKey == item.key))) {
+        try {
+          await c.setToday(fromScope, item.key, false);
+        } catch (_) {
+          // 外せなくても、移す依頼は保存済み。
+        }
+      }
       if (mounted) {
         notice(
           context,
@@ -3082,6 +3096,8 @@ class _HubViewState extends State<HubView> {
             section == 'next' &&
             !item.resolved &&
             !project.merged &&
+            repo.projectMergeRequestIdFor(project.id) == null &&
+            repo.correctionRequestIdForInput(item.inputId) == null &&
             repo.intakeFeatures.actionMoves &&
             !scheduling &&
             !effortPending &&
@@ -5089,6 +5105,7 @@ class _HubViewState extends State<HubView> {
             !item.resolved &&
             repo.intakeFeatures.actionMoves &&
             repo.intakeFeatures.unassignedActions &&
+            repo.correctionRequestIdForInput(item.inputId) == null &&
             !scheduling &&
             !effortPending &&
             !waitPending &&
