@@ -300,6 +300,7 @@ class CaptureService {
       );
 
   /// 本人が決めた行動を、モデルを通さずにプロジェクトの「次の一手」へ載せる依頼（capture・kind: action）。
+  /// [projectId]が[unassignedScope]ならプロジェクトを付けず、プロジェクト未定の次の一手に載せる。
   /// [from]はAIが読み取った行を行動にしたときの元の行。本文は本人が確かめた1行の文面。作業ツールは付けない。
   Future<CaptureResult> saveAction(
     String operationId,
@@ -307,8 +308,9 @@ class CaptureService {
     String text, {
     ActionSource? from,
   }) => _serial(() async {
+    final unassigned = projectId == unassignedScope;
     if (!_uuid.hasMatch(operationId) ||
-        !projectIdPattern.hasMatch(projectId) ||
+        (!unassigned && !projectIdPattern.hasMatch(projectId)) ||
         !validActionText(text) ||
         (from != null &&
             (!inputIdPattern.hasMatch(from.inputId) ||
@@ -333,7 +335,7 @@ class CaptureService {
       {
         'operation': 'capture',
         'kind': 'action',
-        'project': projectId,
+        if (!unassigned) 'project': projectId,
         if (from != null)
           'meta': {
             'action_from_input': from.inputId,

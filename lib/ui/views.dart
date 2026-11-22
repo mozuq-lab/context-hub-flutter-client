@@ -464,8 +464,12 @@ class _HubViewState extends State<HubView> {
       children.addAll(todaySection(compact: true));
       // 今週の気づきは、行動につながる欄（次の一手）より前に置く。
       children.addAll(insightsHome());
+      // プロジェクトを決めずに本人が追加した行動も、次の一手として数える。
       final actionable = repo.actionableProjects,
-          nextCount = actionable.fold<int>(0, (n, p) => n + p.nextCount),
+          ownUnassigned = repo.unassignedActionCount,
+          nextCount =
+              actionable.fold<int>(0, (n, p) => n + p.nextCount) +
+              ownUnassigned,
           nextProjects = actionable.where((p) => p.nextCount > 0).length;
       children.add(
         Padding(
@@ -478,6 +482,10 @@ class _HubViewState extends State<HubView> {
               subtitle: Text(
                 nextCount == 0
                     ? '進行中のプロジェクトに次の一手はありません'
+                    : nextProjects == 0
+                    ? 'プロジェクト未定から · 終わったらその場で完了を報告'
+                    : ownUnassigned > 0
+                    ? '進行中の$nextProjectsプロジェクトとプロジェクト未定から · 終わったらその場で完了を報告'
                     : '進行中の$nextProjectsプロジェクトから · 終わったらその場で完了を報告',
               ),
               trailing: const Icon(Icons.chevron_right),
@@ -486,8 +494,14 @@ class _HubViewState extends State<HubView> {
           ),
         ),
       );
-      if (repo.unassignedMemos.isNotEmpty) {
-        // プロジェクトに結び付いていないメモの行動は、どのプロジェクトの次の一手にも出ない。ここで拾う。
+      if (repo.unassignedMemos.isNotEmpty || ownUnassigned > 0) {
+        // プロジェクトに結び付いていないメモの行動と、プロジェクトを決めずに追加した行動は、
+        // どのプロジェクトの次の一手にも出ない。ここで拾う。
+        final own = repo.unassignedOwnActions,
+            counts = [
+              if (ownUnassigned > 0) '行動$ownUnassigned件',
+              if (repo.unassignedTotal > 0) 'メモ${repo.unassignedTotal}件',
+            ].join('・');
         children.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 20),
@@ -498,9 +512,13 @@ class _HubViewState extends State<HubView> {
                   ListTile(
                     key: const Key('home-unassigned'),
                     leading: const Icon(Icons.lightbulb_outline),
-                    title: Text('プロジェクト未定の次の一手 メモ${repo.unassignedTotal}件'),
-                    subtitle: const Text(
-                      'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証） · 完了の報告はできません',
+                    title: Text('プロジェクト未定の次の一手 $counts'),
+                    subtitle: Text(
+                      repo.unassignedMemos.isEmpty
+                          ? 'プロジェクトを決めずに追加した行動'
+                          : repo.intakeFeatures.unassignedItems
+                          ? 'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証）など · 次の一手で完了・却下'
+                          : 'プロジェクトに結び付いていないメモの、タスク候補とAIの提案（未検証） · 完了の報告はできません',
                     ),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () {
@@ -508,7 +526,47 @@ class _HubViewState extends State<HubView> {
                       widget.onNavigate('next');
                     },
                   ),
-                  for (final memo in repo.unassignedMemos.take(homeUnassigned))
+                  for (final action in repo.unassignedPendingActions.take(
+                    homeUnassigned,
+                  ))
+                    ListTile(
+                      key: Key('home-unassigned-pending-${action.requestId}'),
+                      dense: true,
+                      contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
+                      title: Text(
+                        '$actionLabel${action.text}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text('反映待ち（${intakeStateLabel(action.state)}）'),
+                      onTap: () {
+                        nextSection = 'next';
+                        widget.onNavigate('next');
+                      },
+                    ),
+                  for (final item in own.take(
+                    (homeUnassigned - repo.unassignedPendingActions.length)
+                        .clamp(0, homeUnassigned),
+                  ))
+                    ListTile(
+                      key: Key(
+                        'home-unassigned-action-${item.key.substring(0, 12)}',
+                      ),
+                      dense: true,
+                      contentPadding: const EdgeInsets.fromLTRB(72, 0, 16, 0),
+                      title: Text(
+                        item.display,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () {
+                        nextSection = 'next';
+                        widget.onNavigate('next');
+                      },
+                    ),
+                  for (final memo in repo.unassignedMemos.take(
+                    (homeUnassigned - ownUnassigned).clamp(0, homeUnassigned),
+                  ))
                     ListTile(
                       key: Key('home-unassigned-${memo.inputId}'),
                       dense: true,
@@ -1686,6 +1744,11 @@ class _HubViewState extends State<HubView> {
   Future<void> reportUnassigned(NowItemRef item, String action) async {
     final (title, body, ok) = switch (action) {
       'resolve' => ('完了にする', 'この行を完了にして、一覧から外します。', '完了にする'),
+      'exclude' when item.action => (
+        '却下する',
+        'この行動はやらないものとして、一覧から外します。',
+        '却下する',
+      ),
       'exclude' => ('却下する', 'この行はやらないものとして、一覧から外します。メモは残ります。', '却下する'),
       _ => ('元に戻す', 'この行を一覧へ戻します。', '戻す'),
     };
@@ -1714,18 +1777,32 @@ class _HubViewState extends State<HubView> {
   }
 
   /// 本人が決めた行動を次の一手に追加する。[project]を渡すとそのプロジェクトに決まり、渡さないと進行中のプロジェクトから選ぶ。
-  /// [from]はAIが読み取った行（提案・作業要約の次の一手）を行動にするときの元の行。
-  Future<void> addAction({HubProject? project, ActionSource? from}) async {
+  /// 本体が対応していれば、プロジェクトを決めない「プロジェクト未定」も選べる（[unassigned]なら最初からそれを選ぶ）。
+  /// [from]はAIが読み取った行（提案・作業要約の次の一手・プロジェクト未定の行）を行動にするときの元の行。
+  /// AIの行を行動にするときは、元の行のプロジェクトのほかに「プロジェクト未定」も選べる。
+  Future<void> addAction({
+    HubProject? project,
+    ActionSource? from,
+    bool unassigned = false,
+  }) async {
     final choices = project != null
         ? [project]
         : repo.actionableProjects.where((p) => !p.merged).toList();
-    if (choices.isEmpty) {
+    final allowUnassigned =
+        repo.intakeFeatures.unassignedActions &&
+        (project == null || from != null);
+    if (choices.isEmpty && !allowUnassigned) {
       notice(context, '追加できる進行中のプロジェクトがありません。');
       return;
     }
     final value = await showDialog<({String projectId, String text})>(
       context: context,
-      builder: (_) => ActionDialog(projects: choices, from: from),
+      builder: (_) => ActionDialog(
+        projects: choices,
+        from: from,
+        allowUnassigned: allowUnassigned,
+        unassigned: unassigned || choices.isEmpty,
+      ),
     );
     if (value == null || !mounted) return;
     final checked = await checkSecretsBeforeSave(
@@ -1748,7 +1825,9 @@ class _HubViewState extends State<HubView> {
         notice(
           context,
           result.saved
-              ? '次の一手への追加を保存しました。Mac miniで処理されると現状に反映されます。'
+              ? value.projectId == unassignedScope
+                    ? '次の一手への追加を保存しました。Mac miniで処理されるとプロジェクト未定の一覧に反映されます。'
+                    : '次の一手への追加を保存しました。Mac miniで処理されると現状に反映されます。'
               : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
@@ -2787,8 +2866,11 @@ class _HubViewState extends State<HubView> {
         projects = repo.actionableProjects,
         section = nextSection,
         // 次の一手には、本人が追加して反映待ちの行動も数える。
+        // プロジェクトを決めずに本人が追加した行動も数える（AIの読み取りの行は数えない）。
         count = {
-          'next': projects.fold<int>(0, (n, p) => n + p.nextCount),
+          'next':
+              projects.fold<int>(0, (n, p) => n + p.nextCount) +
+              repo.unassignedActionCount,
           'open': projects.fold<int>(
             0,
             (n, p) => n + p.entriesWithSource('open').length,
@@ -2888,7 +2970,8 @@ class _HubViewState extends State<HubView> {
       ),
       if (section == 'next' &&
           c.repository?.intakeFeatures.actions == true &&
-          projects.any((p) => !p.merged))
+          (projects.any((p) => !p.merged) ||
+              repo.intakeFeatures.unassignedActions))
         Padding(
           padding: const EdgeInsets.only(top: 12),
           child: Align(
@@ -3001,6 +3084,7 @@ class _HubViewState extends State<HubView> {
       // 行をすべて片付けた後も、元に戻せるよう「完了・却下した行」を出す。
       if (section == 'next' &&
           (repo.unassignedMemos.isNotEmpty ||
+              repo.unassignedActionCount > 0 ||
               (repo.intakeFeatures.unassignedItems &&
                   repo.closedUnassigned.isNotEmpty)))
         ...unassignedGroup(),
@@ -3280,30 +3364,54 @@ class _HubViewState extends State<HubView> {
     );
   }
 
-  /// 「次の一手」画面の「プロジェクト未定」。どのプロジェクトにも結び付いていないメモの、
-  /// AIによるタスクの分類と次の一手の提案を新しい順に並べる。本体が対応していれば、行ごとに今日やる・完了・却下ができる。
+  /// 「次の一手」画面の「プロジェクト未定」。プロジェクトを決めずに本人が追加した行動を先に、
+  /// どのプロジェクトにも結び付いていないメモの、AIによるタスクの分類と次の一手の提案を新しい順に並べる。
+  /// 本体が対応していれば、行ごとに今日やる・完了・却下・自分の行動にするができる。
   List<Widget> unassignedGroup() {
     final memos = repo.unassignedMemos,
         listed = memos.take(unassignedShown).toList(),
         rest = repo.unassignedTotal - memos.length,
         actionable = repo.intakeFeatures.unassignedItems,
-        closed = actionable ? repo.closedUnassigned : const <NowItemRef>[];
+        closed = actionable ? repo.closedUnassigned : const <NowItemRef>[],
+        own = repo.unassignedOwnActions,
+        pending = repo.unassignedPendingActions,
+        counts = [
+          if (own.length + pending.length > 0)
+            '行動${own.length + pending.length}件',
+          if (repo.unassignedTotal > 0) 'メモ${repo.unassignedTotal}件',
+        ];
     return [
       Text(
-        repo.unassignedTotal == 0
-            ? 'プロジェクト未定'
-            : 'プロジェクト未定（メモ${repo.unassignedTotal}件）',
+        counts.isEmpty ? 'プロジェクト未定' : 'プロジェクト未定（${counts.join('・')}）',
         key: const Key('next-unassigned'),
         style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
       ),
-      const SizedBox(height: 4),
-      Text(
-        actionable
-            ? 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。やるなら「今日やる」、やらないなら「却下」で一覧から外せます。'
-            : 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。メモがプロジェクトに結び付くと、そのプロジェクトへ移ります。',
-        style: const TextStyle(fontSize: 12, height: 1.6),
-      ),
       const SizedBox(height: 8),
+      if (own.isNotEmpty || pending.isNotEmpty) ...[
+        Card(
+          key: const Key('unassigned-own'),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final action in pending) pendingActionRow(action),
+                for (final item in own) unassignedOwnRow(item),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
+      if (listed.isNotEmpty || rest > 0) ...[
+        Text(
+          actionable
+              ? 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。やるなら「今日やる」、やらないなら「却下」で一覧から外せます。'
+              : 'どのプロジェクトにも属さないメモから、AIがタスクと見た行と提案です（未検証）。メモがプロジェクトに結び付くと、そのプロジェクトへ移ります。',
+          style: const TextStyle(fontSize: 12, height: 1.6),
+        ),
+        const SizedBox(height: 8),
+      ],
       if (listed.isNotEmpty)
         Card(
           child: Padding(
@@ -3355,13 +3463,29 @@ class _HubViewState extends State<HubView> {
   Widget unassignedActions(String inputId, String text) {
     final item = repo.unassignedRow(inputId, text);
     if (item == null || item.resolved) return const SizedBox.shrink();
+    // 行動にした行は、操作を出さない（本体が一覧を作り直すと外れる）。
+    if (repo.takenOver(item.inputId, item.text)) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 6),
+        child: Text('自分の行動にしました（反映待ち）', style: TextStyle(fontSize: 12)),
+      );
+    }
+    return unassignedItemActions(item, takeOver: true);
+  }
+
+  /// プロジェクト未定の項目の操作（今日やる・完了・却下）。[takeOver]ならAIの行を自分の行動にする操作も出す。
+  Widget unassignedItemActions(NowItemRef item, {bool takeOver = false}) {
     if (repo.itemRequestIdFor(item.key) != null) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 6),
         child: Text('操作済み（反映待ち）', style: TextStyle(fontSize: 12)),
       );
     }
-    final tag = item.key.substring(0, 12);
+    final tag = item.key.substring(0, 12),
+        // 行動にする先は、進行中のプロジェクトかプロジェクト未定。引き取った行を一覧から外すのは
+        // プロジェクトを決めない行動に対応した本体だけなので、対応前の本体には出さない。
+        canTake =
+            takeOver && !item.action && repo.intakeFeatures.unassignedActions;
     return Wrap(
       spacing: 4,
       children: [
@@ -3378,9 +3502,41 @@ class _HubViewState extends State<HubView> {
           icon: const Icon(Icons.close, size: 15),
           label: const Text('却下'),
         ),
+        if (canTake)
+          TextButton.icon(
+            key: Key('unassigned-take-$tag'),
+            onPressed: busy || c.composing
+                ? null
+                : () => addAction(
+                    from: ActionSource(
+                      inputId: item.inputId,
+                      text: item.text,
+                      key: item.key,
+                    ),
+                    unassigned: true,
+                  ),
+            icon: const Icon(Icons.person_add_alt, size: 15),
+            label: const Text('自分の行動にする'),
+          ),
       ],
     );
   }
+
+  /// プロジェクトを決めずに本人が追加した行動の1行。
+  Widget unassignedOwnRow(NowItemRef item) => Padding(
+    key: Key('unassigned-action-${item.key.substring(0, 12)}'),
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          item.display,
+          style: const TextStyle(fontWeight: FontWeight.w600, height: 1.5),
+        ),
+        unassignedItemActions(item),
+      ],
+    ),
+  );
 
   /// 完了・却下した行。未解決へ戻せる。
   Widget closedUnassignedRow(NowItemRef item) => ListTile(
@@ -5835,10 +5991,22 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
 
 /// 本人が決めた行動を「次の一手」に追加する画面。AIの読み取り（提案など）を行動にするときは、元の行を初期値にする。
 class ActionDialog extends StatefulWidget {
-  const ActionDialog({super.key, required this.projects, this.from});
+  const ActionDialog({
+    super.key,
+    required this.projects,
+    this.from,
+    this.allowUnassigned = false,
+    this.unassigned = false,
+  });
 
-  /// 追加先に選べるプロジェクト。1件ならそのプロジェクトに決まっている。
+  /// 追加先に選べるプロジェクト。1件で[allowUnassigned]でなければ、そのプロジェクトに決まっている。
   final List<HubProject> projects;
+
+  /// 追加先に「プロジェクト未定」も選べる（本体が対応しているとき）。
+  final bool allowUnassigned;
+
+  /// 最初から「プロジェクト未定」を選んでおく（[allowUnassigned]のときだけ効く）。
+  final bool unassigned;
 
   /// AIが読み取った行を行動にするときの元の行。
   final ActionSource? from;
@@ -5850,7 +6018,10 @@ class _ActionDialogState extends State<ActionDialog> {
   late final text = TextEditingController(
     text: widget.from?.text.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '',
   );
-  late String project = widget.projects.first.id;
+  late String project =
+      widget.allowUnassigned && (widget.unassigned || widget.projects.isEmpty)
+      ? unassignedScope
+      : widget.projects.first.id;
 
   @override
   void dispose() {
@@ -5871,9 +6042,10 @@ class _ActionDialogState extends State<ActionDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (widget.projects.length == 1)
+              if (widget.projects.length + (widget.allowUnassigned ? 1 : 0) ==
+                  1)
                 Text(
-                  widget.projects.single.title,
+                  widget.projects.firstOrNull?.title ?? 'プロジェクト未定',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 )
               else
@@ -5887,6 +6059,12 @@ class _ActionDialogState extends State<ActionDialog> {
                       DropdownMenuItem(
                         value: p.id,
                         child: Text(p.title, overflow: TextOverflow.ellipsis),
+                      ),
+                    if (widget.allowUnassigned)
+                      const DropdownMenuItem(
+                        key: Key('action-project-unassigned'),
+                        value: unassignedScope,
+                        child: Text('プロジェクト未定'),
                       ),
                   ],
                   onChanged: (v) => setState(() => project = v ?? project),
@@ -5918,7 +6096,11 @@ class _ActionDialogState extends State<ActionDialog> {
               ),
               const SizedBox(height: 8),
               Text(
-                widget.from == null
+                project == unassignedScope
+                    ? widget.from == null
+                          ? '本人が追加した行動として、プロジェクト未定の次の一手に載ります。AIは書き換えず、完了か却下するまで残ります（期日は付けられません。後からプロジェクトへは移せません）。'
+                          : '本人が追加した行動としてプロジェクト未定の次の一手に載り、元の行はAIの読み取りの欄から外れます。完了か却下するまで残ります（期日は付けられません）。'
+                    : widget.from == null
                     ? '本人が追加した行動として、そのまま次の一手に載ります。AIは書き換えず、完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Mac miniで処理されると現状に反映されます。'
                     : '本人が追加した行動として次の一手に載り、元の行はAIの読み取りの欄から外れます。完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Mac miniで処理されると現状に反映されます。',
                 style: const TextStyle(fontSize: 12, height: 1.6),

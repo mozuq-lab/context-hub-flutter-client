@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'intake_features.dart' show unassignedScope;
 import 'models.dart';
 import 'parser.dart' show clip;
 import 'repository.dart';
@@ -68,12 +69,13 @@ Map<String, Object?> homeWidgetContent(
   // 選んだプロジェクトが進行中でなくなったら、ほかのプロジェクトへ広げずに何も出さない。
   final projects = scoped ? [?chosen] : active;
   final today = hubToday(now);
-  final soon = <(HubProject, NowEntry, String, int)>[],
-      rest = <(HubProject, NowEntry)>[];
+  // 行は（置き場のID・題・行）。置き場はプロジェクトか、プロジェクト未定（unassignedScope）。
+  final soon = <(String, String, NowEntry, String, int)>[],
+      rest = <(String, String, NowEntry)>[];
   for (final p in projects) {
     // 本人が追加して、まだNOWに反映されていない行動も次の一手として数える。
     for (final a in p.pendingActions) {
-      rest.add((p, NowEntry('$actionLabel${a.text}')));
+      rest.add((p.id, p.title, NowEntry('$actionLabel${a.text}')));
     }
     var order = 0;
     for (final e in p.entriesWithSource('next')) {
@@ -82,29 +84,46 @@ Map<String, Object?> homeWidgetContent(
           ? null
           : p.nowItems.where((i) => i.key == e.itemKey).firstOrNull;
       if (item == null || !item.scheduled) {
-        rest.add((p, e));
+        rest.add((p.id, p.title, e));
         continue;
       }
       final b = scheduleBucket(item.due, item.reviewAfter, today);
       if (b.hidden) continue;
       if (scheduleBucketLabels.containsKey(b.bucket)) {
-        soon.add((p, e, item.due!, order));
+        soon.add((p.id, p.title, e, item.due!, order));
       } else {
-        rest.add((p, e));
+        rest.add((p.id, p.title, e));
       }
     }
   }
+  // プロジェクトを決めずに本人が追加した行動（反映待ちを含む）。プロジェクトを選んで絞っているときは出さない。
+  if (!scoped) {
+    for (final a in repo.unassignedPendingActions) {
+      rest.add((
+        unassignedScope,
+        'プロジェクト未定',
+        NowEntry('$actionLabel${a.text}'),
+      ));
+    }
+    for (final i in repo.unassignedOwnActions) {
+      rest.add((
+        unassignedScope,
+        'プロジェクト未定',
+        NowEntry(i.display)..itemKey = i.key,
+      ));
+    }
+  }
   soon.sort(
-    (a, b) => a.$3.compareTo(b.$3) != 0
-        ? a.$3.compareTo(b.$3)
-        : a.$1.id.compareTo(b.$1.id) != 0
-        ? a.$1.id.compareTo(b.$1.id)
-        : a.$4.compareTo(b.$4),
+    (a, b) => a.$4.compareTo(b.$4) != 0
+        ? a.$4.compareTo(b.$4)
+        : a.$1.compareTo(b.$1) != 0
+        ? a.$1.compareTo(b.$1)
+        : a.$5.compareTo(b.$5),
   );
-  final ordered = [for (final e in soon) (e.$1, e.$2), ...rest];
-  int rank((HubProject, NowEntry) e) {
+  final ordered = [for (final e in soon) (e.$1, e.$2, e.$3), ...rest];
+  int rank((String, String, NowEntry) e) {
     final i = focus.indexWhere(
-      (t) => t.projectId == e.$1.id && t.itemKey == e.$2.itemKey,
+      (t) => t.projectId == e.$1 && t.itemKey == e.$3.itemKey,
     );
     return i < 0 ? focus.length : i;
   }
@@ -137,8 +156,8 @@ Map<String, Object?> homeWidgetContent(
         : '次の一手 ${entries.length}件 · 確認待ち $review件',
     'lines': settings.showText && policy.usable
         ? [
-            for (final (p, e) in listed.take(homeWidgetMaxLines))
-              line(p.title, e.text),
+            for (final (_, title, e) in listed.take(homeWidgetMaxLines))
+              line(title, e.text),
           ]
         : const <String>[],
     'footer': '読込 ${displayTime(repo.snapshot.loadedAt)}',
