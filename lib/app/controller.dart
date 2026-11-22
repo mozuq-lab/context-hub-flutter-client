@@ -2124,6 +2124,73 @@ class HubController extends ChangeNotifier {
     );
   }
 
+  /// 本人が追加した行動を、別の置き場（プロジェクト・プロジェクト未定）へ移す依頼を保存する。
+  /// [fromScope]は今の置き場（プロジェクトのIDか[unassignedScope]）、[toScope]は移す先。
+  /// 移す先に同じ文面の行動を足し、元の行動を元の行として指す（本体が記録を写し、元の行動を一覧から外す）。
+  Future<CaptureResult> requestMoveAction(
+    String fromScope,
+    String itemKey,
+    String toScope,
+  ) {
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        final features = parsed.intakeFeatures;
+        if (!features.actionMoves) {
+          throw StateError('Mac miniの本体が行動を移す操作に対応していません。本体を更新してください。');
+        }
+        if ((fromScope == unassignedScope || toScope == unassignedScope) &&
+            !features.unassignedActions) {
+          throw StateError('Mac miniの本体がプロジェクト未定の行動に対応していません。本体を更新してください。');
+        }
+        if (fromScope == toScope) throw StateError('移す先が今の置き場と同じです。');
+        final source = fromScope == unassignedScope
+            ? null
+            : parsed.projects[fromScope];
+        if (fromScope != unassignedScope && source == null) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (source != null) _refuseMerged(parsed, source);
+        if (toScope != unassignedScope) {
+          final target = parsed.projects[toScope];
+          if (target == null || !target.active) {
+            throw StateError('移す先は進行中のプロジェクトを選んでください。');
+          }
+          _refuseMerged(parsed, target);
+        }
+        final found = (source?.nowItems ?? parsed.unassignedItems)
+            .where((i) => i.key == itemKey)
+            .firstOrNull;
+        if (found == null || !found.action || found.section != 'next') {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (found.resolved) {
+          throw StateError('完了・却下した行動は移せません。未解決へ戻してから移してください。');
+        }
+        // ほかの依頼が反映待ちの行動は、反映を待ってから移す（移した後の元の行動には、本体が依頼を断るため）。
+        if (parsed.itemRequestIdFor(itemKey) != null ||
+            parsed.scheduleRequestIdFor(itemKey) != null ||
+            parsed.effortRequestIdFor(itemKey) != null ||
+            parsed.waitRequestIdFor(itemKey) != null ||
+            parsed.somedayRequestIdFor(itemKey) != null ||
+            parsed.correctionRequestIdForInput(found.inputId) != null) {
+          throw StateError('この行動への依頼が反映待ちです。保存と反映を確認してください。');
+        }
+        if (parsed.takenOver(found.inputId, found.text)) {
+          throw StateError('この行動は既に移す依頼をしています。保存と反映を確認してください。');
+        }
+        item = found;
+        return 'move-action/$fromScope/$itemKey/$toScope';
+      },
+      (service, parsed, operation) => service.saveAction(
+        operation,
+        toScope,
+        item.text,
+        from: ActionSource(inputId: item.inputId, text: item.text, key: item.key),
+      ),
+    );
+  }
+
   /// 期日・手間の目安・定例の回を依頼する項目。見つからなければnull。
   /// [projectId]が[unassignedScope]なら、プロジェクトを決めずに本人が追加した行動だけを対象にする（AIの行には付けない）。
   static NowItemRef? _recordTarget(

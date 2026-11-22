@@ -139,6 +139,8 @@ try{
   assert.deepEqual({section:item.section,label:item.label,text:item.text,resolution:item.resolution},{section:'next',label:'本人が追加: ',text:packet.text,resolution:null});
   assert.deepEqual(item.action,packet.meta?{from:{input_id:packet.meta.action_from_input,text:packet.meta.action_from_text,...(packet.meta.action_from_key?{key:packet.meta.action_from_key}:{})}}:{});
   if(packet.meta?.action_from_key)assert.ok(!items.some(i=>i.key===packet.meta.action_from_key));
+  // 本人が追加した行動を移した（元の行が行動の）ときは、元の行動はどの置き場の一覧からも外れる。
+  if(packet.meta)for(const p of ['_unassigned',...(await vault.files('90_system/now-items')).map(f=>basename(f,'.json')).filter(x=>x!=='_unassigned')])assert.ok(!((await readNowItems(vault,p))?.items??[]).some(i=>i.action&&i.input_id===packet.meta.action_from_input));
   const llm=new MockLlm();let calls=0;const complete=llm.complete.bind(llm);llm.complete=(...a)=>{calls++;return complete(...a);};
   await organize(config,llm);assert.equal(calls,0);
   if(packet.meta&&packet.project)assert.ok(!(await vault.read(`10_projects/${packet.project}/NOW.md`)).includes(`${packet.meta.action_from_text} [${packet.meta.action_from_input}](`));
