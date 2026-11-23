@@ -3,7 +3,6 @@ import '../app/controller.dart';
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
 import '../core/repository.dart' show displayTime;
-import 'shell_scope.dart';
 import 'views.dart';
 
 String reviewState(ReviewCandidate i) => switch (i.status) {
@@ -112,7 +111,10 @@ class ReviewView extends StatelessWidget {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 1000),
         child: ListView(
-          padding: const EdgeInsets.all(24),
+          // 狭い画面では、右下の「メモを追加」に最後の行が隠れないよう下を空ける。
+          padding: MediaQuery.sizeOf(context).width < 820
+              ? const EdgeInsets.fromLTRB(24, 24, 24, 96)
+              : const EdgeInsets.all(24),
           children: [
             const Text(
               '候補を確認する',
@@ -498,7 +500,6 @@ class _ReviewDetailState extends State<ReviewDetail> {
       return Scaffold(
         appBar: AppBar(
           title: const Text('候補の詳細'),
-          actions: const [HubMenuButton()],
         ),
         body: item == null
             ? const Center(child: Text('候補を再取得してください。一覧へ戻ってください。'))

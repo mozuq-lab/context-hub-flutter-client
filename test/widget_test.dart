@@ -94,7 +94,7 @@ void main() {
     expect(find.text('この端末に保存しました'), findsOneWidget);
     expect(access.writes, 1);
   });
-  testWidgets('狭い画面でもdrawerから最近のメモを開ける', (tester) async {
+  testWidgets('狭い画面でも下のタブから最近のメモを開ける', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     final access = MemoryUIAccess();
@@ -109,8 +109,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('サンプルで試す'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Open navigation menu'));
-    await tester.pumpAndSettle();
+    // 狭い画面では、最近のメモは下のタブにある。
     await tester.tap(find.byKey(const Key('nav-recent')));
     await tester.pumpAndSettle();
     expect(find.text('最近のメモ'), findsWidgets);

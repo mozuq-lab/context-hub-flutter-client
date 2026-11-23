@@ -33,15 +33,15 @@ String keyLabel(SingleActivator a) {
   return '$mods$name';
 }
 
-/// 画面の移動先。ナビゲーションの並びと同じ順に⌘1〜⌘8を割り当てる。
-/// 文脈かごは中身があるときだけナビゲーションに出るので、番号を割り当てない。
+/// 画面の移動先。毎日使う画面（ナビゲーションの上段）から順に⌘1〜⌘8を割り当てる。
+/// 中身や本体の対応があるときだけナビゲーションに出る画面（いつかやる・記録に聞く・文脈かご）には、番号を割り当てない。
 const shortcutPages = [
   ('home', 'ホーム'),
   ('next', '次の一手'),
-  ('digest', 'ふりかえり'),
-  ('recent', '最近のメモ'),
-  ('ideas', 'アイデア'),
   ('review', '確認待ち'),
+  ('recent', '最近のメモ'),
+  ('digest', 'ふりかえり'),
+  ('ideas', 'アイデア'),
   ('search', '検索'),
   ('intake', '保存と反映'),
 ];
@@ -63,6 +63,7 @@ enum HubCommand {
   search('検索'),
   reload('再読込'),
   copyContext('表示中のプロジェクトの文脈をコピー'),
+  settings('設定'),
   keyboardHelp('キーボード操作');
 
   const HubCommand(this.label);
@@ -74,6 +75,7 @@ enum HubCommand {
     HubCommand.search => primaryKey(LogicalKeyboardKey.keyF),
     HubCommand.reload => primaryKey(LogicalKeyboardKey.keyR),
     HubCommand.copyContext => primaryKey(LogicalKeyboardKey.keyC, shift: true),
+    HubCommand.settings => primaryKey(LogicalKeyboardKey.comma),
     HubCommand.keyboardHelp => primaryKey(LogicalKeyboardKey.slash),
   };
 }

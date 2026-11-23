@@ -11,7 +11,6 @@ import '../core/home_widget.dart';
 import '../core/capture_progress.dart';
 import '../app_version.dart';
 import 'shortcuts.dart';
-import 'shell_scope.dart';
 import 'theme.dart';
 
 class ContextHubApp extends StatelessWidget {
@@ -315,6 +314,9 @@ class _HubShellState extends State<HubShell> {
         if (canReload) await run(c.reload);
       case HubCommand.copyContext:
         await copyContext();
+      case HubCommand.settings:
+        // Vaultを読めていないときは、ようこそ画面（Vaultを選ぶ・サンプル）から進める。
+        if (c.repository != null) show('settings');
       case HubCommand.keyboardHelp:
         await showKeyboardHelp(context);
     }
@@ -376,6 +378,9 @@ class _HubShellState extends State<HubShell> {
                 },
               ),
             ],
+          ),
+          PlatformMenuItemGroup(
+            members: [item(HubCommand.settings, has)],
           ),
           if (hasMenu(PlatformProvidedMenuItemType.servicesSubmenu))
             PlatformMenuItemGroup(
@@ -537,276 +542,600 @@ class _HubShellState extends State<HubShell> {
     }
   }
 
-  Widget navigation(bool drawer) => SafeArea(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(24, 22, 20, 2),
-          child: Text(
-            'ContextHub',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -1,
+  /// メニューの項目が選ばれているか。ふりかえりは週次レビューを、人は一人ひとりの画面も含む。
+  bool selectedPage(String target) =>
+      page == target ||
+      (target == 'digest' && page == 'weekly') ||
+      (target == 'people' && page.startsWith('person:'));
+
+  /// 下のタブに置く、毎日使う画面（狭い画面）。広い画面ではサイドバーの上段に同じ順で並べる。
+  static const primaryPages = [
+    ('home', 'ホーム', Icons.home_outlined, Icons.home),
+    ('next', '次の一手', Icons.checklist_outlined, Icons.checklist),
+    ('review', '確認待ち', Icons.fact_check_outlined, Icons.fact_check),
+    ('recent', '最近のメモ', Icons.notes_outlined, Icons.notes),
+  ];
+
+  /// メニューの見出し。[trailing]は見出しの右に置く小さな操作。
+  Widget navHeading(String text, {Widget? trailing}) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 20, 4, 4),
+    child: SizedBox(
+      height: 28,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
-        ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(24, 0, 20, 16),
-          child: Text('考えを、次の一歩へ。', style: TextStyle(fontSize: 12)),
-        ),
-        Expanded(
-          child: ListTileTheme.merge(
-            // 項目を詰めて、低いウインドウでもプロジェクトの一覧まで見えるようにする。
-            dense: true,
-            visualDensity: const VisualDensity(vertical: -1),
-            titleTextStyle: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(fontSize: 14),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-            minLeadingWidth: 24,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+          ?trailing,
+        ],
+      ),
+    ),
+  );
+
+  /// サイドバー（広い画面）とメニュー（狭い画面の「その他」）。
+  /// 毎日使う画面を上に、プロジェクトを中ほどに、ときどき使う画面を下にまとめ、設定は下端の1か所にまとめる。
+  /// 狭い画面では、毎日使う画面と検索・メモの追加は下のタブと上の帯にあるので、ここには出さない。
+  Widget navigation(bool drawer) {
+    final scheme = Theme.of(context).colorScheme;
+    final repo = c.repository;
+    void go(String target) {
+      show(target);
+      if (drawer) Navigator.pop(context);
+    }
+
+    Widget item(
+      String target,
+      String label,
+      IconData icon, {
+      IconData? selectedIcon,
+      Widget? trailing,
+    }) {
+      final selected = selectedPage(target);
+      return ListTile(
+        key: Key('nav-$target'),
+        leading: Icon(selected ? selectedIcon ?? icon : icon, size: 20),
+        title: Text(label),
+        trailing: trailing,
+        selected: selected,
+        onTap: () => go(target),
+      );
+    }
+
+    final composing = repo != null && c.captureWarning == null && !c.loading;
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 16, 12),
+            child: Row(
               children: [
-                for (final item in [
-                  ('home', 'ホーム', Icons.space_dashboard_outlined),
-                  ('next', '次の一手', Icons.checklist_outlined),
-                  // いつかやるは、一覧に行があるとき（または開いている間）だけメニューに出す。
-                  // 空のうちは、項目の「…」やアイデアの画面から置くと現れる。
-                  if ((c.repository?.somedayEntries.isNotEmpty ?? false) ||
-                      page == 'someday')
-                    ('someday', 'いつかやる', Icons.inventory_2_outlined),
-                  ('digest', 'ふりかえり', Icons.event_note_outlined),
-                  ('recent', '最近のメモ', Icons.notes_outlined),
-                  ('ideas', 'アイデア', Icons.lightbulb_outline),
-                  ('people', '人', Icons.people_outline),
-                  ('review', '確認待ち', Icons.fact_check_outlined),
-                  ('search', '検索', Icons.search),
-                  // 記録に聞くは、本体が対応しているとき（または問いがあるとき）だけメニューに出す。
-                  if (c.repository?.intakeFeatures.ask == true ||
-                      (c.repository?.asks.isNotEmpty ?? false) ||
-                      page == 'ask')
-                    ('ask', '記録に聞く', Icons.question_answer_outlined),
-                  // 文脈かごは、記録を入れたとき（または開いている間）だけメニューに出す。
-                  if (c.basket.ids.isNotEmpty || page == 'basket')
-                    ('basket', '文脈かご', Icons.shopping_basket_outlined),
-                  ('intake', '保存と反映', Icons.inbox_outlined),
-                ])
-                  ListTile(
-                    key: Key('nav-${item.$1}'),
-                    leading: Icon(item.$3, size: 20),
-                    title: Text(
-                      item.$1 == 'basket' && c.basket.ids.isNotEmpty
-                          ? '${item.$2}（${c.basket.ids.length}）'
-                          : item.$2,
-                    ),
-                    // 確認待ちは採用・却下を待つ候補、受付状況はこの端末で保存を確かめられていない操作の件数。
-                    trailing: switch (item.$1) {
-                      'review' => attentionBadge('review'),
-                      'intake' => countBadge('intake', c.pending.length),
-                      _ => null,
-                    },
-                    selected:
-                        page == item.$1 ||
-                        (item.$1 == 'digest' && page == 'weekly') ||
-                        (item.$1 == 'people' && page.startsWith('person:')),
-                    onTap: () {
-                      show(item.$1);
-                      if (drawer) {
-                        Navigator.pop(context);
-                      }
-                    },
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: scheme.primary,
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                if (drawer && c.repository != null)
-                  ListTile(
-                    key: const Key('nav-guided'),
-                    leading: const Icon(Icons.checklist, size: 20),
-                    title: const Text('質問に答えてまとめる'),
-                    enabled: c.captureWarning == null && !c.loading,
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await showGuided(context, c);
-                    },
-                  ),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 20, 12, 6),
-                  child: Text(
-                    'プロジェクト',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1,
-                    ),
+                  child: Icon(
+                    Icons.auto_stories_outlined,
+                    size: 17,
+                    color: scheme.onPrimary,
                   ),
                 ),
-                for (final project
-                    in c.repository?.orderedProjects ?? const <HubProject>[])
-                  ListTile(
-                    key: Key('project-${project.id}'),
-                    leading: Icon(
-                      c.repository?.isPinned(project.id) == true
-                          ? Icons.push_pin
-                          : project.active
-                          ? Icons.folder_outlined
-                          : Icons.folder_off_outlined,
-                      size: 20,
-                      semanticLabel: c.repository?.isPinned(project.id) == true
-                          ? 'ピン留め'
-                          : null,
-                    ),
-                    title: Text(
-                      project.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: project.merged
-                        ? const Text('統合済み')
-                        : project.lifecycle != 'active'
-                        ? Text(project.lifecycleLabel)
-                        : project.stale(DateTime.now())
-                        ? const Text('停滞')
-                        : null,
-                    // 作業記録の下書きと、手で書き換えて止まったNOW。
-                    trailing: attentionBadge('project:${project.id}'),
-                    selected: page == 'project:${project.id}',
-                    onTap: () {
-                      show('project:${project.id}');
-                      if (drawer) {
-                        Navigator.pop(context);
-                      }
-                    },
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'ContextHub',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                        ),
+                      ),
+                      if (c.location != null)
+                        Text(
+                          c.location!.name,
+                          key: const Key('nav-vault'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(fontSize: 11.5, height: 1.3),
+                        ),
+                    ],
                   ),
-                for (final pending
-                    in c.repository?.pendingProjectCreations ??
-                        const <PendingProjectCreation>[])
-                  ListTile(
-                    key: Key('pending-project-${pending.projectId}'),
-                    enabled: false,
-                    leading: const Icon(
-                      Icons.create_new_folder_outlined,
-                      size: 20,
-                    ),
-                    title: Text(
-                      pending.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      pending.state == 'accepted' ? '作成済み・同期待ち' : '作成依頼中',
-                    ),
-                  ),
-                if (c.repository != null)
-                  ListTile(
-                    key: const Key('new-project'),
-                    leading: const Icon(Icons.add, size: 20),
-                    title: const Text('新しいプロジェクト'),
-                    enabled:
-                        !c.loading &&
-                        !c.saving &&
-                        c.error == null &&
-                        c.captureWarning == null,
-                    onTap: () async {
-                      if (drawer) Navigator.pop(context);
-                      await showProjectCreate(context, c);
-                    },
-                  ),
+                ),
               ],
             ),
           ),
-        ),
-        if (c.location != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  c.location!.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 4),
-                const Text('手元のMarkdownを表示', style: TextStyle(fontSize: 11)),
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: c.loading ? null : () => run(c.chooseVault),
-                  icon: const Icon(
-                    Icons.drive_folder_upload_outlined,
-                    size: 18,
-                  ),
-                  label: const Text('Vaultを選び直す'),
-                ),
-                if (c.homeScreenSupported && c.repository != null)
-                  TextButton.icon(
-                    key: const Key('home-widget-settings'),
-                    onPressed: c.loading
-                        ? null
-                        : () async {
-                            if (drawer) Navigator.pop(context);
-                            await showHomeWidgetSettings(context, c);
-                          },
-                    icon: const Icon(Icons.widgets_outlined, size: 18),
-                    label: const Text('ウィジェットの表示'),
-                  ),
-                if (c.attentionNotificationsSupported && c.repository != null)
-                  TextButton.icon(
-                    key: const Key('attention-settings'),
-                    onPressed: c.loading
-                        ? null
-                        : () async {
-                            if (drawer) Navigator.pop(context);
-                            await showAttentionSettings(context, c);
-                          },
-                    icon: const Icon(
-                      Icons.notifications_none_outlined,
-                      size: 18,
-                    ),
-                    label: const Text('確認待ちの通知'),
-                  ),
-                if (c.repository != null &&
-                    (c.preferenceSyncSupported || c.preferenceSyncEnabled))
-                  TextButton.icon(
-                    key: const Key('preference-sync-settings'),
-                    onPressed: c.loading
-                        ? null
-                        : () async {
-                            if (drawer) Navigator.pop(context);
-                            await showPreferenceSync(context, c);
-                          },
-                    icon: const Icon(Icons.devices_outlined, size: 18),
-                    label: Text(
-                      c.preferenceSyncEnabled
-                          ? '好みを端末間でそろえています'
-                          : '好みを端末間でそろえる',
-                    ),
-                  ),
-                if (c.repository != null)
-                  Row(
-                    children: [
-                      Switch(
-                        key: const Key('auto-reload'),
-                        value: c.autoReload,
-                        onChanged: c.loading
-                            ? null
-                            : (v) => run(() => c.setAutoReload(v)),
+          if (!drawer && repo != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 検索は入力欄の形にして、いつでも探せることを示す。
+                  Material(
+                    color: scheme.surfaceContainerLowest,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(hubRadiusSmall),
+                      side: BorderSide(
+                        color: page == 'search'
+                            ? scheme.primary
+                            : scheme.outlineVariant,
                       ),
-                      const SizedBox(width: 4),
-                      const Expanded(
-                        child: Text(
-                          '同期した変更を自動で読み込む',
-                          style: TextStyle(fontSize: 12),
+                    ),
+                    child: InkWell(
+                      key: const Key('nav-search'),
+                      borderRadius: BorderRadius.circular(hubRadiusSmall),
+                      onTap: () => goTo('search'),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 9,
                         ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.search,
+                              size: 18,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '検索',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              keyLabel(HubCommand.search.activator),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: scheme.outline,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  FilledButton.icon(
+                    key: const Key('new-memo'),
+                    onPressed: composing ? () => showCapture(context, c) : null,
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: const Text('メモを追加'),
+                  ),
+                  const SizedBox(height: 2),
+                  TextButton.icon(
+                    key: const Key('open-guided'),
+                    style: TextButton.styleFrom(
+                      alignment: Alignment.centerLeft,
+                      foregroundColor: scheme.onSurfaceVariant,
+                    ),
+                    onPressed: composing ? () => showGuided(context, c) : null,
+                    icon: const Icon(Icons.forum_outlined, size: 18),
+                    label: const Text('質問に答えてまとめる'),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: ListTileTheme.merge(
+              // 項目を詰めて、低いウインドウでもプロジェクトの一覧まで見えるようにする。
+              dense: true,
+              visualDensity: const VisualDensity(vertical: -2),
+              minVerticalPadding: 0,
+              titleTextStyle: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w500),
+              subtitleTextStyle: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(fontSize: 11.5, height: 1.3),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(hubRadiusSmall),
+              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+              minLeadingWidth: 20,
+              horizontalTitleGap: 12,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
+                children: [
+                  if (!drawer)
+                    for (final (target, label, icon, selectedIcon)
+                        in primaryPages)
+                      item(
+                        target,
+                        label,
+                        icon,
+                        selectedIcon: selectedIcon,
+                        // 確認待ちは、採用・却下を待つ候補の件数。
+                        trailing: target == 'review'
+                            ? attentionBadge('review')
+                            : null,
+                      ),
+                  if (drawer && repo != null)
+                    ListTile(
+                      key: const Key('nav-guided'),
+                      leading: const Icon(Icons.forum_outlined, size: 20),
+                      title: const Text('質問に答えてまとめる'),
+                      enabled: c.captureWarning == null && !c.loading,
+                      onTap: () async {
+                        Navigator.pop(context);
+                        await showGuided(context, c);
+                      },
+                    ),
+                  navHeading(
+                    'プロジェクト',
+                    trailing: repo == null
+                        ? null
+                        : IconButton(
+                            key: const Key('new-project'),
+                            tooltip: '新しいプロジェクト',
+                            visualDensity: VisualDensity.compact,
+                            iconSize: 18,
+                            onPressed:
+                                !c.loading &&
+                                    !c.saving &&
+                                    c.error == null &&
+                                    c.captureWarning == null
+                                ? () async {
+                                    if (drawer) Navigator.pop(context);
+                                    await showProjectCreate(context, c);
+                                  }
+                                : null,
+                            icon: const Icon(Icons.add),
+                          ),
+                  ),
+                  for (final project
+                      in repo?.orderedProjects ?? const <HubProject>[])
+                    ListTile(
+                      key: Key('project-${project.id}'),
+                      leading: Icon(
+                        repo!.isPinned(project.id)
+                            ? Icons.push_pin_outlined
+                            : project.active
+                            ? Icons.folder_outlined
+                            : Icons.folder_off_outlined,
+                        size: 19,
+                        semanticLabel: repo.isPinned(project.id)
+                            ? 'ピン留め'
+                            : null,
+                      ),
+                      title: Text(
+                        project.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: project.merged
+                          ? const Text('統合済み')
+                          : project.lifecycle != 'active'
+                          ? Text(project.lifecycleLabel)
+                          : project.stale(DateTime.now())
+                          ? const Text('停滞')
+                          : null,
+                      // 作業記録の下書きと、手で書き換えて止まったNOW。
+                      trailing: attentionBadge('project:${project.id}'),
+                      selected: page == 'project:${project.id}',
+                      onTap: () => go('project:${project.id}'),
+                    ),
+                  for (final pending
+                      in repo?.pendingProjectCreations ??
+                          const <PendingProjectCreation>[])
+                    ListTile(
+                      key: Key('pending-project-${pending.projectId}'),
+                      enabled: false,
+                      leading: const Icon(
+                        Icons.create_new_folder_outlined,
+                        size: 19,
+                      ),
+                      title: Text(
+                        pending.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        pending.state == 'accepted' ? '作成済み・同期待ち' : '作成依頼中',
+                      ),
+                    ),
+                  if (repo != null && repo.orderedProjects.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                      child: Text(
+                        'まだありません',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  navHeading('見直す・調べる'),
+                  item('digest', 'ふりかえり', Icons.event_note_outlined),
+                  // いつかやるは、一覧に行があるとき（または開いている間）だけメニューに出す。
+                  // 空のうちは、項目の「…」やアイデアの画面から置くと現れる。
+                  if ((repo?.somedayEntries.isNotEmpty ?? false) ||
+                      page == 'someday')
+                    item('someday', 'いつかやる', Icons.inventory_2_outlined),
+                  item('ideas', 'アイデア', Icons.lightbulb_outline),
+                  item('people', '人', Icons.people_outline),
+                  // 記録に聞くは、本体が対応しているとき（または問いがあるとき）だけメニューに出す。
+                  if (repo?.intakeFeatures.ask == true ||
+                      (repo?.asks.isNotEmpty ?? false) ||
+                      page == 'ask')
+                    item('ask', '記録に聞く', Icons.question_answer_outlined),
+                  // 文脈かごは、記録を入れたとき（または開いている間）だけメニューに出す。
+                  if (c.basket.ids.isNotEmpty || page == 'basket')
+                    item(
+                      'basket',
+                      c.basket.ids.isNotEmpty
+                          ? '文脈かご（${c.basket.ids.length}）'
+                          : '文脈かご',
+                      Icons.shopping_basket_outlined,
+                    ),
+                ],
+              ),
+            ),
+          ),
+          if (repo != null || c.location != null)
+            DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: scheme.outlineVariant)),
+              ),
+              child: ListTileTheme.merge(
+                dense: true,
+                visualDensity: const VisualDensity(vertical: -2),
+                minVerticalPadding: 0,
+                titleTextStyle: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w500),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(hubRadiusSmall),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                minLeadingWidth: 20,
+                horizontalTitleGap: 12,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                  child: Column(
+                    children: [
+                      // 保存と反映は、この端末で保存を確かめられていない操作があるときだけ件数を出す。
+                      if (repo != null)
+                        item(
+                          'intake',
+                          '保存と反映',
+                          Icons.sync_outlined,
+                          trailing: countBadge('intake', c.pending.length),
+                        ),
+                      item(
+                        'settings',
+                        '設定',
+                        Icons.settings_outlined,
+                        selectedIcon: Icons.settings,
                       ),
                     ],
                   ),
-              ],
+                ),
+              ),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// 本文の領域に詳細などを重ねているか。右下の「メモを追加」を隠すのに使う。
+  bool detailOpen = false;
+
+  /// 本文の領域の画面の重なりの変化を受けて、[detailOpen]を更新する。
+  late final _contentObserver = _ContentObserver(() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final open = contentNavigator.currentState?.canPop() ?? false;
+      if (open != detailOpen) setState(() => detailOpen = open);
+    });
+  });
+
+  /// 狭い画面の右下の「メモを追加」。押せないとき（読込中・保存の確認情報を読めないとき）は薄く示す。
+  Widget memoButton() {
+    final scheme = Theme.of(context).colorScheme;
+    final enabled = c.captureWarning == null && !c.loading;
+    return FloatingActionButton.extended(
+      key: const Key('new-memo'),
+      onPressed: enabled ? () => showCapture(context, c) : null,
+      backgroundColor: enabled ? null : scheme.surfaceContainerHighest,
+      foregroundColor: enabled
+          ? null
+          : scheme.onSurface.withValues(alpha: .38),
+      icon: const Icon(Icons.edit_outlined),
+      label: const Text('メモを追加'),
+    );
+  }
+
+  /// 狭い画面の下のタブ。毎日使う4つの画面と、それ以外を開く「その他」。
+  Widget bottomBar() {
+    final index = primaryPages.indexWhere((p) => selectedPage(p.$1));
+    final reviewCount = c.attentionCount('review'),
+        reviewFresh = c.attentionFresh('review');
+    return NavigationBar(
+      key: const Key('bottom-bar'),
+      selectedIndex: index < 0 ? primaryPages.length : index,
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      onDestinationSelected: (i) {
+        // 本文の領域に選択肢の一覧などを開いている間は、ほかの画面へ移らない（サイドバー以外の移動と同じ扱い）。
+        if (!idle) return;
+        if (i == primaryPages.length) {
+          shellScaffold.currentState?.openDrawer();
+        } else {
+          show(primaryPages[i].$1);
+        }
+      },
+      destinations: [
+        for (final (target, label, icon, selectedIcon) in primaryPages)
+          NavigationDestination(
+            key: Key('nav-$target'),
+            icon: target == 'review' && reviewCount > 0
+                ? Badge(
+                    key: const Key('badge-review'),
+                    label: Text('$reviewCount'),
+                    // 新着がなければ、目立たない色にする（メニューの件数と同じ）。
+                    backgroundColor: reviewFresh > 0
+                        ? null
+                        : Theme.of(context).colorScheme.surfaceContainerHighest,
+                    textColor: reviewFresh > 0
+                        ? null
+                        : Theme.of(context).colorScheme.onSurface,
+                    child: Icon(icon),
+                  )
+                : Icon(icon),
+            selectedIcon: Icon(selectedIcon),
+            label: label,
           ),
+        const NavigationDestination(
+          key: Key('nav-more'),
+          icon: Icon(Icons.menu),
+          label: 'その他',
+        ),
       ],
-    ),
-  );
+    );
+  }
+
+  /// 設定。この端末での表示・通知と、Vaultの切り替え、ヘルプをまとめる。
+  Widget settingsView({required bool wide}) {
+    final theme = Theme.of(context);
+    Widget heading(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(4, 24, 4, 8),
+      child: Text(
+        text,
+        style: theme.textTheme.labelMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+    Widget group(List<Widget> children) => Card(
+      child: Column(
+        children: [
+          for (final (i, child) in children.indexed) ...[
+            if (i > 0) const Divider(indent: 16, endIndent: 16),
+            child,
+          ],
+        ],
+      ),
+    );
+    const chevron = Icon(Icons.chevron_right, size: 20);
+    final has = c.repository != null;
+    final device = [
+      if (c.homeScreenSupported && has)
+        ListTile(
+          key: const Key('home-widget-settings'),
+          leading: const Icon(Icons.widgets_outlined),
+          title: const Text('ウィジェットの表示'),
+          subtitle: const Text('ホーム画面のウィジェットに出す内容'),
+          trailing: chevron,
+          enabled: !c.loading,
+          onTap: () => showHomeWidgetSettings(context, c),
+        ),
+      if (c.attentionNotificationsSupported && has)
+        ListTile(
+          key: const Key('attention-settings'),
+          leading: const Icon(Icons.notifications_none_outlined),
+          title: const Text('確認待ちの通知'),
+          subtitle: Text(c.attentionNotify ? 'オン' : 'オフ'),
+          trailing: chevron,
+          enabled: !c.loading,
+          onTap: () => showAttentionSettings(context, c),
+        ),
+      if (has && (c.preferenceSyncSupported || c.preferenceSyncEnabled))
+        ListTile(
+          key: const Key('preference-sync-settings'),
+          leading: const Icon(Icons.devices_outlined),
+          title: Text(
+            c.preferenceSyncEnabled ? '好みを端末間でそろえています' : '好みを端末間でそろえる',
+          ),
+          subtitle: const Text('ピン留めと並び順・ひな形・かごの上限'),
+          trailing: chevron,
+          enabled: !c.loading,
+          onTap: () => showPreferenceSync(context, c),
+        ),
+    ];
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720),
+        child: ListView(
+          key: const ValueKey('settings'),
+          padding: EdgeInsets.fromLTRB(
+            wide ? 40 : 16,
+            wide ? 32 : 12,
+            wide ? 40 : 16,
+            40,
+          ),
+          children: [
+            heading('Vault'),
+            group([
+              ListTile(
+                leading: const Icon(Icons.folder_outlined),
+                title: Text(c.location?.name ?? '未選択'),
+                subtitle: const Text('手元のMarkdownを表示しています'),
+              ),
+              ListTile(
+                key: const Key('choose-vault'),
+                leading: const Icon(Icons.drive_folder_upload_outlined),
+                title: const Text('Vaultを選び直す'),
+                trailing: chevron,
+                enabled: !c.loading,
+                onTap: () => run(c.chooseVault),
+              ),
+            ]),
+            if (has) ...[
+              heading('読み込み'),
+              group([
+                SwitchListTile(
+                  key: const Key('auto-reload'),
+                  secondary: const Icon(Icons.sync_outlined),
+                  title: const Text('同期した変更を自動で読み込む'),
+                  subtitle: const Text('開いている間と、アプリに戻ったときに確かめます'),
+                  value: c.autoReload,
+                  onChanged: c.loading
+                      ? null
+                      : (v) => run(() => c.setAutoReload(v)),
+                ),
+              ]),
+            ],
+            if (device.isNotEmpty) ...[heading('この端末'), group(device)],
+            heading('ヘルプ'),
+            group([
+              if (wide)
+                ListTile(
+                  key: const Key('keyboard-help-button'),
+                  leading: const Icon(Icons.keyboard_outlined),
+                  title: const Text('キーボード操作'),
+                  trailing: Text(
+                    keyLabel(HubCommand.keyboardHelp.activator),
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  onTap: () => showKeyboardHelp(context),
+                ),
+              ListTile(
+                key: const Key('about'),
+                leading: const Icon(Icons.info_outline),
+                title: const Text('このアプリについて'),
+                subtitle: Text('バージョン $appVersion'),
+                trailing: chevron,
+                onTap: about,
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: c,
@@ -827,11 +1156,17 @@ class _HubShellState extends State<HubShell> {
           key: shellScaffold,
           drawer: wide || !has ? null : Drawer(child: navigation(true)),
           onDrawerChanged: (open) => setState(() => drawerOpen = open),
+          bottomNavigationBar: wide || !has ? null : bottomBar(),
+          // 狭い画面では、メモの追加を右下のボタンから行う。案内（SnackBar）と位置を調整し合うよう、外側に置く。
+          // 詳細や一覧を本文の領域に重ねている間と設定の画面では出さない。
+          floatingActionButton: has && !wide && page != 'settings' && !detailOpen
+              ? memoButton()
+              : null,
           body: Row(
             children: [
               if (wide && has)
                 Container(
-                  width: 246,
+                  width: 252,
                   foregroundDecoration: BoxDecoration(
                     border: Border(
                       right: BorderSide(color: scheme.outlineVariant),
@@ -839,37 +1174,33 @@ class _HubShellState extends State<HubShell> {
                   ),
                   // 選んでいる項目の背景はMaterialの上に描かれるため、色はMaterialで付ける。
                   child: Material(
-                    color: scheme.surface,
+                    color: scheme.surfaceContainerLow,
                     child: navigation(false),
                   ),
                 ),
               Expanded(
-                child: HubShellScope(
-                  openMenu: wide || !has
-                      ? null
-                      : () => shellScaffold.currentState?.openDrawer(),
-                  // Androidの「戻る」は、開いている詳細を先に閉じる。
-                  // メニューが開いている間はメニューを先に閉じる（詳細は閉じない）。
-                  child: NavigatorPopHandler<Object?>(
-                    enabled: !drawerOpen,
-                    onPopWithResult: (_) {
-                      final scaffold = shellScaffold.currentState;
-                      if (scaffold?.isDrawerOpen ?? false) {
-                        scaffold!.closeDrawer();
-                      } else {
-                        contentNavigator.currentState?.maybePop();
-                      }
-                    },
-                    child: Navigator(
-                      key: contentNavigator,
-                      pages: [
-                        MaterialPage<void>(
-                          key: const ValueKey('hub-main'),
-                          child: _main(context, wide: wide, has: has),
-                        ),
-                      ],
-                      onDidRemovePage: (_) {},
-                    ),
+                // Androidの「戻る」は、開いている詳細を先に閉じる。
+                // メニューが開いている間はメニューを先に閉じる（詳細は閉じない）。
+                child: NavigatorPopHandler<Object?>(
+                  enabled: !drawerOpen,
+                  onPopWithResult: (_) {
+                    final scaffold = shellScaffold.currentState;
+                    if (scaffold?.isDrawerOpen ?? false) {
+                      scaffold!.closeDrawer();
+                    } else {
+                      contentNavigator.currentState?.maybePop();
+                    }
+                  },
+                  child: Navigator(
+                    key: contentNavigator,
+                    observers: [_contentObserver],
+                    pages: [
+                      MaterialPage<void>(
+                        key: const ValueKey('hub-main'),
+                        child: _main(context, wide: wide, has: has),
+                      ),
+                    ],
+                    onDidRemovePage: (_) {},
                   ),
                 ),
               ),
@@ -888,15 +1219,6 @@ class _HubShellState extends State<HubShell> {
   }) => Scaffold(
     appBar: AppBar(
       automaticallyImplyLeading: false,
-      leading: wide || !has
-          ? null
-          : Builder(
-              builder: (context) => IconButton(
-                tooltip: MaterialLocalizations.of(context).openAppDrawerTooltip,
-                icon: const Icon(Icons.menu),
-                onPressed: () => shellScaffold.currentState?.openDrawer(),
-              ),
-            ),
       title: Text(
         has
             ? switch (page) {
@@ -913,73 +1235,63 @@ class _HubShellState extends State<HubShell> {
                 'people' => '人',
                 _ when page.startsWith('person:') => '人',
                 'intake' => '保存と反映',
+                'settings' => '設定',
                 _ when openProject != null => 'プロジェクト',
                 _ => 'ホーム',
               }
             : 'ContextHub',
       ),
       actions: [
-        if (wide)
+        // 狭い画面では、検索を上の帯から開く（広い画面ではサイドバーの検索欄）。
+        if (has && !wide)
           IconButton(
-            key: const Key('keyboard-help-button'),
-            tooltip: 'キーボード操作（${keyLabel(HubCommand.keyboardHelp.activator)}）',
-            icon: const Icon(Icons.keyboard_outlined),
-            onPressed: () => showKeyboardHelp(context),
+            key: const Key('nav-search'),
+            tooltip: '検索',
+            isSelected: page == 'search',
+            icon: const Icon(Icons.search),
+            onPressed: () => goTo('search'),
           ),
-        IconButton(
-          tooltip: 'このアプリについて',
-          icon: const Icon(Icons.info_outline),
-          onPressed: about,
-        ),
         if (c.location != null)
           IconButton(
             tooltip: '再読込',
             onPressed: c.loading ? null : () => run(c.reload),
             icon: const Icon(Icons.refresh),
           ),
-        // 狭い画面では題名の幅を残すため、ナビゲーションから開く。
-        if (has && wide)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilledButton.tonalIcon(
-              key: const Key('open-guided'),
-              onPressed: c.captureWarning != null || c.loading
-                  ? null
-                  : () => showGuided(context, c),
-              icon: const Icon(Icons.checklist, size: 18),
-              label: const Text('質問に答えてまとめる'),
-            ),
+        if (!has)
+          IconButton(
+            tooltip: 'このアプリについて',
+            icon: const Icon(Icons.info_outline),
+            onPressed: about,
           ),
-        if (has)
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: FilledButton.icon(
-              key: const Key('new-memo'),
-              onPressed: c.captureWarning != null || c.loading
-                  ? null
-                  : () => showCapture(context, c),
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('メモを追加'),
-            ),
-          ),
+        const SizedBox(width: 8),
       ],
     ),
     body: Column(
       children: [
         if (c.loading) const LinearProgressIndicator(minHeight: 2),
-        if (c.error != null) NoticeBox(c.error!, error: true),
-        if (c.captureWarning != null) NoticeBox(c.captureWarning!, error: true),
-        if (c.pending.isNotEmpty)
-          NoticeBox('保存確認待ちが${c.pending.length}件あります。保存と反映から同じ操作を確認できます。'),
+        for (final notice in [
+          if (c.error != null) NoticeBox(c.error!, error: true),
+          if (c.captureWarning != null)
+            NoticeBox(c.captureWarning!, error: true),
+          if (c.pending.isNotEmpty)
+            NoticeBox('保存確認待ちが${c.pending.length}件あります。保存と反映から同じ操作を確認できます。'),
+        ])
+          Padding(
+            padding: EdgeInsets.fromLTRB(wide ? 24 : 12, 10, wide ? 24 : 12, 0),
+            child: notice,
+          ),
         Expanded(
-          child: has
-              ? HubView(
+          // Vaultを読めていないときは、設定を開いていても、ようこそ画面（Vaultを選ぶ・サンプル）を出す。
+          child: !has
+              ? _welcome()
+              : page == 'settings'
+              ? settingsView(wide: wide)
+              : HubView(
                   controller: c,
                   page: page,
                   onNavigate: show,
                   searchFocus: searchFocus,
-                )
-              : _welcome(),
+                ),
         ),
       ],
     ),
@@ -1210,4 +1522,22 @@ Future<void> showAttentionSettings(
       ),
     ),
   );
+}
+
+/// 本文の領域の画面が重なったり閉じたりしたことを知らせる。
+class _ContentObserver extends NavigatorObserver {
+  _ContentObserver(this.changed);
+  final VoidCallback changed;
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      changed();
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      changed();
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      changed();
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      changed();
 }

@@ -206,7 +206,7 @@ void main() {
     await tester.tap(find.text('サンプルで試す'));
     await tester.pumpAndSettle();
     expect(find.text('次の一手 1件'), findsOneWidget);
-    expect(find.text('進行中の1プロジェクトから · 終わったらその場で完了を報告'), findsOneWidget);
+    expect(find.text('進行中の1プロジェクトから'), findsOneWidget);
     await tester.tap(find.byKey(const Key('home-next')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('next-project-context-hub')), findsOneWidget);
