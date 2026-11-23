@@ -633,6 +633,48 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('ウインドウを閉じている間に届いた判断待ちは、開いていた画面のものでも既読にしない', (tester) async {
+    tester.view.physicalSize = const Size(1280, 2400);
+    tester.view.devicePixelRatio = 1;
+    final access = AttentionAccess(mac: true)..current = fixture(baseFiles());
+    final c = HubController(access, sampleLoader: () async => baseFiles());
+    addTearDown(() async {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    // プロジェクトを開いたままウインドウを閉じる。
+    await tester.tap(find.byKey(const Key('project-context-hub')).first);
+    await tester.pumpAndSettle();
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pump();
+    // 閉じている間に、下書きと止まったNOWが同期されてきた。
+    access.current = fixture(withConflict(withDraft(baseFiles())));
+    expect(await c.refreshQuietly(), isTrue);
+    await tester.pump();
+    expect(c.attentionFresh(project), 2);
+    expect(access.badges.last, 6);
+    // 開き直すと、開いている画面のものは見たものとして既読にする。
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpAndSettle();
+    expect(c.attentionFresh(project), 0);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('通知から確認待ちを開き、通知の設定は許可されなければ有効にしない', (tester) async {
     tester.view.physicalSize = const Size(1280, 2400);
     tester.view.devicePixelRatio = 1;

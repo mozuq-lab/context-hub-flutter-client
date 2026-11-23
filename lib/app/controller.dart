@@ -988,7 +988,7 @@ class HubController extends ChangeNotifier {
     final next = _attention.sync(
       target.identity,
       attention,
-      visible: _visiblePage,
+      visible: _shown ? _visiblePage : null,
       // 同期の途中や読取の失敗で判断待ちが欠けて見えるときは、見つからない記録を消さない。
       prune: complete,
     );
@@ -1006,6 +1006,16 @@ class HubController extends ChangeNotifier {
     _dockBadgeSent = count;
     // 表示の更新に失敗しても、アプリの操作は続ける。
     access.setDockBadge(count).catchError((Object _) {});
+  }
+
+  /// ウインドウが見えているか。閉じている（隠れている）間に読み直しても、開いていた画面のものを既読にしない。
+  bool _shown = true;
+
+  /// ウインドウが見えるようになった・隠れたことを伝える。見えるようになったら、開いている画面のものを既読にする。
+  Future<void> setShown(bool shown) async {
+    if (_shown == shown) return;
+    _shown = shown;
+    if (shown) await showPage(_visiblePage);
   }
 
   /// 開いている画面を伝える。その画面で判断できるものは見たものとして既読にする。

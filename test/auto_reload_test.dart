@@ -22,6 +22,14 @@ class CountingAccess extends MemoryUIAccess {
   }
 }
 
+/// ドックに件数を出せる（Macの）端末。
+class DockAccess extends CountingAccess {
+  @override
+  bool get dockBadgeSupported => true;
+  @override
+  Future<void> setDockBadge(int count) async {}
+}
+
 const newInput = 'IN-01M9ZZZZZZZZZZZZZZZZZZZZZZ';
 const nowPathOf = '10_projects/context-hub/NOW.md';
 
@@ -282,5 +290,79 @@ void main() {
     await tester.tap(find.text('最近のメモ').last);
     await tester.pumpAndSettle();
     expect(find.text('雑な思いつきも、作業の記録も、そのまま残せます。'), findsOneWidget);
+  });
+
+  /// サンプルを開いた画面を出し、ウインドウを閉じた（隠れた）状態にして、読込の回数を返す。
+  Future<int> hideAfterOpening(
+    WidgetTester tester,
+    CountingAccess access,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final files = fixtureFiles();
+    access.current = fixture(files);
+    final c = HubController(
+      access,
+      sampleLoader: () async => files,
+      autoReloadInterval: const Duration(seconds: 60),
+    );
+    addTearDown(c.dispose);
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pump();
+    return access.reads;
+  }
+
+  testWidgets('Macではウインドウを閉じている間も、数分おきに読み直してドックの件数を新しくする', (
+    tester,
+  ) async {
+    final access = DockAccess();
+    final before = await hideAfterOpening(tester, access);
+    // 閉じている間は、前面にあるときより間隔を空ける。
+    await tester.pump(const Duration(seconds: 61));
+    expect(access.reads, before);
+    await tester.pump(const Duration(minutes: 5));
+    await tester.pumpAndSettle();
+    expect(access.reads, greaterThan(before));
+    // 開き直すと、前面にあるときの間隔に戻す。
+    final reopened = access.reads;
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pump(const Duration(seconds: 61));
+    await tester.pumpAndSettle();
+    expect(access.reads, greaterThan(reopened));
+  });
+
+  testWidgets('Macでウインドウが見えるようになれば、前面に戻らなくても1分おきに戻す', (tester) async {
+    final access = DockAccess();
+    await hideAfterOpening(tester, access);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    final shown = access.reads;
+    await tester.pump(const Duration(seconds: 61));
+    await tester.pumpAndSettle();
+    expect(access.reads, greaterThan(shown));
+  });
+
+  testWidgets('ドックに件数を出さない端末では、隠れている間は読み直さない', (tester) async {
+    final access = CountingAccess();
+    final before = await hideAfterOpening(tester, access);
+    await tester.pump(const Duration(minutes: 11));
+    await tester.pumpAndSettle();
+    expect(access.reads, before);
   });
 }
