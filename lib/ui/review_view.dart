@@ -3,6 +3,7 @@ import '../app/controller.dart';
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
 import '../core/repository.dart' show displayTime;
+import 'parts.dart';
 import 'views.dart';
 
 String reviewState(ReviewCandidate i) => switch (i.status) {
@@ -71,21 +72,18 @@ class ReviewView extends StatelessWidget {
   Widget build(BuildContext context) {
     final r = controller.review!;
     Widget section(String title, List<ReviewCandidate> items) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          child: Text(
-            '$title（${items.length}件）',
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-          ),
-        ),
-        if (items.isEmpty) const Text('該当する候補はありません。'),
-        for (final i in items)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Card(
-              child: ListTile(
+        sectionTitle(context, '$title（${items.length}件）'),
+        if (items.isEmpty)
+          Text(
+            '該当する候補はありません。',
+            style: Theme.of(context).textTheme.bodySmall,
+          )
+        else
+          groupCard([
+            for (final i in items)
+              ListTile(
                 key: Key('review-${i.id}'),
                 title: Text(i.title),
                 subtitle: Text(
@@ -103,30 +101,25 @@ class ReviewView extends StatelessWidget {
                   ),
                 ),
               ),
-            ),
-          ),
+          ]),
       ],
     );
-    return Center(
+    return Align(
+      alignment: Alignment.topCenter,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1000),
+        constraints: const BoxConstraints(maxWidth: pageMaxWidth),
         child: ListView(
-          // 狭い画面では、右下の「メモを追加」に最後の行が隠れないよう下を空ける。
-          padding: MediaQuery.sizeOf(context).width < 820
-              ? const EdgeInsets.fromLTRB(24, 24, 24, 96)
-              : const EdgeInsets.all(24),
+          padding: pagePadding(context),
           children: [
-            const Text(
+            pageTitle(
+              context,
               '候補を確認する',
-              style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'AIが見つけた方針・知識・プロジェクト案です。採用すると、AIが以後の作業で使います。内容と元のメモを見て決めてください。',
+              subtitle:
+                  'AIが見つけた方針・知識・プロジェクト案です。採用すると、AIが以後の作業で使います。内容と元のメモを見て決めてください。',
             ),
             for (final w in r.warnings)
               Padding(
-                padding: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.only(bottom: 12),
                 child: NoticeBox(w, error: true),
               ),
             section('確認待ち', r.pendingRows),
@@ -507,16 +500,13 @@ class _ReviewDetailState extends State<ReviewDetail> {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 900),
                   child: ListView(
-                    padding: const EdgeInsets.all(24),
+                    padding: pagePadding(context).copyWith(bottom: 48),
                     children: [
                       Text(
                         item.title,
-                        style: const TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style: Theme.of(context).textTheme.headlineSmall,
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
                       Text('${item.label} · ${reviewState(item)}'),
                       if (item.status == 'pending')
                         Text(item.inputIds.isEmpty ? '利用者の提案・未承認' : 'AI候補・未承認'),
@@ -603,10 +593,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                         const Divider(height: 48),
                         Text(
                           'まとめた案: ${member.title}',
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
+                          style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: 12),
                         ReviewContent(controller: c, item: member),
@@ -835,14 +822,16 @@ class ReviewContent extends StatelessWidget {
         if (item.adoptedTarget != null)
           Text('使う場所: ${item.adoptedTarget!.label}'),
         if (item.retired) Text('適用停止: ${item.retiredAt ?? "記録あり"}（本文と履歴を保持）'),
-        const Text(
+        Text(
           '主張・内容',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
         ),
         const SizedBox(height: 8),
         SelectableText(
           item.claim,
-          style: const TextStyle(fontSize: 17, height: 1.7),
+          style: const TextStyle(fontSize: 16, height: 1.7),
         ),
         if (projectDetails != null)
           Padding(
@@ -861,9 +850,11 @@ class ReviewContent extends StatelessWidget {
           style: const TextStyle(fontSize: 12, height: 1.8),
         ),
         const SizedBox(height: 20),
-        const Text(
+        Text(
           '元のメモ・訂正履歴',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
         ),
         if (item.inputIds.isEmpty)
           const Padding(

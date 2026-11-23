@@ -605,7 +605,9 @@ class HubProject {
     'open': [],
     'proposals': [],
   };
-  final List<String> warnings = ['AIの読み取り・自己報告を含む、未検証の要約です。'], references = [];
+  /// 本体の要約にいつも付く注意。画面では欄の見出しの下に小さく添える。
+  static const summaryWarning = 'AIの読み取り・自己報告を含む、未検証の要約です。';
+  final List<String> warnings = [summaryWarning], references = [];
 
   /// 本体が生成するプロジェクトの経緯（HISTORY.md）。古い本体や未生成ならnull。
   HubDigest? history;
