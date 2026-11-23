@@ -97,8 +97,9 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
   Future<bool> _confirm(String title, String body, String action) async =>
       await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => HubAlertDialog(
           title: Text(title),
+          onClose: () => Navigator.pop(context, false),
           content: Text(body),
           actions: [
             TextButton(
@@ -140,8 +141,9 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
   Widget build(BuildContext context) {
     final list = templates;
     final identity = _identity;
-    return AlertDialog(
+    return HubAlertDialog(
       title: const Text('ひな形'),
+      onClose: busy ? null : () => Navigator.pop(context),
       content: SizedBox(
         width: 560,
         child: list == null
@@ -345,8 +347,9 @@ class _TemplateEditDialogState extends State<TemplateEditDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     title: Text(widget.template == null ? 'ひな形を追加' : 'ひな形を編集'),
+    onClose: () => Navigator.pop(context),
     content: SizedBox(
       width: 520,
       child: DialogScroll(

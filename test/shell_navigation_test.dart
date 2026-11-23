@@ -294,6 +294,14 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
       expect(topTitle(tester), '保存と反映');
       expect(intakeItem, findsOneWidget);
+      // 右上の閉じる（×）ボタンも、同じくその画面だけを閉じる。
+      await tester.tap(intakeItem);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dialog-close')));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(topTitle(tester), '保存と反映');
+      expect(intakeItem, findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

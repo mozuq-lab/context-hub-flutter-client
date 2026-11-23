@@ -52,9 +52,10 @@ class _PersonDialogState extends State<PersonDialog> {
             ? null
             : '名前か呼び名が「${overlap.name}」と重なります。同じ名前・呼び名を2人に付けることはできません。');
     final unchanged = person != null && next.sameAs(person);
-    return AlertDialog(
+    return HubAlertDialog(
       key: const Key('person-dialog'),
       title: Text(person == null ? '人を登録' : '${person.name}の名前と呼び名'),
+      onClose: () => Navigator.pop(context),
       content: SizedBox(
         width: 520,
         child: DialogScroll(

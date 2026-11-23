@@ -51,9 +51,10 @@ Future<String?> checkSecretsBeforeSave(
   if (findings.isEmpty) return text;
   final choice = await showDialog<String>(
     context: context,
-    builder: (dialog) => AlertDialog(
+    builder: (dialog) => HubAlertDialog(
       key: const Key('secret-warning'),
       title: const Text('秘密情報らしい文字列があります'),
+      onClose: () => Navigator.pop(dialog),
       content: SizedBox(
         width: 480,
         child: Text(
@@ -1313,8 +1314,9 @@ class _HubViewState extends State<HubView> {
                     context: context,
                     // 閉じるときは、ダイアログ自身のcontextで閉じる。画面のcontextで閉じると、
                     // 本文の領域のNavigatorから一覧の画面を外してしまい、ダイアログは残る。
-                    builder: (dialog) => AlertDialog(
+                    builder: (dialog) => HubAlertDialog(
                       title: Text(intakeStateLabel(status.state)),
+                      onClose: () => Navigator.pop(dialog),
                       content: SelectableText('${status.id}\n${status.detail}'),
                       actions: [
                         TextButton(
@@ -1433,8 +1435,9 @@ class _HubViewState extends State<HubView> {
             onPressed: () async {
               final yes = await showDialog<bool>(
                 context: context,
-                builder: (dialog) => AlertDialog(
+                builder: (dialog) => HubAlertDialog(
                   title: const Text('かごを空にしますか'),
+                  onClose: () => Navigator.pop(dialog, false),
                   content: Text('${ids.length}件をかごから外します。記録そのものは消えません。'),
                   actions: [
                     TextButton(
@@ -2012,8 +2015,9 @@ class _HubViewState extends State<HubView> {
   Future<bool> confirmAction(String title, String body, String action) async =>
       await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => HubAlertDialog(
           title: Text(title),
+          onClose: () => Navigator.pop(context, false),
           content: SizedBox(width: 520, child: Text(body)),
           actions: [
             TextButton(
@@ -2376,8 +2380,10 @@ class _HubViewState extends State<HubView> {
       context: context,
       builder: (dialog) => SimpleDialog(
         key: const Key('move-action-dialog'),
-        title: Text(
-          fromScope == unassignedScope ? 'プロジェクトへ移す' : '別の置き場へ移す',
+        titlePadding: closableTitlePadding,
+        title: closableTitle(
+          Text(fromScope == unassignedScope ? 'プロジェクトへ移す' : '別の置き場へ移す'),
+          () => Navigator.of(dialog).pop(),
         ),
         children: [
           Padding(
@@ -2928,8 +2934,9 @@ class _HubViewState extends State<HubView> {
   ) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dialog) => AlertDialog(
+      builder: (dialog) => HubAlertDialog(
         title: Text(occurrenceActionLabels[action]!),
+        onClose: () => Navigator.pop(dialog),
         content: SizedBox(
           width: 480,
           child: Text(
@@ -7240,8 +7247,9 @@ Future<void> sendIdeaSomeday(
 ) async {
   final ok = await showDialog<bool>(
     context: context,
-    builder: (dialog) => AlertDialog(
+    builder: (dialog) => HubAlertDialog(
       title: const Text('「いつかやる」に置く'),
+      onClose: () => Navigator.pop(dialog, false),
       content: Text(
         '「$title」を、今は取り組まないアイデアとして「いつかやる」に置くよう依頼します。「いつかやる」の画面で、ほかの項目と一緒に見直せます。アイデアと元のメモは変わりません。',
       ),
@@ -7297,8 +7305,9 @@ Future<void> sendIdeaLink(
       : ('別の話にする', '「$title」とは別の話として、次から候補に出さないよう依頼します。', '別の話にする');
   final ok = await showDialog<bool>(
     context: context,
-    builder: (dialog) => AlertDialog(
+    builder: (dialog) => HubAlertDialog(
       title: Text(heading),
+      onClose: () => Navigator.pop(dialog, false),
       content: Text('$body依頼は保存され、Mac miniで処理されると反映されます。'),
       actions: [
         TextButton(
@@ -7611,8 +7620,9 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
         skipTraversal: true,
         child: PopScope(
           canPop: !busy,
-          child: AlertDialog(
+          child: HubAlertDialog(
             title: Text(action ? '行動の文面を直す' : 'メモを訂正する'),
+            onClose: busy ? null : () => Navigator.pop(context),
             content: SizedBox(
               width: 620,
               child: DialogScroll(
@@ -8647,7 +8657,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
       skipTraversal: true,
       child: PopScope(
         canPop: !busy,
-        child: AlertDialog(
+        child: HubAlertDialog(
           title: Text(
             widget.answer != null
                 ? '問いに答える'
@@ -8657,6 +8667,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
                 ? '思いつきを、そのまま。'
                 : '下書きから入力を作る',
           ),
+          onClose: busy ? null : () => Navigator.pop(context),
           content: SizedBox(
             width: 620,
             child: !_ready
@@ -8966,9 +8977,10 @@ class PinOrderDialog extends StatelessWidget {
     builder: (context, _) {
       final projects =
           controller.repository?.pinnedProjects ?? const <HubProject>[];
-      return AlertDialog(
+      return HubAlertDialog(
         key: const Key('pin-order-dialog'),
         title: const Text('ピン留めの並び'),
+        onClose: () => Navigator.pop(context),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: DialogScroll(
@@ -9129,9 +9141,10 @@ class _WaitDialogState extends State<WaitDialog> {
             widget.item.waitingSince != sinceValue ||
             widget.item.waitingWho != whoValue ||
             widget.item.reviewAfter != reviewValue;
-    return AlertDialog(
+    return HubAlertDialog(
       key: const Key('wait-dialog'),
       title: Text(widget.item.waiting ? '連絡待ちを変える' : '連絡待ちにする'),
+      onClose: () => Navigator.pop(context),
       content: SizedBox(
         width: 520,
         child: DialogScroll(
@@ -9249,9 +9262,10 @@ class _EffortDialogState extends State<EffortDialog> {
   late String? effort = widget.item.effort;
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     key: const Key('effort-dialog'),
     title: const Text('手間の目安'),
+    onClose: () => Navigator.pop(context),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
       child: DialogScroll(
@@ -9383,9 +9397,10 @@ class _ContextsDialogState extends State<ContextsDialog> {
       selected.toSet().containsAll(widget.item.contexts);
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     key: const Key('contexts-dialog'),
     title: const Text('場所・道具の札'),
+    onClose: () => Navigator.pop(context),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
       child: DialogScroll(
@@ -9509,9 +9524,10 @@ class _ContextVocabularyDialogState extends State<ContextVocabularyDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     key: const Key('context-vocabulary-dialog'),
     title: const Text('札の一覧'),
+    onClose: () => Navigator.pop(context),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
       child: DialogScroll(
@@ -9632,9 +9648,10 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
   Widget build(BuildContext context) {
     final text = note.text.trim(),
         valid = text.isEmpty || validExclusionNote(text);
-    return AlertDialog(
+    return HubAlertDialog(
       key: const Key('exclude-dialog'),
       title: const Text('誤りとして外す'),
+      onClose: () => Navigator.pop(context),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: DialogScroll(
@@ -9764,9 +9781,10 @@ class _ActionDialogState extends State<ActionDialog> {
   Widget build(BuildContext context) {
     final value = text.text.trim(),
         valid = validActionText(value) && contexts.length <= contextTagsMax;
-    return AlertDialog(
+    return HubAlertDialog(
       key: const Key('action-dialog'),
       title: Text(widget.from == null ? '次の一手を追加' : '自分の行動にする'),
+      onClose: () => Navigator.pop(context),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: DialogScroll(
@@ -10006,8 +10024,9 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
             nextRepeat != widget.item.repeat,
         clearing = nextDue == null && nextReview == null;
     final choices = {...RepeatRule.choices, ?widget.item.repeat}.toList();
-    return AlertDialog(
+    return HubAlertDialog(
       title: const Text('期日と次に見直す日'),
+      onClose: () => Navigator.pop(context),
       content: SizedBox(
         width: 520,
         child: DialogScroll(
@@ -10109,8 +10128,9 @@ class ProjectStatusDialog extends StatefulWidget {
 class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
   String? selected;
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     title: Text('${widget.project.title}の状態'),
+    onClose: () => Navigator.pop(context),
     content: DialogScroll(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -10190,8 +10210,9 @@ class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
   HubProject? selected;
   bool confirmed = false;
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     title: Text('「${widget.project.title}」を統合'),
+    onClose: () => Navigator.pop(context),
     content: SizedBox(
       width: 520,
       child: DialogScroll(
@@ -10340,12 +10361,13 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
         problem = next.problem,
         unchanged = next.sameAs(widget.project);
     final limits = widget.outcomeLimits;
-    return AlertDialog(
+    return HubAlertDialog(
       title: Text(
         limits == null
             ? '${widget.project.title}の呼び名とキーワード'
             : '${widget.project.title}の定義',
       ),
+      onClose: () => Navigator.pop(context),
       content: SizedBox(
         width: 560,
         child: DialogScroll(
@@ -10576,8 +10598,9 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !busy,
-    child: AlertDialog(
+    child: HubAlertDialog(
       title: const Text('新しいプロジェクト'),
+      onClose: busy ? null : () => Navigator.pop(context),
       content: SizedBox(
         width: 620,
         child: DialogScroll(
@@ -10774,9 +10797,10 @@ class _StepsDialogState extends State<StepsDialog> {
   @override
   Widget build(BuildContext context) {
     final steps = next, old = widget.item.steps;
-    return AlertDialog(
+    return HubAlertDialog(
       key: const Key('steps-dialog'),
       title: Text(old == null ? '手順に分ける' : '手順を直す'),
+      onClose: () => Navigator.pop(context),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
         child: DialogScroll(
@@ -10866,9 +10890,10 @@ class _AreaDialogState extends State<AreaDialog> {
     final v = value,
         valid = validArea(v),
         choices = widget.choices();
-    return AlertDialog(
+    return HubAlertDialog(
       key: const Key('area-dialog'),
       title: const Text('領域'),
+      onClose: () => Navigator.pop(context),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
         child: DialogScroll(
@@ -10984,9 +11009,10 @@ class _AreaVocabularyDialogState extends State<AreaVocabularyDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     key: const Key('area-vocabulary-dialog'),
     title: const Text('領域の一覧'),
+    onClose: () => Navigator.pop(context),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
       child: DialogScroll(

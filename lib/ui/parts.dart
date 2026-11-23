@@ -366,3 +366,77 @@ class _DialogScrollState extends State<DialogScroll> {
     );
   }
 }
+
+/// ダイアログの右上の閉じる（×）ボタン。押したときは、そのダイアログの「やめる」「閉じる」などと同じことをする。
+/// [onPressed]には、その取り消しのボタンと同じ処理を渡す（保存の途中などで取り消せないときは null にして、一緒に押せなくする）。
+/// 閉じるときは、ダイアログを開いたページの context ではなく、ダイアログ自身の context で pop すること
+/// （本文の領域は入れ子の Navigator なので、ページの context だと後ろのページを閉じてしまう）。
+class DialogCloseButton extends StatelessWidget {
+  const DialogCloseButton({super.key, required this.onPressed});
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    key: const Key('dialog-close'),
+    tooltip: '閉じる',
+    icon: const Icon(Icons.close),
+    color: Theme.of(context).colorScheme.onSurfaceVariant,
+    onPressed: onPressed,
+  );
+}
+
+/// 閉じるボタンを右上に置くダイアログの、題名のまわりの余白。右と上は、ボタン自身の余白の分だけ詰める。
+const closableTitlePadding = EdgeInsets.fromLTRB(24, 16, 12, 0);
+
+/// 題名の右に閉じる（×）ボタンを並べる。[closableTitlePadding]と組にして使う。
+/// 題名が長いときは折り返し、ボタンは1行目の高さにそろえたまま右上に残す。
+Widget closableTitle(Widget title, VoidCallback? onClose) => Builder(
+  builder: (context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Expanded(
+        // ボタンの中ほどに、題名の1行目（高さ約28）がくるようにする。ボタンの高さは、
+        // 押せる範囲を広げる端末（Android）では48、そうでなければ40。
+        child: Padding(
+          padding: EdgeInsets.only(
+            top:
+                Theme.of(context).materialTapTargetSize ==
+                    MaterialTapTargetSize.padded
+                ? 10
+                : 6,
+          ),
+          child: title,
+        ),
+      ),
+      const SizedBox(width: 8),
+      DialogCloseButton(onPressed: onClose),
+    ],
+  ),
+);
+
+/// 右上に閉じる（×）ボタンのある AlertDialog。アプリのダイアログはすべてこれで開く
+/// （SimpleDialog は題名に[closableTitle]を使う。全画面のダイアログは AppBar の右端に CloseButton を置く）。
+/// [onClose]には、[actions]の中の「やめる」「閉じる」などと同じ処理を渡す（[DialogCloseButton]を参照）。
+/// Flutter 標準の日付選択（showDatePicker）とライセンスの画面（showLicensePage）は作りを変えられないので、
+/// それぞれの「キャンセル」・戻るボタンのままにしている。
+class HubAlertDialog extends StatelessWidget {
+  const HubAlertDialog({
+    super.key,
+    required this.title,
+    required this.onClose,
+    this.content,
+    this.actions,
+  });
+  final Widget title;
+  final VoidCallback? onClose;
+  final Widget? content;
+  final List<Widget>? actions;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    titlePadding: closableTitlePadding,
+    title: closableTitle(title, onClose),
+    content: content,
+    actions: actions,
+  );
+}

@@ -27,9 +27,10 @@ Future<void> showPreferenceSync(BuildContext context, HubController c) async {
           if (context.mounted) setState(() => busy = false);
         }
 
-        return AlertDialog(
+        return HubAlertDialog(
           key: const Key('preference-sync-dialog'),
           title: const Text('好みを端末間でそろえる'),
+          onClose: busy ? null : () => Navigator.pop(context),
           content: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 460),
             child: DialogScroll(

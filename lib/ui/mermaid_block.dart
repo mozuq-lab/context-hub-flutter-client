@@ -218,7 +218,12 @@ class _MermaidBlockState extends State<MermaidBlock> {
       context: context,
       builder: (context) => Dialog.fullscreen(
         child: Scaffold(
-          appBar: AppBar(leading: const CloseButton(), title: const Text('図')),
+          // 閉じるボタンは、ほかのダイアログと同じく右上に置く。
+          appBar: AppBar(
+            automaticallyImplyLeading: false,
+            title: const Text('図'),
+            actions: const [CloseButton(), SizedBox(width: 8)],
+          ),
           body: _ExpandedDiagram(
             scene: scene,
             source: source,
