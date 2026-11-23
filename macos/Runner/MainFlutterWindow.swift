@@ -5,6 +5,23 @@ class MainFlutterWindow: NSWindow {
   /// 前回閉じたときの位置と大きさを、この名前でアプリの設定（UserDefaults）へ記録する。
   private static let frameName = NSWindow.FrameAutosaveName("ContextHubMainWindow")
   private var vaultBridge: VaultBridge?
+  private var activeObserver: NSObjectProtocol?
+  /// 本人がウインドウを閉じたか。起動直後のまだ出していない状態や、⌘Hで隠した状態とは区別する。
+  private var closedByUser = false
+  /// 閉じた後に出し直すウインドウ（閉じても破棄しない設定で、アプリが終わるまで残る）。
+  private(set) static weak var shared: MainFlutterWindow?
+
+  /// 閉じた・最小化したウインドウを出し直す。
+  func showAgain() {
+    closedByUser = false
+    if isMiniaturized { deminiaturize(nil) }
+    makeKeyAndOrderFront(nil)
+  }
+
+  override func close() {
+    closedByUser = true
+    super.close()
+  }
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -28,6 +45,15 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     vaultBridge = VaultBridge(flutterViewController.engine.binaryMessenger)
+    MainFlutterWindow.shared = self
+    // ウインドウを閉じた後に⌘Tabなどでアプリへ切り替えたときも、ウインドウを出し直す（メニューだけが出て操作できない状態にしない）。
+    // 最小化している間は、ほかのアプリと同じく最小化したままにする。
+    activeObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      guard let self, self.closedByUser, !self.isVisible else { return }
+      self.showAgain()
+    }
 
     super.awakeFromNib()
   }

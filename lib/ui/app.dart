@@ -54,6 +54,9 @@ class _HubShellState extends State<HubShell> {
 
   /// 前面に戻ったときは、この時間より前に読み込んでいたら確かめる（すぐ切り替えたときに読み直さない）。
   static const _resumeAfter = Duration(seconds: 20);
+
+  /// ウインドウを閉じている（隠れている）間に確かめる間隔。
+  static const _hiddenReloadEvery = Duration(minutes: 5);
   @override
   void initState() {
     super.initState();
@@ -71,16 +74,32 @@ class _HubShellState extends State<HubShell> {
         }
         _startAutoReloadTimer();
       },
-      onHide: () => _autoReloadTimer?.cancel(),
+      // ウインドウが見えている間は、前面になくても同じ間隔で確かめる。
+      onShow: () {
+        c.setShown(true);
+        _startAutoReloadTimer();
+      },
+      // Macはウインドウを閉じても動き続け、ドックに件数を出し続けるため、間隔を空けて確かめ続ける。
+      onHide: () {
+        c.setShown(false);
+        if (c.access.dockBadgeSupported) {
+          _startAutoReloadTimer(hidden: true);
+        } else {
+          _autoReloadTimer?.cancel();
+        }
+      },
     );
     _startAutoReloadTimer();
   }
 
-  void _startAutoReloadTimer() {
+  void _startAutoReloadTimer({bool hidden = false}) {
     _autoReloadTimer?.cancel();
     final every = c.autoReloadInterval;
     if (every == null) return;
-    _autoReloadTimer = Timer.periodic(every, (_) => _autoReload());
+    _autoReloadTimer = Timer.periodic(
+      hidden && every < _hiddenReloadEvery ? _hiddenReloadEvery : every,
+      (_) => _autoReload(),
+    );
   }
 
   /// 同期で届いた変更を、表示を止めずに読み込む。入力・確認の途中や読込中は、次の機会に回す。
