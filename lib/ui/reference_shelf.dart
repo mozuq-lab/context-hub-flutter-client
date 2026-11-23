@@ -67,11 +67,11 @@ class ReferenceShelfPage extends StatelessWidget {
                   style: theme.textTheme.bodySmall,
                 ),
                 if (!editable)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 12),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
                     child: Text(
                       'Mac miniの本体を更新すると、ここから名前を変えたり外したりできます。',
-                      style: TextStyle(fontSize: 12),
+                      style: noteStyle(context),
                     ),
                   ),
                 sectionTitle(
@@ -80,10 +80,7 @@ class ReferenceShelfPage extends StatelessWidget {
                   note: 'メモを資料にするには、保存するときに「資料として保存」を選ぶか、メモを開いて「資料に加える」を押します。',
                 ),
                 if (entries.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('まだ資料はありません。'),
-                  )
+                  emptyText(context, 'まだ資料はありません。')
                 else
                   for (final e in entries)
                     _EntryCard(

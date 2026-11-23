@@ -292,8 +292,30 @@ ThemeData hubTheme(Brightness brightness) {
     segmentedButtonTheme: SegmentedButtonThemeData(
       style: ButtonStyle(
         shape: buttonShape,
-        textStyle: WidgetStatePropertyAll(text.labelMedium),
+        textStyle: WidgetStatePropertyAll(
+          text.labelLarge?.copyWith(fontSize: 13.5),
+        ),
         side: WidgetStatePropertyAll(BorderSide(color: s.highest)),
+        // 選んだ側は、札と同じく淡い藍の地と藍の文字にする。
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? scheme.primary.withValues(alpha: dark ? .22 : .12)
+              : null,
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? s.onSurface.withValues(alpha: .38)
+              : states.contains(WidgetState.selected)
+              ? scheme.primary
+              : s.onSurface,
+        ),
+        iconColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? s.onSurface.withValues(alpha: .38)
+              : states.contains(WidgetState.selected)
+              ? scheme.primary
+              : s.onVariant,
+        ),
       ),
     ),
     chipTheme: ChipThemeData(
@@ -381,7 +403,13 @@ ThemeData hubTheme(Brightness brightness) {
         ),
       ),
     ),
+    // 入力欄の補足・文字数・誤りの文字は、本文の補足と同じ大きさ・色にそろえ、長い説明は途中で切らずに折り返す。
     inputDecorationTheme: InputDecorationTheme(
+      helperStyle: textTheme.bodySmall,
+      counterStyle: textTheme.bodySmall,
+      errorStyle: textTheme.bodySmall?.copyWith(color: scheme.error),
+      helperMaxLines: 4,
+      errorMaxLines: 4,
       border: OutlineInputBorder(borderRadius: small),
       enabledBorder: OutlineInputBorder(
         borderRadius: small,
@@ -413,4 +441,20 @@ ThemeData hubTheme(Brightness brightness) {
     ),
   );
   return base;
+}
+
+/// 狭い画面（スマートフォン）でのダイアログの外側の余白。既定（左右40）のままだと、本文の幅が狭くなり、欄が詰まって見える。
+const narrowDialogInset = EdgeInsets.symmetric(horizontal: 16, vertical: 24);
+
+/// 画面の幅に合わせて、ダイアログの外側の余白を変える。[MaterialApp.builder]から使う。
+Widget hubThemeForWidth(BuildContext context, Widget? child) {
+  final content = child ?? const SizedBox.shrink();
+  if (MediaQuery.sizeOf(context).width >= 600) return content;
+  final theme = Theme.of(context);
+  return Theme(
+    data: theme.copyWith(
+      dialogTheme: theme.dialogTheme.copyWith(insetPadding: narrowDialogInset),
+    ),
+    child: content,
+  );
 }

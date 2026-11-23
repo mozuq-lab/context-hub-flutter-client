@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'parts.dart';
 import '../app/controller.dart';
 import '../core/preferences.dart';
 import 'views.dart' show timeLabel;
@@ -31,7 +32,7 @@ Future<void> showPreferenceSync(BuildContext context, HubController c) async {
           title: const Text('好みを端末間でそろえる'),
           content: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 460),
-            child: SingleChildScrollView(
+            child: DialogScroll(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,

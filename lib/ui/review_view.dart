@@ -189,7 +189,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
           ),
           content: SizedBox(
             width: 650,
-            child: SingleChildScrollView(
+            child: DialogScroll(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -291,7 +291,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
           title: const Text('この方針はまだ有効ですか？'),
           content: SizedBox(
             width: 650,
-            child: SingleChildScrollView(
+            child: DialogScroll(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -608,6 +608,8 @@ class _ReviewDetailState extends State<ReviewDetail> {
                           ),
                         CheckboxListTile(
                           key: Key('review-include-${member.id}'),
+                          visualDensity: formTileDensity,
+                          horizontalTitleGap: formTileGap,
                           contentPadding: EdgeInsets.zero,
                           controlAffinity: ListTileControlAffinity.leading,
                           value: included.contains(member),

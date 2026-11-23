@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'parts.dart';
 import '../app/controller.dart';
 import '../core/models.dart';
 import 'views.dart'
@@ -154,7 +155,7 @@ class _AskPanelState extends State<AskPanel> {
               const SizedBox(height: 12),
               const Text(
                 'AI生成・未検証の答えです。根拠の引用と元の記録で確かめてください。',
-                style: TextStyle(fontSize: 11),
+                style: TextStyle(fontSize: 12),
               ),
               const SizedBox(height: 8),
               for (final (i, sentence) in answer.sentences.indexed)
@@ -192,7 +193,7 @@ class _AskPanelState extends State<AskPanel> {
               if (answer.dropped > 0)
                 Text(
                   '根拠を確かめられなかった文を${answer.dropped}件除きました。',
-                  style: const TextStyle(fontSize: 11),
+                  style: const TextStyle(fontSize: 12),
                 ),
             ],
             // 答えがないときは、問いに近かった記録を示す（自分で読み比べられるように）。
@@ -282,14 +283,14 @@ class _AskPanelState extends State<AskPanel> {
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             '問いを保存し、Mac miniが次のAI読み取りのときに、メモと作業要約（訂正があれば最新の訂正）だけを根拠に答えます。答えはメモにはなりません。',
-            style: TextStyle(fontSize: 12, height: 1.6),
+            style: noteStyle(context),
           ),
           const SizedBox(height: 20),
         ],
         if (repo.asks.isEmpty)
-          const Text('まだ問いはありません。', key: Key('ask-empty'))
+          emptyText(context, 'まだ問いはありません。', key: const Key('ask-empty'))
         else
           for (final (i, t) in repo.asks.indexed) thread(t, i),
       ],

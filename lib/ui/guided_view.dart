@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'parts.dart';
 import '../app/controller.dart';
 import '../app/guided_controller.dart';
 import '../core/guided.dart';
@@ -255,6 +256,7 @@ class _GuidedPageState extends State<GuidedPage> {
     required ValueChanged<String?>? onChanged,
   }) => DropdownButtonFormField<String>(
     key: key,
+    style: fieldTextStyle(context),
     initialValue: value ?? '',
     isExpanded: true,
     decoration: const InputDecoration(labelText: 'プロジェクト（任意）'),
@@ -474,7 +476,7 @@ class _GuidedPageState extends State<GuidedPage> {
               child: SingleChildScrollView(
                 child: SelectableText(
                   material.text,
-                  style: const TextStyle(fontSize: 11, height: 1.5),
+                  style: const TextStyle(fontSize: 12.5, height: 1.55),
                 ),
               ),
             ),
@@ -651,6 +653,8 @@ class _GuidedPageState extends State<GuidedPage> {
               child: q.multiSelect
                   ? CheckboxListTile(
                       key: Key('guided-option-$i'),
+                      visualDensity: formTileDensity,
+                      horizontalTitleGap: formTileGap,
                       value: picked.contains(o.label),
                       controlAffinity: ListTileControlAffinity.leading,
                       onChanged: (v) => setState(
@@ -842,7 +846,7 @@ class _GuidedPageState extends State<GuidedPage> {
             alignment: Alignment.centerLeft,
             child: SelectableText(
               guidedLog(s),
-              style: const TextStyle(fontSize: 12, height: 1.6),
+              style: noteStyle(context),
             ),
           ),
         ],
@@ -874,7 +878,7 @@ class _GuidedPageState extends State<GuidedPage> {
           padding: const EdgeInsets.only(top: 8),
           child: SelectableText(
             '操作ID: ${s.operationId}',
-            style: const TextStyle(fontSize: 10),
+            style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
       const SizedBox(height: 16),
@@ -989,7 +993,7 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
       title: const Text('AIの設定'),
       content: SizedBox(
         width: 520,
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,

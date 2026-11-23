@@ -160,6 +160,18 @@ Widget entryNote(BuildContext context, String text, {bool problem = false}) {
 /// 注記のうち、確かめが要る問題ではなく、性質を示すだけのもの（控えめに出す）。
 const softEntryNotes = {'AI自己報告・未検証', 'プロジェクトとの関連は候補です'};
 
+/// 一覧が空のときの一言。本文より控えめに出す。
+Widget emptyText(BuildContext context, String text, {Key? key}) => Padding(
+  padding: const EdgeInsets.symmetric(vertical: 4),
+  child: Text(
+    text,
+    key: key,
+    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    ),
+  ),
+);
+
 /// 行の小さな状態（「反映待ち」など）。
 Widget statusText(BuildContext context, String text, {Key? key}) => Padding(
   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
@@ -207,6 +219,20 @@ Widget sourceLink(
   );
 }
 
+/// 本文とその下の操作を持つ行を、1枚の面の中に縦に並べる。行の間に細い線を引き、上下に同じ余白を取る。
+/// 線がないと、ある行の操作が次の行の上に付いているように見えるため。
+List<Widget> dividedRows(Iterable<Widget> rows, {double gap = 12}) => [
+  for (final (i, row) in rows.indexed) ...[
+    if (i > 0) const Divider(height: 1),
+    Padding(
+      // 行の鍵をこの包みにも付け、行が増減しても隣の行と取り違えないようにする。
+      key: row.key == null ? null : ValueKey(row.key),
+      padding: EdgeInsets.symmetric(vertical: gap),
+      child: row,
+    ),
+  ],
+];
+
 /// 項目の行に並べる操作（完了・今日やる・却下など）。文字を本文の色にし、印だけを藍にして、行が続いても目立ちすぎないようにする。
 Widget rowActions(BuildContext context, Widget child) {
   final theme = Theme.of(context);
@@ -223,4 +249,120 @@ Widget rowActions(BuildContext context, Widget child) {
     ),
     child: child,
   );
+}
+
+// ---- フォームとダイアログ ----
+
+/// フォームの欄と欄の間の余白。欄どうしがくっついて見えないよう、どのフォームでもこの間を空ける。
+const fieldGap = SizedBox(height: 20);
+
+/// フォームの欄の見出し。入力欄の枠の外に置く選択肢の組（札・切り替え）や、フォームの中の小さなまとまりの上に付ける。
+Widget fieldLabel(BuildContext context, String text, {Key? key}) {
+  final theme = Theme.of(context);
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(
+      text,
+      key: key,
+      style: theme.textTheme.labelLarge?.copyWith(
+        fontSize: 13,
+        color: theme.colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
+}
+
+/// 補足の説明の文字（薄い色の小さな文字）。画面やダイアログの説明文をこの1つにそろえる。
+TextStyle? noteStyle(BuildContext context) =>
+    Theme.of(context).textTheme.bodySmall?.copyWith(height: 1.6);
+
+/// 文字だけのボタンと同じ行に並べる短い説明の文字。ボタンの文字と大きさをそろえ、色を控えめにする。
+TextStyle? inlineLabelStyle(BuildContext context) {
+  final theme = Theme.of(context);
+  return theme.textTheme.bodyMedium?.copyWith(
+    fontSize: 13.5,
+    color: theme.colorScheme.onSurfaceVariant,
+  );
+}
+
+/// フォームの補足の説明。欄の下や、保存の前に知らせることに使う。
+Widget fieldNote(
+  BuildContext context,
+  String text, {
+  Key? key,
+  double top = 6,
+}) => Padding(
+  padding: EdgeInsets.only(top: top),
+  child: Text(text, key: key, style: noteStyle(context)),
+);
+
+/// フォームの中のチェック欄・切り替え欄（CheckboxListTile・SwitchListTile）の詰め具合。
+/// 既定のままだと、印と文字の間が広く空き、フォームのほかの欄より一段内側に見える。
+const formTileDensity = VisualDensity(horizontal: -2, vertical: -2);
+
+/// フォームの中のチェック欄の、印と文字の間。
+const formTileGap = 10.0;
+
+/// フォームの中のチェック欄の題名の文字（ほかの欄の文字とそろえる）。
+TextStyle? formTileTitle(BuildContext context) => Theme.of(
+  context,
+).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500);
+
+/// メモの種類の切り替えに印を付けられる幅か（狭い画面では、印を外して文字を折り返させない）。
+bool wideKindChooser(BuildContext context) =>
+    MediaQuery.sizeOf(context).width >= 600;
+
+/// 選択欄（DropdownButtonFormField）の選んだ値の文字。既定（titleMedium）だと太く大きく、入力欄の文字とそろわない。
+TextStyle? fieldTextStyle(BuildContext context) =>
+    Theme.of(context).textTheme.bodyLarge;
+
+/// ダイアログの本文のスクロール。上下にまだ続きがあるときは、題名・ボタンとの境に細い線を引き、
+/// 欄が途中で切れているのではなく続いていることが分かるようにする。入力欄の枠が切れないよう、上下を少し空ける。
+class DialogScroll extends StatefulWidget {
+  const DialogScroll({super.key, required this.child});
+  final Widget child;
+  @override
+  State<DialogScroll> createState() => _DialogScrollState();
+}
+
+class _DialogScrollState extends State<DialogScroll> {
+  bool _above = false, _below = false;
+
+  bool _update(ScrollMetrics m, int depth) {
+    // 本文の中の複数行の入力欄も自分のスクロールを持つので、本文そのもの（深さ0）だけを見る。
+    if (depth != 0) return false;
+    final above = m.pixels > m.minScrollExtent + .5,
+        below = m.pixels < m.maxScrollExtent - .5;
+    if (above != _above || below != _below) {
+      setState(() {
+        _above = above;
+        _below = below;
+      });
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final line = BorderSide(color: Theme.of(context).colorScheme.outlineVariant);
+    return NotificationListener<ScrollMetricsNotification>(
+      onNotification: (n) => _update(n.metrics, n.depth),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (n) => _update(n.metrics, n.depth),
+        child: DecoratedBox(
+          position: DecorationPosition.foreground,
+          decoration: BoxDecoration(
+            border: Border(
+              top: _above ? line : BorderSide.none,
+              bottom: _below ? line : BorderSide.none,
+            ),
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: widget.child,
+          ),
+        ),
+      ),
+    );
+  }
 }
