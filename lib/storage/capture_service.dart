@@ -310,7 +310,7 @@ class CaptureService {
         'operation': 'capture',
         'kind': draft.kind,
         if (draft.project != null) 'project': draft.project,
-        'tool': 'context-hub-flutter',
+        'tool': 'context-hub-client',
         if (draft.gitDraftId != null)
           'meta': {
             'git_draft': draft.gitDraftId,
@@ -1209,7 +1209,7 @@ class CaptureService {
     final raw = encodePacket({
       'schema_version': 1,
       'request_id': requestId,
-      'source': 'flutter-client/$operationId',
+      'source': 'context-hub-client/$operationId',
       'occurred_at': occurredAt,
       ...fields,
     }, text);

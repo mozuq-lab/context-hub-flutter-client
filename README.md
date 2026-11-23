@@ -1,4 +1,4 @@
-# ContextHub Flutter
+# ContextHub Client
 
 [ContextHub](https://github.com/mozuq-lab/context-hub)のVault（Markdownのフォルダー）を、MacとAndroidで読んだり、メモを追加したりするためのアプリです。
 
@@ -117,8 +117,8 @@ Macでは⌘、Androidの物理キーボードではCtrlを使います。Macで
 
 **先にビルドが必要です。** ビルド済みのアプリはこのリポジトリでは配布していません。下の「[ビルド方法](#ビルド方法)」で作成してください。
 
-- **Mac**: `artifacts/ContextHub Flutter.app` をFinderから開きます。ターミナルから起動する必要はありません。
-- **Android**: `artifacts/context-hub-flutter-android.apk` を端末に転送してインストールします。このAPKは手元で使うための署名で、Playストアでは配布していません。実機のAndroid端末へのインストールは、まだ検証していません。
+- **Mac**: `artifacts/ContextHub Client.app` をFinderから開きます。ターミナルから起動する必要はありません。
+- **Android**: `artifacts/context-hub-client-android.apk` を端末に転送してインストールします。このAPKは手元で使うための署名で、Playストアでは配布していません。実機のAndroid端末へのインストールは、まだ検証していません。
 
 ### 基本の流れ
 
@@ -193,13 +193,13 @@ Nodeはビルド前の検証にだけ使います。端末でアプリを使う�
 git clone --recurse-submodules https://github.com/mozuq-lab/context-hub-flutter-client.git
 cd context-hub-flutter-client
 make verify                 # 静的解析とテスト（任意）
-make android                # → artifacts/context-hub-flutter-android.apk
-make macos                  # → artifacts/ContextHub Flutter.app とMac版ZIP（Macでのみ実行可）
+make android                # → artifacts/context-hub-client-android.apk
+make macos                  # → artifacts/ContextHub Client.app とMac版ZIP（Macでのみ実行可）
 ```
 
 `make` または `make help` でコマンド一覧を表示します。既存の `scripts/verify.sh`・`scripts/build.sh [all|macos|android]` も利用できます。`scripts/build.sh` を引数なしで実行すると、AndroidとMacの両方をビルドします（Macでのみ実行できます）。
 
-通常のMac版ZIPは `artifacts/context-hub-flutter-macos.zip` に保存します。
+通常のMac版ZIPは `artifacts/context-hub-client-macos.zip` に保存します。
 
 ### MacのDeveloper ID署名
 
@@ -209,7 +209,7 @@ make macos                  # → artifacts/ContextHub Flutter.app とMac版ZIP�
 MACOS_SIGN_IDENTITY='署名証明書のhash' make macos-signed
 ```
 
-署名検証後のアプリは `artifacts/ContextHub Flutter.app`、ZIPは `artifacts/context-hub-flutter-macos-developer-id.zip` に保存します。証明書名・Team ID・個人の絶対パスをMakefileや設定ファイルへ記載する必要はありません。署名済みアプリ自体には証明書の名義などが含まれます。名義を含めたくない場合は、通常の `make macos` を使ってください。
+署名検証後のアプリは `artifacts/ContextHub Client.app`、ZIPは `artifacts/context-hub-client-macos-developer-id.zip` に保存します。証明書名・Team ID・個人の絶対パスをMakefileや設定ファイルへ記載する必要はありません。署名済みアプリ自体には証明書の名義などが含まれます。名義を含めたくない場合は、通常の `make macos` を使ってください。
 
 署名時はAppleのタイムスタンプサーバーへ接続し、取得失敗時は停止します。ローカル確認用にタイムスタンプを付けない場合だけ、明示的に `MACOS_TIMESTAMP=none` を追加します。公証や公開は実行しません。
 

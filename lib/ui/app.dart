@@ -18,7 +18,7 @@ class ContextHubApp extends StatelessWidget {
   final HubController controller;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'ContextHub',
+    title: 'ContextHub Client',
     debugShowCheckedModeBanner: false,
     theme: hubTheme(Brightness.light),
     darkTheme: hubTheme(Brightness.dark),
@@ -372,7 +372,7 @@ class _HubShellState extends State<HubShell> {
           PlatformMenuItemGroup(
             members: [
               PlatformMenuItem(
-                label: 'ContextHub Flutterについて',
+                label: 'ContextHub Clientについて',
                 onSelected: () {
                   if (idle) about();
                 },
@@ -495,7 +495,7 @@ class _HubShellState extends State<HubShell> {
 
   void about() => showAboutDialog(
     context: context,
-    applicationName: 'ContextHub Flutter',
+    applicationName: 'ContextHub Client',
     applicationVersion: appVersion,
     applicationLegalese: 'MIT License · mozuq-lab',
   );
@@ -1443,7 +1443,7 @@ Future<void> showAttentionSettings(
 ) async {
   var enabled = c.attentionNotify, busy = false;
   String? problem = c.attentionNotify && c.attentionNotifyBlocked
-      ? '端末で通知が許可されていないため、いまは通知されません。端末の設定でContextHub Flutterの通知を許可してから、アプリを開き直してください。'
+      ? '端末で通知が許可されていないため、いまは通知されません。端末の設定でContextHub Clientの通知を許可してから、アプリを開き直してください。'
       : null;
   await showDialog<void>(
     context: context,
@@ -1485,7 +1485,7 @@ Future<void> showAttentionSettings(
                             ok = await c.setAttentionNotify(v);
                             if (!ok) {
                               problem =
-                                  '端末で通知が許可されていません。端末の設定でContextHub Flutterの通知を許可してから、もう一度お試しください。';
+                                  '端末で通知が許可されていません。端末の設定でContextHub Clientの通知を許可してから、もう一度お試しください。';
                             }
                           } catch (e) {
                             problem = HubController.message(e);

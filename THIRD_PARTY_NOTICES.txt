@@ -1,4 +1,4 @@
-ContextHub Flutterが使用する第三者ソフトウェアのライセンス
+ContextHub Clientが使用する第三者ソフトウェアのライセンス
 
 Flutterの「このアプリについて」→「ライセンス」でもruntimeの表記を確認できます。
 開発時検証用の依存も含みます。上流ContextHubはvendor/context-hub/LICENSEを参照してください。

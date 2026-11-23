@@ -12,7 +12,7 @@ class TempAccess extends VaultAccess {
   bool loseResponse = false;
   Future<void> init() async {
     directory = await Directory.systemTemp.createTemp(
-      'context-hub-flutter-test-',
+      'context-hub-client-test-',
     );
     await Directory('${directory.path}/state').create();
   }
@@ -111,7 +111,7 @@ void main() {
       (await access.readRequest(location, result.requestId))!,
     );
     expect(packet.body, draft.text);
-    expect(packet.meta['source'], 'flutter-client/$op');
+    expect(packet.meta['source'], 'context-hub-client/$op');
     expect(packet.meta['operation'], 'capture');
     expect(
       (await access.state('$op.json').readAsString()).contains(draft.text),

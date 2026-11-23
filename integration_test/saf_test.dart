@@ -22,7 +22,7 @@ void main() {
       final c = HubController(access, sampleLoader: loadSample);
       await tester.pumpWidget(ContextHubApp(controller: c));
       await tester.pumpAndSettle();
-      // ホスト側から専用emulatorのDocuments/ContextHubFlutterSAFを選択する。
+      // ホスト側から専用emulatorのDocuments/ContextHubClientSAFを選択する。
       final selected = await access.pickVault();
       expect(selected, isNotNull);
       await c.activate(selected!);

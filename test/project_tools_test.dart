@@ -271,7 +271,7 @@ void main() {
     final raw = encodePacket({
       'schema_version': 1,
       'request_id': id,
-      'source': 'flutter-client/x',
+      'source': 'context-hub-client/x',
       'occurred_at': '2026-10-03T10:00:00Z',
       'operation': 'project-create',
       'project_id': 'project-01jc3b7q8k9m0n1p2q3r4s5t6v',

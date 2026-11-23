@@ -1,4 +1,4 @@
-# ContextHub Flutter 開発ガイド
+# ContextHub Client 開発ガイド
 
 利用者向けの説明・ビルド手順は[README](README.md)にあります。このファイルは開発時だけに必要な規約・構成・検証手順をまとめます。
 

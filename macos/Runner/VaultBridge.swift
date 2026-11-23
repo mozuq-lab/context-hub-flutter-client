@@ -82,7 +82,7 @@ final class VaultBridge {
       base = URL(fileURLWithPath: path, isDirectory: true)
     } else {
       base = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        .appendingPathComponent("ContextHub Flutter", isDirectory: true)
+        .appendingPathComponent("ContextHub Client", isDirectory: true)
     }
     try fm.createDirectory(at: base, withIntermediateDirectories: true)
     return try physical(base)
@@ -279,7 +279,7 @@ final class VaultBridge {
       if status == errSecItemNotFound {
         var item = query
         item[kSecValueData as String] = data
-        item[kSecAttrLabel as String] = "ContextHub Flutter: Claude API key"
+        item[kSecAttrLabel as String] = "ContextHub Client: Claude API key"
         guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw Failure.io }
       } else if status != errSecSuccess {
         throw Failure.io
