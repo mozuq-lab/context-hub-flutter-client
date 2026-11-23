@@ -7673,7 +7673,13 @@ class _CaptureDialogState extends State<CaptureDialog> {
           key: const Key('capture-reference-title'),
           controller: referenceTitle,
           enabled: !locked,
-          maxLength: _referenceTitleMax,
+          // 上限は本体と同じくUTF-16の長さで数える（絵文字は2と数える）。超えた分は保存の前に知らせる。
+          buildCounter:
+              (context, {required currentLength, required isFocused, maxLength}) =>
+                  Text(
+                    '${referenceTitle.text.trim().length}/$_referenceTitleMax',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
           decoration: const InputDecoration(
             labelText: '資料の名前（任意）',
             helperText: '空のままなら、AIが読み取った要約を資料の名前にします。後から変えられます。',
@@ -8207,6 +8213,12 @@ class _CaptureDialogState extends State<CaptureDialog> {
       setState(
         () => error = '資料の名前は1行・$_referenceTitleMax文字以内で書いてください。',
       );
+      return;
+    }
+    if (title != null &&
+        (widget.controller.repository?.secretInReferenceTitle(title) ??
+            false)) {
+      setState(() => error = referenceTitleSecretMessage);
       return;
     }
     final checked = await checkSecretsBeforeSave(

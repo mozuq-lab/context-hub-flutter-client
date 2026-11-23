@@ -2334,7 +2334,10 @@ class HubRepository {
           path.startsWith('40_people/') ||
           path == unassignedActionsPath ||
           path == '90_system/now-items/$unassignedScope.json' ||
-          path == insightsPath) {
+          path == insightsPath ||
+          // 資料の一覧と資料の記録は資料棚の表示と依頼の確認にだけ使う（別AIへ渡す資料はメモ・処理記録から作る）。
+          path == '90_system/references.json' ||
+          path.startsWith('90_system/reference-marks/')) {
         continue;
       }
       final folder = RegExp(r'^10_projects/([^/]+)/').firstMatch(path)?[1];
@@ -2880,7 +2883,9 @@ class HubRepository {
                 (m['area'] != null && !validArea(m['area'])))) {
           throw const FormatException();
         }
-        final referenceMark = m['operation'] == 'reference-mark';
+        final referenceMark = m['operation'] == 'reference-mark',
+            referenceCapture =
+                m['operation'] == 'capture' && m['reference'] == true;
         if (referenceMark &&
             (doc.body.trim().isNotEmpty ||
                 m['confirmed'] != true ||
@@ -3802,7 +3807,7 @@ class HubRepository {
             final input = organizeRetry || referenceMark
                 ? null
                 : _inputs[(ack['result'] as Map)['inputId']];
-            if (actionCapture) {
+            if (actionCapture || referenceCapture) {
               final id = (ack['result'] as Map)['inputId'];
               if (id is! String || !inputIdPattern.hasMatch(id)) {
                 throw const FormatException();
@@ -3997,6 +4002,7 @@ class HubRepository {
           );
         }
         if (referenceMark) _referenceRequest(item, m, referenceMarkId);
+        if (referenceCapture) _captureReferenceRequest(item, capturedInputId);
         if (organizeRetry) {
           final inputId = m['input_id'] as String;
           if (item.state == 'waiting') {
@@ -4540,6 +4546,13 @@ class HubRepository {
     if (reason is Map && reason['code'] == 'conflict-missing') {
       return '戻す必要のある競合がありませんでした。既に生成版に戻っている可能性があります。';
     }
+    if (reason is Map && reason['code'] == 'reference-refused') {
+      return switch (reason['cause']) {
+        'secret' => referenceTitleSecretMessage,
+        'kind' => '資料にできるのはメモと作業要約だけです（本人が追加した行動と訂正は資料にできません）。',
+        _ => '資料にするメモが見つかりませんでした。同期してから、メモを確かめ直してください。',
+      };
+    }
     return '${error['code'] ?? '受け付けられず'}';
   }
 
@@ -4602,6 +4615,10 @@ class HubRepository {
       if (match == null) continue;
       try {
         final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (newerSchema(j)) {
+          _noteNewer(e.key);
+          continue;
+        }
         final at = timestamp(j['created_at']);
         if (j['schema_version'] != 1 ||
             j['id'] != match.group(1) ||
@@ -4661,7 +4678,9 @@ class HubRepository {
               title: optional(e['title']),
               aiSummary: optional(e['ai_summary']),
               addedByPerson: e['added_by'] == 'person',
+              markId: optional(e['mark_id']),
               unorganized: e['unorganized'] as bool,
+              failed: e['failed'] == true,
               // URLは本体がhttp・httpsだけを載せる。念のため、それ以外は開かない（載せない）。
               urls: strings(
                 e['urls'],
@@ -4686,6 +4705,7 @@ class HubRepository {
               inputId: e['input_id'] as String,
               label: e['label'] as String,
               title: optional(e['title']),
+              markId: optional(e['mark_id']),
               projects: strings(e['projects']),
               project: optional(e['project']),
               removedAt: timestamp(e['removed_at']),
@@ -4696,6 +4716,7 @@ class HubRepository {
       ];
       referenceIndex = ReferenceIndex(
         generatedAt: generated,
+        marksThrough: timestamp(j['marks_through']),
         entries: entries,
         removed: removed,
       );
@@ -4703,6 +4724,12 @@ class HubRepository {
       _problem(path);
     }
   }
+
+  /// 資料の名前に秘密情報らしい文字列があるか。名前は資料棚とHOMEにそのまま載るため、本体も断る。
+  bool secretInReferenceTitle(String title) =>
+      (secretPolicy.usable ? secretPolicy : SecretPolicy.builtin)
+          .find(title)
+          .isNotEmpty;
 
   /// このメモ（訂正を除いた元の入力のID）が資料棚に載っていれば、その資料。
   ReferenceEntry? referenceEntryOf(String inputId) => referenceIndex?.entries
@@ -4749,26 +4776,50 @@ class HubRepository {
   String? referenceRequestIdFor(String inputId) =>
       _outstandingReferences[inputId];
 
-  /// 資料の依頼の反映状況。記録の作成後に本体が資料の一覧を書き、同期されていれば反映済みとする。
+  /// 資料の依頼の反映状況。本体が記録を一覧に反映し（一覧の[ReferenceIndex.marksThrough]が記録の作成時刻以降）、
+  /// 同期されていれば反映済みとする。一覧で効いている記録が別の記録なら、より新しい判断が優先されたと示す。
+  /// 一覧を読めないときは、反映を確かめられないと示し、ほかの操作を止めない。
   void _referenceRequest(
     IntakeStatus item,
     Map<String, dynamic> m,
     String? recordId,
   ) {
-    var waiting = false;
-    if (item.state == 'accepted') {
-      final at = _referenceMarkTimes[recordId],
-          generated = referenceIndex?.generatedAt;
-      if (at == null || generated == null || generated.isBefore(at)) {
-        waiting = true;
-        item.detail = 'Mac miniが受け取り済み。資料棚の同期を待っています。';
-      } else {
-        item.detail = '資料棚に反映しました。';
-      }
-    } else if (item.state == 'waiting') {
-      waiting = true;
+    final inputId = m['input_id'] as String;
+    if (item.state == 'waiting') {
+      _outstandingReferences[inputId] = item.id;
+      return;
     }
-    if (waiting) _outstandingReferences[m['input_id'] as String] = item.id;
+    if (item.state != 'accepted') return;
+    final index = referenceIndex, at = _referenceMarkTimes[recordId];
+    if (index == null) {
+      item.detail = 'Mac miniが受け取り済み。資料の一覧を読めないため、反映を確かめられません。';
+      return;
+    }
+    final through = index.marksThrough ?? index.generatedAt;
+    if (at == null || through.isBefore(at)) {
+      _outstandingReferences[inputId] = item.id;
+      item.detail = 'Mac miniが受け取り済み。資料棚の同期を待っています。';
+      return;
+    }
+    final current =
+        referenceEntryOf(inputId)?.markId ?? removedReferenceOf(inputId)?.markId;
+    item.detail = current != null && current != recordId
+        ? 'Mac miniが受け取りましたが、より新しい判断が資料棚に効いています。'
+        : '資料棚に反映しました。';
+  }
+
+  /// 資料として保存したメモの反映状況。保存したメモが資料の一覧（資料棚か外した資料）に載るまで、反映待ちとする。
+  void _captureReferenceRequest(IntakeStatus item, String? inputId) {
+    if (inputId == null ||
+        !['accepted', 'organized', 'failed'].contains(item.state)) {
+      return;
+    }
+    final index = referenceIndex;
+    if (index == null) return;
+    if (referenceEntryOf(inputId) == null &&
+        removedReferenceOf(inputId) == null) {
+      _outstandingReferences[inputId] = item.id;
+    }
   }
 
   /// 資料の依頼の表示名（資料の名前・要約か、メモの題）。

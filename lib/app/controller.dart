@@ -1469,6 +1469,10 @@ class HubController extends ChangeNotifier {
     if (draft.reference && !repository!.intakeFeatures.references) {
       throw StateError('Mac miniの本体が「資料として保存」に対応していません。本体を更新してください。');
     }
+    if (draft.referenceTitle != null &&
+        repository!.secretInReferenceTitle(draft.referenceTitle!)) {
+      throw StateError(referenceTitleSecretMessage);
+    }
     final draftId = draft.gitDraftId;
     if (draftId != null) {
       // 保存確認待ちの操作がある間は、同じ下書きから二重に入力を作らない。
@@ -2105,6 +2109,9 @@ class HubController extends ChangeNotifier {
             (title != null &&
                 (action != 'add' || !validReferenceTitle(title, max: max)))) {
           throw StateError('資料の名前は1行・$max文字以内で、前後に空白を付けずに書いてください。');
+        }
+        if (title != null && parsed.secretInReferenceTitle(title)) {
+          throw StateError(referenceTitleSecretMessage);
         }
         final input = parsed.inputRecord(inputId);
         if (input == null) {

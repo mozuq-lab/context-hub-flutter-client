@@ -1653,6 +1653,10 @@ String normalizeProjectOutcome(String text) {
 /// 資料の名前の文字数の上限（本体の`REFERENCE_TITLE_CHARS`）。本体が`intake-features.json`で示す値を優先する。
 const referenceTitleChars = 100;
 
+/// 資料の名前に秘密情報らしい文字列があるときの案内。
+const referenceTitleSecretMessage =
+    '資料の名前に秘密情報らしい文字列があります。名前は資料棚とホームにそのまま載るので、別の名前にしてください。';
+
 /// 資料の名前として送れるか（1行・前後に空白なし・上限以内）。本体の検証と同じ規則。
 bool validReferenceTitle(Object? value, {int max = referenceTitleChars}) =>
     value is String &&
@@ -1673,7 +1677,9 @@ class ReferenceEntry {
     required this.title,
     required this.aiSummary,
     required this.addedByPerson,
+    this.markId,
     required this.unorganized,
+    this.failed = false,
     required this.urls,
     required this.skippedUrls,
     required this.projects,
@@ -1696,8 +1702,11 @@ class ReferenceEntry {
   /// 本人が資料にした（true）か、AIが参考資料に分類した（false）か。
   final bool addedByPerson;
 
-  /// AIがまだ読み取っていない（本人が資料にしたメモだけがこの状態で載る）。
-  final bool unorganized;
+  /// いま効いている本人の記録のID。AIの分類だけで載った資料ではnull。
+  final String? markId;
+
+  /// AIがまだ読み取っていない・読み取りに失敗した（本人が資料にしたメモだけがこの状態で載る）。
+  final bool unorganized, failed;
 
   /// 本文から取り出したURL（http・httpsだけ。取得・確認はしていない）と、載せなかったURLの数。
   final List<String> urls;
@@ -1716,6 +1725,7 @@ class RemovedReference {
     required this.inputId,
     required this.label,
     required this.title,
+    this.markId,
     required this.projects,
     required this.project,
     required this.removedAt,
@@ -1723,18 +1733,24 @@ class RemovedReference {
   });
   final String inputId, label;
   final String? title, project;
+
+  /// 外した記録のID。
+  final String? markId;
   final List<String> projects;
   final DateTime? removedAt, occurredAt;
 }
 
-/// 資料の一覧。[generatedAt]は本体が一覧を作った時刻（依頼が一覧に反映されたかの判断に使う）。
+/// 資料の一覧。[generatedAt]は本体が一覧を作った時刻、[marksThrough]は一覧に反映した記録の最新の作成時刻
+/// （依頼が一覧に反映されたかの判断に使う。古い本体ではnullで、[generatedAt]で判断する）。
 class ReferenceIndex {
   const ReferenceIndex({
     required this.generatedAt,
+    this.marksThrough,
     required this.entries,
     required this.removed,
   });
   final DateTime generatedAt;
+  final DateTime? marksThrough;
   final List<ReferenceEntry> entries;
   final List<RemovedReference> removed;
 }

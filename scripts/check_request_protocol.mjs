@@ -170,8 +170,8 @@ try{
   assert.deepEqual({input:record.input_id,action:record.action,title:record.title,source:record.source,event:record.source_event_id,decided:record.decided_at},{input:packet.input_id,action:packet.action,title:packet.title??null,source:packet.source,event:packet.request_id,decided:new Date(packet.occurred_at).toISOString()});
   await rebuildReferences(config);
   const index=await readReferenceIndex(vault),entry=index.entries.find(e=>e.input_id===packet.input_id);
-  if(packet.action==='add')assert.deepEqual({title:entry?.title,by:entry?.added_by,removed:index.removed.some(e=>e.input_id===packet.input_id)},{title:packet.title??null,by:'person',removed:false});
-  else{assert.equal(entry,undefined);assert.ok(index.removed.some(e=>e.input_id===packet.input_id));}
+  if(packet.action==='add')assert.deepEqual({title:entry?.title,by:entry?.added_by,mark:entry?.mark_id,removed:index.removed.some(e=>e.input_id===packet.input_id)},{title:packet.title??null,by:'person',mark:record.id,removed:false});
+  else{assert.equal(entry,undefined);assert.equal(index.removed.find(e=>e.input_id===packet.input_id)?.mark_id,record.id);}
   assert.equal(index.marks_through,record.created_at);
  }else if(packet.operation==='git-draft-dismiss'){
   assert.deepEqual({draftId:ack.result.draftId,dismissed:ack.result.dismissed},{draftId:packet.draft_id,dismissed:true});

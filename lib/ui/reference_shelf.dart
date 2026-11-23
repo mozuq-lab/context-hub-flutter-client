@@ -158,6 +158,7 @@ class _EntryCard extends StatelessWidget {
     final flags = [
       entry.addedByPerson ? '本人が追加' : 'AIが参考資料と読み取り',
       if (entry.unorganized) 'AIの読み取り待ち',
+      if (entry.failed) 'AIの読み取りに失敗',
       if (entry.pendingCorrection)
         '訂正の読み取り待ち'
       else if (entry.corrected)
@@ -203,7 +204,10 @@ class _EntryCard extends StatelessWidget {
                 onPressed: () => _openUrl(context, controller, url),
               ),
             if (entry.skippedUrls > 0)
-              entryNote(context, '秘密情報らしいURLを${entry.skippedUrls}件、一覧から外しています。'),
+              entryNote(
+                context,
+                '載せていないURLが${entry.skippedUrls}件あります（多すぎる・長すぎる・秘密情報らしい文字列を含む）。メモを開いて確かめてください。',
+              ),
             rowActions(
               context,
               Wrap(
@@ -437,6 +441,7 @@ Future<void> renameReference(
       aiSummary: aiSummary,
       max: max,
       adding: adding,
+      secret: controller.repository?.secretInReferenceTitle,
     ),
   );
   if (value == null || !context.mounted) return;
@@ -458,9 +463,13 @@ class ReferenceTitleDialog extends StatefulWidget {
     this.aiSummary,
     this.max = referenceTitleChars,
     this.adding = false,
+    this.secret,
   });
   final String? initial, aiSummary;
   final int max;
+
+  /// 名前に秘密情報らしい文字列があるか（なければ調べない）。
+  final bool Function(String title)? secret;
 
   /// 資料棚にないメモを、名前を付けて加えるとき。
   final bool adding;
@@ -484,6 +493,10 @@ class _ReferenceTitleDialogState extends State<ReferenceTitleDialog> {
       setState(() => error = '資料の名前は1行・${widget.max}文字以内で書いてください。');
       return;
     }
+    if (v.isNotEmpty && (widget.secret?.call(v) ?? false)) {
+      setState(() => error = referenceTitleSecretMessage);
+      return;
+    }
     Navigator.pop(context, (title: v.isEmpty ? null : v));
   }
 
@@ -500,7 +513,13 @@ class _ReferenceTitleDialogState extends State<ReferenceTitleDialog> {
             key: const Key('reference-title-field'),
             controller: text,
             autofocus: true,
-            maxLength: widget.max,
+            // 上限は本体と同じくUTF-16の長さで数える（絵文字は2と数える）。
+            buildCounter:
+                (context, {required currentLength, required isFocused, maxLength}) =>
+                    Text(
+                      '${text.text.trim().length}/${widget.max}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
             decoration: InputDecoration(
               labelText: '資料の名前（任意）',
               helperText: widget.aiSummary == null

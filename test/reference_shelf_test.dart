@@ -111,6 +111,27 @@ void main() {
         synced.intake.firstWhere((i) => i.id == add.requestId).detail,
         '資料棚に反映しました。',
       );
+      expect(entry.markId, startsWith('REFM-'));
+      // より新しい判断が一覧に効いていれば、そう示す。
+      final index = jsonDecode(added['90_system/references.json']!) as Map;
+      ((index['entries'] as List).single as Map)['mark_id'] =
+          'REFM-01KAXQZ0000000000000000000';
+      final superseded = HubRepository(
+        fixture({...added, '90_system/references.json': jsonEncode(index)}),
+      );
+      expect(
+        superseded.intake.firstWhere((i) => i.id == add.requestId).detail,
+        contains('より新しい判断'),
+      );
+      // 一覧を読めないときは、反映を確かめられないと示し、操作を止めない。
+      final unreadable = HubRepository(
+        fixture({...added}..remove('90_system/references.json')),
+      );
+      expect(unreadable.referenceRequestIdFor(inputId), isNull);
+      expect(
+        unreadable.intake.firstWhere((i) => i.id == add.requestId).detail,
+        contains('確かめられません'),
+      );
 
       // 外すと、外す前の名前を残して「外した資料」に移る。
       final remove = await service.saveReferenceMark(
@@ -157,20 +178,31 @@ void main() {
         captured.intake.firstWhere((i) => i.id == saved.requestId).title,
         '資料として保存: 集約の参考',
       );
-      final shelf = HubRepository(
-        fixture(
-          await protocol(
-            access,
-            saved.requestId,
-            'assets/sample.json',
-            'refm-capture',
-          ),
-        ),
+      final capturedFiles = await protocol(
+        access,
+        saved.requestId,
+        'assets/sample.json',
+        'refm-capture',
       );
+      final shelf = HubRepository(fixture(capturedFiles));
       expect(shelf.warnings, isEmpty);
       final reference = shelf.referencesFor(projectId).single;
       expect((reference.title, reference.addedByPerson), ('集約の参考', true));
       expect(reference.urls, ['https://example.org/hub']);
+      expect(shelf.referenceRequestIdFor(reference.inputId), isNull);
+      // 保存は受け付けられたが資料の一覧にまだ載っていない間は、資料の依頼を重ねない（名前を消さない）。
+      final list = jsonDecode(capturedFiles['90_system/references.json']!) as Map;
+      list['entries'] = [];
+      final lagging = HubRepository(
+        fixture({
+          ...capturedFiles,
+          '90_system/references.json': jsonEncode(list),
+        }),
+      );
+      expect(
+        lagging.referenceRequestIdFor(reference.inputId),
+        saved.requestId,
+      );
     } finally {
       await access.directory.delete(recursive: true);
     }
@@ -187,6 +219,8 @@ void main() {
     );
     expect(broken.referenceIndex, isNull);
     expect(broken.warnings.length, greaterThanOrEqualTo(2));
+    // 資料の一覧と記録は表示だけに使うので、別AIへ渡す資料は止めない。
+    expect(broken.copyBlocked(), isFalse);
     // 新しい形式の一覧は読まず、本体より古いアプリだと示す。
     final newer = HubRepository(
       fixture({
@@ -313,6 +347,17 @@ void main() {
         c.requestReferenceMark(inputId, 'remove'),
         throwsA(isA<StateError>()),
       );
+    });
+
+    testWidgets('秘密情報らしい資料の名前は送らない', (tester) async {
+      final access = MemoryUIAccess();
+      final c = await open(tester, access, shelfFiles);
+      const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123';
+      await expectLater(
+        c.requestReferenceMark(inputId, 'add', title: '鍵 $secret'),
+        throwsA(isA<StateError>()),
+      );
+      expect(access.requests, isEmpty);
     });
 
     testWidgets('記録の画面から資料に加え、資料棚にあれば外せる', (tester) async {
