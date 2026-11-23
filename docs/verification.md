@@ -357,6 +357,12 @@
 - 架空サンプルの画面を広い画面・狭い画面でテスト上に描画して確認（実機の書体・描画ではない）。
 - 未検証: MacとAndroidの実アプリでの表示と操作（この環境にXcodeとAndroid SDKがありません）。
 
+## アプリのアイコン（2026-11-23）
+
+- Mac・Androidのアイコンを、画面と同じ藍の地に白い「集まる線」のマークへ作り直した。`scripts/generate_icons.mjs`が1つの形の定義から、MacのAppIcon.appiconset（16〜1024px。16pxと32pxは線を太くし、影を描かない）、Androidのアダプティブアイコン（地とマークのベクター。テーマアイコンはマークをそのまま使う）、Android 7.x向けの画像を書き出す。アイコン長押しのショートカットとホーム画面ウィジェットの色も、画面と同じ藍と灰にそろえた。
+- 確認済み: 書き出しを繰り返しても同じファイルになること。Playwrightがないときは何も書き換えずに止まること。書き出した画像の各サイズの見た目と、マークがAndroidの安全域（中心から33dp）に収まること（ベクターを同じ座標でSVGに描き直して確認）。追加・変更したXMLが整形式であること。ウィジェットの文字とボタンの色のコントラスト（明るい表示・暗い表示とも4.5:1以上）。
+- 未検証: AndroidのGradle・aapt2でのビルドと、実機・エミュレーターでのアイコン（API 26以降のアダプティブアイコン、API 33以降のテーマアイコン、API 24・25の画像）とウィジェットの見え方。MacのDock・Finderでの見え方（この環境にAndroid SDKとXcodeがありません）。macOS 26以降で、角の形がAppleの形と一致しないアイコンとして灰色のタイルに入れられないか。
+
 ## 再検証
 
 基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.47.9を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。
