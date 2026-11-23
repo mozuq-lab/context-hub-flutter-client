@@ -3257,9 +3257,8 @@ class _HubViewState extends State<HubView> {
       final key = e.pick.itemKey,
           reported = repo.itemRequestIdFor(key) != null,
           finished = e.done || reported || e.someday;
-      return Padding(
+      return KeyedSubtree(
         key: Key('today-pick-${key.substring(0, 12)}'),
-        padding: const EdgeInsets.only(bottom: 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -3327,9 +3326,8 @@ class _HubViewState extends State<HubView> {
               e.done ||
               e.someday ||
               repo.itemRequestIdFor(key) != null;
-      return Padding(
+      return KeyedSubtree(
         key: Key('today-carry-${key.substring(0, 12)}'),
-        padding: const EdgeInsets.only(bottom: 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -3416,8 +3414,10 @@ class _HubViewState extends State<HubView> {
                         : '今日も続けるか、期日を付けるか、今日はやらないかを選んでください。',
                     style: noteStyle(context),
                   ),
-                  const SizedBox(height: 12),
-                  for (final e in carry) carryRow(e),
+                  const SizedBox(height: 4),
+                  ...dividedRows([for (final e in carry) carryRow(e)]),
+                  // 最後の行の操作と見分けられるよう、線で区切る。
+                  const Divider(height: 1),
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
@@ -3454,8 +3454,8 @@ class _HubViewState extends State<HubView> {
                     style: Theme.of(context).textTheme.titleMedium
                         ?.copyWith(fontWeight: FontWeight.w700),
                   ),
-                  const SizedBox(height: 12),
-                  for (final e in picks) pickRow(e),
+                  const SizedBox(height: 4),
+                  ...dividedRows([for (final e in picks) pickRow(e)]),
                 ],
               ),
             ),
@@ -4355,7 +4355,10 @@ class _HubViewState extends State<HubView> {
             subtitle: const Text('見直す日が来ると元の一覧に戻ります。'),
             childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
             expandedCrossAxisAlignment: CrossAxisAlignment.start,
-            children: [for (final e in resting) crossEntry(e)],
+            // 行の操作が次の行に付いて見えないよう、ほかの一覧と同じく線で区切る。
+            children: dividedRows([
+              for (final e in resting) crossEntry(e),
+            ], gap: 4),
           ),
         ),
       ],
@@ -4450,9 +4453,9 @@ class _HubViewState extends State<HubView> {
           ),
         ),
         if (project != null && entry != null)
-          nowEntry(project, w.section, entry, const {})
+          nowEntry(project, w.section, entry, const {}, top: 2)
         else
-          unassignedOwnRow(item),
+          unassignedOwnRow(item, top: 2),
       ],
     );
   }
@@ -4530,9 +4533,8 @@ class _HubViewState extends State<HubView> {
 
   /// プロジェクトを1行で示し、次の一手を足す・状態を変える操作を添える（次の一手がない・停滞しているプロジェクト）。
   Widget weeklyProjectRow(HubProject project, DateTime now, {String? note}) =>
-      Padding(
+      KeyedSubtree(
         key: Key('weekly-project-${project.id}'),
-        padding: const EdgeInsets.only(bottom: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -4593,12 +4595,14 @@ class _HubViewState extends State<HubView> {
         ),
       );
 
-  Widget weeklyCard(List<Widget> children) => Card(
+  /// 週次レビューの段の行を1枚の面にまとめる。行の間に線を引き、操作がどの行のものかを分かりやすくする。
+  /// 1行で完結する行（ListTile）は、上下の余白を足さない（[gap]を0にする）。
+  Widget weeklyCard(List<Widget> rows, {double gap = 12}) => Card(
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 14, 6),
+      padding: const EdgeInsets.fromLTRB(18, 2, 14, 2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: children,
+        children: dividedRows(rows, gap: gap),
       ),
     ),
   );
@@ -4694,7 +4698,7 @@ class _HubViewState extends State<HubView> {
                     ),
                   ),
                 ),
-            ]),
+            ], gap: 0),
           );
         }
         if (drafts.isNotEmpty) {
@@ -4710,7 +4714,7 @@ class _HubViewState extends State<HubView> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => widget.onNavigate('project:${p.id}'),
                 ),
-            ]),
+            ], gap: 0),
           );
         }
       case 'unassigned':
@@ -4830,7 +4834,7 @@ class _HubViewState extends State<HubView> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => widget.onNavigate('project:${project.id}'),
                 ),
-            ]),
+            ], gap: 0),
           );
         }
       case 'stale':
@@ -5103,12 +5107,12 @@ class _HubViewState extends State<HubView> {
       if (entries.isNotEmpty)
         Card(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(22, 14, 22, 6),
+            padding: const EdgeInsets.fromLTRB(18, 2, 14, 2),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+              children: dividedRows([
                 for (final e in entries) somedayRow(e, today, days),
-              ],
+              ]),
             ),
           ),
         ),
@@ -5161,9 +5165,8 @@ class _HubViewState extends State<HubView> {
           _ => '置いた日',
         },
         age = e.days(today);
-    return Padding(
+    return KeyedSubtree(
       key: Key('someday-$tag'),
-      padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -5409,37 +5412,29 @@ class _HubViewState extends State<HubView> {
                   ].join(' · '),
                 ),
               ),
+              // 1件ずつ線で区切り、欄の名前・本文・根拠・反応をその中にまとめる。
+              // 線がないと、反応のボタンが次の気づきの上に付いているように見えていた。
               for (final section in insightSectionLabels.keys)
-                if (items.any(
-                  (i) => i.section == section && shownKeys.contains(i.key),
-                )) ...[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 10, 16, 0),
-                    child: Text(
-                      insightSectionLabels[section]!,
-                      key: Key('home-insights-$section'),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                  ),
-                  for (final item in items)
-                    if (item.section == section && shownKeys.contains(item.key))
-                      insightEntry(item),
+                for (final (i, item) in items
+                    .where(
+                      (i) => i.section == section && shownKeys.contains(i.key),
+                    )
+                    .indexed) ...[
+                  const Divider(height: 1, indent: 16, endIndent: 16),
+                  insightEntry(item, firstInSection: i == 0),
                 ],
-              if (hidden > 0 || insightsExpanded)
+              if (hidden > 0 || insightsExpanded) ...[
+                const Divider(height: 1, indent: 16, endIndent: 16),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 0, 16, 8),
+                  padding: const EdgeInsets.fromLTRB(8, 4, 16, 4),
                   child: TextButton(
                     key: const Key('home-insights-more'),
                     onPressed: () =>
                         setState(() => insightsExpanded = !insightsExpanded),
                     child: Text(insightsExpanded ? 'たたむ' : 'ほか$hidden件を表示'),
                   ),
-                )
-              else
+                ),
+              ] else
                 const SizedBox(height: 8),
             ],
           ),
@@ -5467,7 +5462,7 @@ class _HubViewState extends State<HubView> {
 
   /// 今週の気づきの1件。本文はAIが書いたもので、そのまま文字として出す（Markdownとして解釈しない）。
   /// 反応（役に立った・的外れ）を付けられ、問いと止まっている意図には答えられる。
-  Widget insightEntry(InsightItem item) {
+  Widget insightEntry(InsightItem item, {bool firstInSection = false}) {
     // 反応と答えに対応していない本体には、依頼を出さない。
     final runId = repo.insights?.feedback == true ? repo.insights?.runId : null;
     final (:reaction, :pending) = repo.insightReactionOf(item);
@@ -5484,12 +5479,33 @@ class _HubViewState extends State<HubView> {
             if (record != null) open(record.id);
           },
         );
+    Widget links(String label, List<Widget> children) => Wrap(
+      spacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 2),
+          child: Text(label, style: theme.textTheme.bodySmall),
+        ),
+        ...children,
+      ],
+    );
     return Padding(
       key: Key('home-insight-${item.key}'),
-      padding: const EdgeInsets.fromLTRB(18, 2, 12, 6),
+      padding: const EdgeInsets.fromLTRB(18, 14, 14, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 欄の名前は各件の頭に付ける（たたんだ欄を開いても、どの欄の気づきかが分かる）。
+          Text(
+            insightSectionLabels[item.section] ?? item.section,
+            key: firstInSection ? Key('home-insights-${item.section}') : null,
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 4),
           Text(item.text, style: const TextStyle(height: 1.6)),
           if (item.firstStep != null)
             Padding(
@@ -5499,86 +5515,88 @@ class _HubViewState extends State<HubView> {
                 style: const TextStyle(fontSize: 13, height: 1.6),
               ),
             ),
-          rowActions(
-            context,
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text('根拠', style: theme.textTheme.bodySmall),
-                for (final source in item.sources)
-                  memoLink(
-                    Key('home-insight-source-${item.key}-${source.inputId}'),
-                    Icons.article_outlined,
-                    '${hubToday(source.at)}のメモ${source.corrected ? '（訂正あり）' : ''}',
-                    source.inputId,
-                  ),
-                if (item.answers.isNotEmpty) ...[
-                  const SizedBox(width: 6),
-                  Text('答え', style: theme.textTheme.bodySmall),
-                  for (final answer in item.answers)
-                    memoLink(
-                      Key('home-insight-answered-${item.key}-${answer.inputId}'),
-                      Icons.chat_bubble_outline,
-                      '${hubToday(answer.at)}のメモ',
-                      answer.inputId,
-                    ),
-                ],
-                // 反応と答えは、根拠と同じ行の後ろに並べる（広い画面では1行に収まる）。
-                if (runId != null) ...[
-                  const SizedBox(width: 8),
-                  for (final value in const ['useful', 'off-target'])
-                    ChoiceChip(
-                      key: Key('home-insight-$value-${item.key}'),
-                      label: Text(insightReactionLabels[value]!),
-                      avatar: Icon(
-                        value == 'useful'
-                            ? Icons.thumb_up_alt_outlined
-                            : Icons.thumb_down_alt_outlined,
-                        size: 14,
-                      ),
-                      labelStyle: const TextStyle(fontSize: 12.5),
-                      // 印と文字の間を詰める（既定では印の後ろが広く空く）。
-                      labelPadding: const EdgeInsets.only(left: 2, right: 6),
-                      visualDensity: VisualDensity.compact,
-                      selected: reaction == value,
-                      tooltip: reaction == value ? 'もう一度押すと反応を外します' : null,
-                      onSelected: busy
-                          ? null
-                          : (_) => reactToInsight(
-                              runId,
-                              item,
-                              reaction == value ? 'none' : value,
-                            ),
-                    ),
-                  if (insightAnswerSections.contains(item.section))
-                    TextButton.icon(
-                      key: Key('home-insight-answer-${item.key}'),
-                      onPressed: busy
-                          ? null
-                          : () => showCapture(
-                              context,
-                              c,
-                              answer: InsightAnswerTarget(
-                                runId: runId,
-                                itemKey: item.key,
-                                question: item.text,
+          const SizedBox(height: 4),
+          links('根拠', [
+            for (final source in item.sources)
+              memoLink(
+                Key('home-insight-source-${item.key}-${source.inputId}'),
+                Icons.article_outlined,
+                '${hubToday(source.at)}のメモ${source.corrected ? '（訂正あり）' : ''}',
+                source.inputId,
+              ),
+          ]),
+          if (item.answers.isNotEmpty)
+            links('答え', [
+              for (final answer in item.answers)
+                memoLink(
+                  Key('home-insight-answered-${item.key}-${answer.inputId}'),
+                  Icons.chat_bubble_outline,
+                  '${hubToday(answer.at)}のメモ',
+                  answer.inputId,
+                ),
+            ]),
+          // 反応と答えるは、根拠の下にこの気づきへの操作としてまとめる。
+          if (runId != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: rowActions(
+                context,
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    for (final value in const ['useful', 'off-target'])
+                      ChoiceChip(
+                        key: Key('home-insight-$value-${item.key}'),
+                        label: Text(insightReactionLabels[value]!),
+                        avatar: Icon(
+                          value == 'useful'
+                              ? Icons.thumb_up_alt_outlined
+                              : Icons.thumb_down_alt_outlined,
+                          size: 14,
+                        ),
+                        labelStyle: const TextStyle(fontSize: 12.5),
+                        // 印と文字の間を詰める（既定では印の後ろが広く空く）。
+                        labelPadding: const EdgeInsets.only(left: 2, right: 6),
+                        visualDensity: VisualDensity.compact,
+                        selected: reaction == value,
+                        tooltip: reaction == value ? 'もう一度押すと反応を外します' : null,
+                        onSelected: busy
+                            ? null
+                            : (_) => reactToInsight(
+                                runId,
+                                item,
+                                reaction == value ? 'none' : value,
                               ),
-                            ),
-                      icon: const Icon(Icons.edit_note, size: 18),
-                      label: const Text('答える'),
-                    ),
-                  if (pending)
-                    Text(
-                      '反映待ち',
-                      key: Key('home-insight-pending-${item.key}'),
-                      style: theme.textTheme.bodySmall,
-                    ),
-                ],
-              ],
+                      ),
+                    if (insightAnswerSections.contains(item.section))
+                      TextButton.icon(
+                        key: Key('home-insight-answer-${item.key}'),
+                        onPressed: busy
+                            ? null
+                            : () => showCapture(
+                                context,
+                                c,
+                                answer: InsightAnswerTarget(
+                                  runId: runId,
+                                  itemKey: item.key,
+                                  question: item.text,
+                                ),
+                              ),
+                        icon: const Icon(Icons.edit_note, size: 18),
+                        label: const Text('答える'),
+                      ),
+                    if (pending)
+                      Text(
+                        '反映待ち',
+                        key: Key('home-insight-pending-${item.key}'),
+                        style: theme.textTheme.bodySmall,
+                      ),
+                  ],
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -8060,7 +8078,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
             '同じことを書いていないか、続きの話ではないかを確かめられます。この端末に読み込んだ記録だけを、文字の重なりで探しています。',
             top: 2,
           ),
-          for (final hit in _related) _relatedRow(repo, hit),
+          // 行ごとの「…で保存する」が次の行に付いて見えないよう、線で区切る。
+          for (final (i, hit) in _related.indexed) ...[
+            if (i > 0) const Divider(height: 17),
+            _relatedRow(repo, hit),
+          ],
         ],
       ),
     );

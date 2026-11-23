@@ -219,6 +219,20 @@ Widget sourceLink(
   );
 }
 
+/// 本文とその下の操作を持つ行を、1枚の面の中に縦に並べる。行の間に細い線を引き、上下に同じ余白を取る。
+/// 線がないと、ある行の操作が次の行の上に付いているように見えるため。
+List<Widget> dividedRows(Iterable<Widget> rows, {double gap = 12}) => [
+  for (final (i, row) in rows.indexed) ...[
+    if (i > 0) const Divider(height: 1),
+    Padding(
+      // 行の鍵をこの包みにも付け、行が増減しても隣の行と取り違えないようにする。
+      key: row.key == null ? null : ValueKey(row.key),
+      padding: EdgeInsets.symmetric(vertical: gap),
+      child: row,
+    ),
+  ],
+];
+
 /// 項目の行に並べる操作（完了・今日やる・却下など）。文字を本文の色にし、印だけを藍にして、行が続いても目立ちすぎないようにする。
 Widget rowActions(BuildContext context, Widget child) {
   final theme = Theme.of(context);
