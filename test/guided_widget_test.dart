@@ -188,7 +188,7 @@ void main() {
     expect(find.text('何に迷っていますか？'), findsOneWidget);
     expect(find.byKey(const Key('guided-step-0')), findsNothing);
     // 閉じても、次に開くと続きから再開できる。
-    await tester.tap(find.byType(CloseButton));
+    await tester.tap(find.byKey(const Key('guided-page-close')));
     await tester.pumpAndSettle();
     expect(c.composing, isFalse);
     await tapKey(tester, 'project-guided');

@@ -144,8 +144,9 @@ class _GuidedPageState extends State<GuidedPage> {
   Future<bool> _confirm(String title, String body, String action) async =>
       await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => HubAlertDialog(
           title: Text(title),
+          onClose: () => Navigator.pop(context, false),
           content: SizedBox(width: 480, child: Text(body)),
           actions: [
             TextButton(
@@ -210,6 +211,8 @@ class _GuidedPageState extends State<GuidedPage> {
     canPop: !g.saving,
     child: Scaffold(
       appBar: AppBar(
+        // 閉じるボタンは、ほかのダイアログと同じく右上に置く（保存の途中は PopScope が閉じさせない）。
+        automaticallyImplyLeading: false,
         title: const Text('質問に答えてまとめる'),
         actions: [
           IconButton(
@@ -218,6 +221,14 @@ class _GuidedPageState extends State<GuidedPage> {
             icon: const Icon(Icons.tune),
             onPressed: g.ready ? () => showGuidedSettings(context, g) : null,
           ),
+          // 保存の途中は閉じられない（PopScope）ので、押せない見た目にする。
+          IconButton(
+            key: const Key('guided-page-close'),
+            tooltip: '閉じる',
+            icon: const Icon(Icons.close),
+            onPressed: g.saving ? null : () => Navigator.maybePop(context),
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: SafeArea(
@@ -989,8 +1000,9 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
   @override
   Widget build(BuildContext context) {
     final g = widget.controller, usage = g.usage;
-    return AlertDialog(
+    return HubAlertDialog(
       title: const Text('AIの設定'),
+      onClose: busy ? null : () => Navigator.pop(context),
       content: SizedBox(
         width: 520,
         child: DialogScroll(

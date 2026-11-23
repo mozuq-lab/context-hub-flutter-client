@@ -121,9 +121,10 @@ Future<void> showKeyboardHelp(BuildContext context) => showDialog<void>(
       ('Esc', 'メモ・訂正のフォームを閉じる（書きかけがないとき）'),
       (keyLabel(HubCommand.keyboardHelp.activator), 'この一覧'),
     ];
-    return AlertDialog(
+    return HubAlertDialog(
       key: const Key('keyboard-help'),
       title: const Text('キーボード操作'),
+      onClose: () => Navigator.pop(context),
       content: SizedBox(
         width: 520,
         child: DialogScroll(

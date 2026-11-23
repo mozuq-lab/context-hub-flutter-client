@@ -177,7 +177,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
       if (!mounted) return;
       final yes = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => HubAlertDialog(
           title: Text(
             action == 'retire'
                 ? 'この採用済み記録を適用停止しますか？'
@@ -187,6 +187,7 @@ class _ReviewDetailState extends State<ReviewDetail> {
                 ? 'この内容を採用しますか？'
                 : 'この候補を却下しますか？',
           ),
+          onClose: () => Navigator.pop(context, false),
           content: SizedBox(
             width: 650,
             child: DialogScroll(
@@ -287,8 +288,9 @@ class _ReviewDetailState extends State<ReviewDetail> {
       }
       final yes = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => HubAlertDialog(
           title: const Text('この方針はまだ有効ですか？'),
+          onClose: () => Navigator.pop(context, false),
           content: SizedBox(
             width: 650,
             child: DialogScroll(

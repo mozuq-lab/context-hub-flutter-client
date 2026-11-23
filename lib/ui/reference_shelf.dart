@@ -420,8 +420,9 @@ Future<void> removeReference(
 ) async {
   final ok = await showDialog<bool>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (context) => HubAlertDialog(
       title: const Text('資料棚から外しますか？'),
+      onClose: () => Navigator.pop(context, false),
       content: SizedBox(
         width: 520,
         child: Text(
@@ -531,8 +532,9 @@ class _ReferenceTitleDialogState extends State<ReferenceTitleDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => HubAlertDialog(
     title: Text(widget.adding ? '資料に加える' : '資料の名前を変える'),
+    onClose: () => Navigator.pop(context),
     content: SizedBox(
       width: 520,
       child: Column(

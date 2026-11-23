@@ -515,12 +515,43 @@ class _HubShellState extends State<HubShell> {
     ];
   }
 
-  void about() => showAboutDialog(
-    context: context,
-    applicationName: 'ContextHub Client',
-    applicationVersion: appVersion,
-    applicationLegalese: 'MIT License · mozuq-lab',
-  );
+  /// このアプリについて。Flutter の showAboutDialog は題名に閉じるボタンを置けないので、
+  /// ほかのダイアログと同じ形（右上に閉じるボタン）で同じ内容を出す。
+  void about() {
+    const name = 'ContextHub Client', legalese = 'MIT License · mozuq-lab';
+    showDialog<void>(
+      context: context,
+      builder: (dialog) => HubAlertDialog(
+        key: const Key('about-dialog'),
+        title: const Text(name),
+        onClose: () => Navigator.pop(dialog),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('バージョン $appVersion'),
+            const SizedBox(height: 12),
+            Text(legalese, style: noteStyle(dialog)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => showLicensePage(
+              context: dialog,
+              applicationName: name,
+              applicationVersion: appVersion,
+              applicationLegalese: legalese,
+            ),
+            child: const Text('ライセンスを表示'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: const Text('閉じる'),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// 画面全体のショートカット。Macではメニューバーにも同じ操作を並べる。
   Widget keyboard(Widget child) {
@@ -1396,9 +1427,10 @@ Future<void> showHomeWidgetSettings(
   final saved = await showDialog<HomeWidgetSettings>(
     context: context,
     builder: (context) => StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
+      builder: (context, setState) => HubAlertDialog(
         key: const Key('home-widget-dialog'),
         title: const Text('ホーム画面ウィジェットの表示'),
+        onClose: () => Navigator.pop(context),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: DialogScroll(
@@ -1535,9 +1567,10 @@ Future<void> _showNotificationSettings(
   await showDialog<void>(
     context: context,
     builder: (context) => StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
+      builder: (context, setState) => HubAlertDialog(
         key: Key('$name-dialog'),
         title: Text(title),
+        onClose: () => Navigator.pop(context),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: DialogScroll(
