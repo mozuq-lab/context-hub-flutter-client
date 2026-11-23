@@ -445,7 +445,8 @@ void main() {
       }
 
       Future<void> tapKey(WidgetTester tester, String key) async {
-        await tester.ensureVisible(find.byKey(Key(key)));
+        // 画面の外（スクロールの先）にある操作も、見える位置まで送ってから押す。
+        await tester.ensureVisible(find.byKey(Key(key), skipOffstage: false));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key(key)));
         await tester.pumpAndSettle();

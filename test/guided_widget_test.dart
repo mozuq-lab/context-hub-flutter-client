@@ -56,11 +56,34 @@ void main() {
   }
 
   Future<void> tapKey(WidgetTester tester, String key) async {
-    await tester.ensureVisible(find.byKey(Key(key)));
+    // 画面の外（スクロールの先）にある操作も、見える位置まで送ってから押す。
+    await tester.ensureVisible(find.byKey(Key(key), skipOffstage: false));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key(key)));
     await tester.pumpAndSettle();
   }
+
+  /// AIの設定のモデルの一覧を開いて選ぶ。
+  Future<void> pickModel(WidgetTester tester, String id) async {
+    await tapKey(tester, 'guided-model');
+    await tester.tap(find.byKey(Key('guided-model-$id')).last);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('狭い画面でもAIの設定のモデルとEffortがはみ出さずに選べる', (tester) async {
+    await openApp(tester, size: const Size(360, 740));
+    await tapKey(tester, 'nav-more');
+    await tapKey(tester, 'nav-guided');
+    await tapKey(tester, 'guided-settings');
+    expect(tester.takeException(), isNull);
+    await pickModel(tester, 'claude-sonnet-5-5');
+    expect(find.text('モデルをSonnet 5.5にしました。'), findsOneWidget);
+    await tapKey(tester, 'guided-question-effort');
+    await tester.tap(find.byKey(const Key('guided-question-effort-max')).last);
+    await tester.pumpAndSettle();
+    expect(find.text('問いのEffortをmaxにしました。'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('キーを登録し、選んで答え、直したまとめをInputへ保存できる', (tester) async {
     await openApp(tester);
@@ -84,8 +107,36 @@ void main() {
     await tapKey(tester, 'guided-key-save');
     expect(secrets.value, 'sk-ant-test-key-0000000000');
     expect(find.text('APIキー: 登録済み'), findsOneWidget);
+    // モデルはAIの設定で選び、端末に残す。入力中のキーは消さない。
+    await tester.enterText(find.byKey(const Key('guided-key')), '入力中');
+    await pickModel(tester, 'claude-sonnet-5-5');
+    expect(find.text('モデルをSonnet 5.5にしました。'), findsOneWidget);
+    expect(find.text('入力中'), findsOneWidget);
+    expect(
+      (jsonDecode(access.states[GuidedStore.fileName]!) as Map)['model'],
+      'claude-sonnet-5-5',
+    );
+    await pickModel(tester, 'claude-haiku-5-5');
+    expect(
+      tester.widget<Text>(find.byKey(const Key('guided-model-note'))).data,
+      contains('代わりのモデルはありません'),
+    );
+    await pickModel(tester, 'claude-opus-5-5');
+    await tapKey(tester, 'guided-summary-effort');
+    await tester.tap(find.byKey(const Key('guided-summary-effort-high')).last);
+    await tester.pumpAndSettle();
+    expect(find.text('まとめのEffortをhighにしました。'), findsOneWidget);
+    expect(
+      (jsonDecode(access.states[GuidedStore.fileName]!)
+          as Map)['summary_effort'],
+      'high',
+    );
     await tapKey(tester, 'guided-settings-close');
     expect(find.byKey(const Key('guided-no-key')), findsNothing);
+    expect(
+      find.textContaining('モデル: Opus 5.5・Effort: 問いlow／まとめhigh（AIの設定で変えられます）'),
+      findsOneWidget,
+    );
 
     // 資料は本人がオンにしたときだけ送る。送る全文は始める前に開いて見せ、そのまま送る。
     expect(
@@ -133,6 +184,9 @@ void main() {
 
     await tapKey(tester, 'guided-wrap');
     expect(find.byKey(const Key('guided-summary')), findsOneWidget);
+    expect(model.prompts.first.effort, 'low');
+    expect(model.prompts.last.effort, 'high');
+    expect(model.prompts.last.model, 'claude-opus-5-5');
     await tester.enterText(
       find.byKey(const Key('guided-summary')),
       '## まとめ\n読取を直し、テストとレビューをした。',

@@ -128,6 +128,9 @@ class GuidedState {
     this.session,
     required this.usage,
     this.monthlyLimit = defaultLimit,
+    this.model = guidedModel,
+    this.questionEffort = guidedQuestionEffort,
+    this.summaryEffort = guidedSummaryEffort,
     this.unreadable = false,
   });
   static const defaultLimit = 200, maxLimit = 10000;
@@ -141,6 +144,12 @@ class GuidedState {
 
   /// 月の呼び出し回数の上限。0ならClaude APIを呼ばない。
   int monthlyLimit;
+
+  /// 問いとまとめを作るモデル（[guidedModels]のID）。「AIの設定」で選ぶ。
+  String model;
+
+  /// 問いを作るとき・まとめを書くときのEffort（[guidedEfforts]のID）。「AIの設定」で選ぶ。
+  String questionEffort, summaryEffort;
 }
 
 /// `guided.json`（アプリ専用領域）の読み書き。Vaultには書かない。
@@ -167,7 +176,7 @@ class GuidedStore {
     try {
       final value = raw == null ? null : jsonDecode(raw);
       if (value is Map && value['version'] == 1) {
-        final limit = value['limit'];
+        final limit = value['limit'], model = value['model'];
         return GuidedState(
           session: GuidedSession.fromJson(value['session']),
           usage:
@@ -178,6 +187,16 @@ class GuidedStore {
               limit is int && limit >= 0 && limit <= GuidedState.maxLimit
               ? limit
               : GuidedState.defaultLimit,
+          // 選べないモデル（古い版・壊れた値）は既定に戻す。
+          model: guidedModelChoice(model is String ? model : null).id,
+          questionEffort: guidedEffortOr(
+            value['question_effort'],
+            guidedQuestionEffort,
+          ),
+          summaryEffort: guidedEffortOr(
+            value['summary_effort'],
+            guidedSummaryEffort,
+          ),
         );
       }
     } catch (_) {
@@ -190,6 +209,9 @@ class GuidedStore {
     'version': 1,
     'usage': state.usage.toJson(),
     'limit': state.monthlyLimit,
+    'model': state.model,
+    'question_effort': state.questionEffort,
+    'summary_effort': state.summaryEffort,
     if (state.session != null) 'session': state.session!.toJson(),
   });
 

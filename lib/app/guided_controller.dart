@@ -334,6 +334,8 @@ class GuidedController extends ChangeNotifier {
             projectTitle: _title(s),
             retryNote: note,
             secrets: secrets,
+            model: state!.model,
+            effort: state!.questionEffort,
           ),
           epoch,
         );
@@ -429,6 +431,8 @@ class GuidedController extends ChangeNotifier {
             projectTitle: _title(s),
             retryNote: note,
             secrets: secrets,
+            model: state!.model,
+            effort: state!.summaryEffort,
           ),
           epoch,
         );
@@ -684,6 +688,32 @@ class GuidedController extends ChangeNotifier {
     st.monthlyLimit = limit.clamp(0, GuidedState.maxLimit);
     await _persist();
     _changed();
+  }
+
+  /// 問いとまとめを作るモデルを選ぶ。途中の深掘りでは、次の呼び出しから使う。
+  /// 端末に残せたかどうかを返す（残せなくても、このコントローラーを使う画面を閉じるまでは選んだモデルを使う）。
+  Future<bool> setModel(String model) async {
+    final st = state;
+    if (st == null) return false;
+    st.model = guidedModelChoice(model).id;
+    final kept = await _persist();
+    _changed();
+    return kept;
+  }
+
+  /// 問いを作るとき（[summary]がfalse）・まとめを書くときのEffortを選ぶ。
+  /// 端末に残せたかどうかを返す（残せなくても、このコントローラーを使う画面を閉じるまでは選んだEffortを使う）。
+  Future<bool> setEffort(String effort, {required bool summary}) async {
+    final st = state;
+    if (st == null) return false;
+    if (summary) {
+      st.summaryEffort = guidedEffortOr(effort, guidedSummaryEffort);
+    } else {
+      st.questionEffort = guidedEffortOr(effort, guidedQuestionEffort);
+    }
+    final kept = await _persist();
+    _changed();
+    return kept;
   }
 
   /// 今月の利用（表示用）。

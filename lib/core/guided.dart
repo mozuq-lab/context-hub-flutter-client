@@ -2,8 +2,71 @@ import 'secrets.dart';
 import 'dart:convert';
 import 'parser.dart' show clip, projectIdPattern;
 
-/// 選んで深掘りで問いとまとめを作るモデル。MVPではモデルの切り替え画面を作らない。
+/// 選んで深掘りで問いとまとめを作るモデルの既定。「AIの設定」で[guidedModels]から選び直せる。
 const guidedModel = 'claude-opus-5-5';
+
+/// 「AIの設定」で選べるモデル。[fallback]は、安全上の理由で断られたときにAnthropic側で
+/// 別のモデルが代わりに答える仕組み（サーバー側の代替）を使えるか（Haikuにはない）。
+typedef GuidedModelChoice = ({
+  String id,
+  String label,
+  String note,
+  bool fallback,
+});
+
+const guidedModels = <GuidedModelChoice>[
+  (
+    id: 'claude-opus-5-5',
+    label: 'Opus 5.5',
+    note: '問いとまとめの質をいちばん重視します（既定）。',
+    fallback: true,
+  ),
+  (
+    id: 'claude-sonnet-5-5',
+    label: 'Sonnet 5.5',
+    note: '費用はOpusの約半分で、応答も速めです。',
+    fallback: true,
+  ),
+  (
+    id: 'claude-haiku-5-5',
+    label: 'Haiku 5.5',
+    note: '費用がいちばん安く速いですが、問いやまとめは浅くなることがあります。安全上の理由で応答が控えられたときの代わりのモデルはありません。',
+    fallback: false,
+  ),
+];
+
+/// 「AIの設定」で選べるEffort（考える深さ）。深いほど時間と出力トークン（費用）が増える。
+/// 3つのモデルのどれでも使える。
+const guidedEfforts = <({String id, String label})>[
+  (id: 'low', label: 'low（速い・浅め）'),
+  (id: 'medium', label: 'medium（標準）'),
+  (id: 'high', label: 'high（深め）'),
+  (id: 'xhigh', label: 'xhigh（さらに深め）'),
+  (id: 'max', label: 'max（最大）'),
+];
+
+/// 問いを作るときと、まとめを書くときのEffortの既定。
+const guidedQuestionEffort = 'low', guidedSummaryEffort = 'medium';
+
+/// 選べるEffortならそのまま、そうでなければ[fallback]。
+String guidedEffortOr(Object? effort, String fallback) =>
+    guidedEfforts.any((e) => e.id == effort) ? effort as String : fallback;
+
+/// Effortに応じた1回の呼び出しの上限。深く考えるほど応答が長く遅くなるため、
+/// 出力の上限（考える分を含む）と全体の時間を広げる。
+({int maxTokens, Duration timeout}) _budget(String effort, Duration base) =>
+    switch (effort) {
+      'high' => (maxTokens: 32000, timeout: base * 1.5),
+      'xhigh' => (maxTokens: 64000, timeout: base * 2),
+      'max' => (maxTokens: 64000, timeout: base * 2.5),
+      _ => (maxTokens: 16000, timeout: base),
+    };
+
+/// 選べるモデルのID（[guidedModels]にないものは既定に戻す）。
+GuidedModelChoice guidedModelChoice(String? id) => guidedModels.firstWhere(
+  (m) => m.id == id,
+  orElse: () => guidedModels.first,
+);
 
 /// 1回の呼び出しで使ったトークンの種類別の数。入力は、キャッシュに当たらなかった分（[input]）、
 /// キャッシュへ書いた分（[cacheWrite]）、キャッシュから読んだ分（[cacheRead]）で料金が違う。
@@ -87,6 +150,20 @@ const claudePrices =
         cacheWrite: 6.25,
         cacheRead: 0.5,
         output: 25,
+      ),
+      'claude-sonnet-5-5': (
+        input: 2,
+        cacheWrite: 2.5,
+        cacheRead: 0.1,
+        output: 10,
+      ),
+      'claude-sonnet-5': (input: 2, cacheWrite: 2.5, cacheRead: 0.2, output: 10),
+      // 依頼が10万トークン以下のときの料金（深掘りの依頼はこれを超えない）。
+      'claude-haiku-5-5': (
+        input: 0.1,
+        cacheWrite: 0.125,
+        cacheRead: 0.01,
+        output: 0.5,
       ),
     };
 
@@ -563,8 +640,12 @@ class GuidedPrompt {
     required this.maxTokens,
     required this.timeout,
     this.idleTimeout = const Duration(seconds: 90),
+    this.model = guidedModel,
   });
   final String system, context, turn, effort;
+
+  /// 依頼するモデル（[guidedModels]のID）。
+  final String model;
   final Map<String, Object?> schema;
   final int maxTokens;
 
@@ -722,8 +803,12 @@ GuidedPrompt guidedQuestionPrompt(
   String? projectTitle,
   String? retryNote,
   SecretPolicy secrets = SecretPolicy.builtin,
+  String model = guidedModel,
+  String effort = guidedQuestionEffort,
 }) {
   _requireUsable(secrets);
+  effort = guidedEffortOr(effort, guidedQuestionEffort);
+  final budget = _budget(effort, const Duration(seconds: 240));
   final n = s.steps.length + 1;
   final turn =
       StringBuffer(_turn(s, projectTitle: projectTitle, secrets: secrets))
@@ -740,9 +825,10 @@ GuidedPrompt guidedQuestionPrompt(
     context: secrets.redactLines(_contextBlock(s)),
     turn: secrets.redactLines(turn.toString()),
     schema: _questionSchema,
-    effort: 'low',
-    maxTokens: 16000,
-    timeout: const Duration(seconds: 240),
+    effort: effort,
+    maxTokens: budget.maxTokens,
+    timeout: budget.timeout,
+    model: guidedModelChoice(model).id,
   );
 }
 
@@ -752,8 +838,12 @@ GuidedPrompt guidedSummaryPrompt(
   String? projectTitle,
   String? retryNote,
   SecretPolicy secrets = SecretPolicy.builtin,
+  String model = guidedModel,
+  String effort = guidedSummaryEffort,
 }) {
   _requireUsable(secrets);
+  effort = guidedEffortOr(effort, guidedSummaryEffort);
+  final budget = _budget(effort, const Duration(seconds: 360));
   final turn =
       StringBuffer(_turn(s, projectTitle: projectTitle, secrets: secrets))
         ..writeln()
@@ -769,9 +859,10 @@ GuidedPrompt guidedSummaryPrompt(
     context: secrets.redactLines(_contextBlock(s)),
     turn: secrets.redactLines(turn.toString()),
     schema: _summarySchema(s.purpose),
-    effort: 'medium',
-    maxTokens: 16000,
-    timeout: const Duration(seconds: 360),
+    effort: effort,
+    maxTokens: budget.maxTokens,
+    timeout: budget.timeout,
+    model: guidedModelChoice(model).id,
   );
 }
 

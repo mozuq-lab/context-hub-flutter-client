@@ -631,6 +631,39 @@ void main() {
       final broken = await store.read(DateTime(2026, 11, 1));
       expect(broken.session, isNull);
       expect(broken.monthlyLimit, GuidedState.defaultLimit);
+      expect(broken.model, guidedModel);
+    });
+    test('選んだモデルを残し、選べないモデルや古い状態は既定に戻す', () async {
+      final access = TempAccess();
+      await access.init();
+      addTearDown(() => access.directory.delete(recursive: true));
+      final store = GuidedStore(access);
+      final now = DateTime(2026, 11, 7);
+      await store.write(
+        GuidedState(
+          usage: const GuidedUsage('2026-11'),
+          model: 'claude-sonnet-5-5',
+        ),
+      );
+      expect((await store.read(now)).model, 'claude-sonnet-5-5');
+      for (final model in ['claude-unknown-9', 12, null]) {
+        await access.writeState(
+          'guided.json',
+          jsonEncode({
+            'version': 1,
+            'usage': const GuidedUsage('2026-11').toJson(),
+            'limit': 9,
+            'model': ?model,
+            'question_effort': ?model,
+            'summary_effort': ?model,
+          }),
+        );
+        final read = await store.read(now);
+        expect(read.model, guidedModel, reason: '$model');
+        expect(read.monthlyLimit, 9);
+        expect(read.questionEffort, 'low');
+        expect(read.summaryEffort, 'medium');
+      }
     });
   });
 
@@ -695,6 +728,103 @@ void main() {
       expect(content[0]['cache_control'], {'type': 'ephemeral'});
       expect(content[0]['text'], contains('資料本文'));
       expect(content[1].containsKey('cache_control'), isFalse);
+    });
+    test('選んだモデルで送り、Haikuにはサーバー側の代替を付けない', () async {
+      HttpReply ok() => HttpReply(
+        200,
+        jsonEncode({
+          'model': 'claude-haiku-5-5',
+          'stop_reason': 'end_turn',
+          'content': [
+            {'type': 'text', 'text': '{}'},
+          ],
+          'usage': {'input_tokens': 1, 'output_tokens': 1},
+        }),
+      );
+      final sonnet = FakeTransport(ok());
+      await ClaudeClient(transport: sonnet).send(
+        guidedQuestionPrompt(session(), model: 'claude-sonnet-5-5'),
+        apiKey: 'sk-ant-test-key-0000000000',
+      );
+      final sent = jsonDecode(sonnet.body!) as Map;
+      expect(sent['model'], 'claude-sonnet-5-5');
+      expect(sent['fallbacks'], 'default');
+      expect(sonnet.headers!['anthropic-beta'], ClaudeClient.fallbackBeta);
+
+      final haiku = FakeTransport(ok());
+      await ClaudeClient(transport: haiku).send(
+        guidedSummaryPrompt(session(), model: 'claude-haiku-5-5'),
+        apiKey: 'sk-ant-test-key-0000000000',
+      );
+      final body = jsonDecode(haiku.body!) as Map;
+      expect(body['model'], 'claude-haiku-5-5');
+      expect(body.containsKey('fallbacks'), isFalse);
+      expect(haiku.headers!.containsKey('anthropic-beta'), isFalse);
+      expect(body['output_config']['effort'], 'medium');
+
+      // 選べないモデルは既定に戻して送る。
+      expect(
+        guidedQuestionPrompt(session(), model: 'claude-unknown-9').model,
+        guidedModel,
+      );
+    });
+    test('応答にモデル名がないときは、選んだモデルの利用として数える', () async {
+      final transport = FakeTransport(
+        HttpReply(
+          200,
+          jsonEncode({
+            'stop_reason': 'end_turn',
+            'content': [
+              {'type': 'text', 'text': '{}'},
+            ],
+            'usage': {'input_tokens': 7, 'output_tokens': 3},
+          }),
+        ),
+      );
+      final reply = await ClaudeClient(transport: transport).send(
+        guidedQuestionPrompt(session(), model: 'claude-sonnet-5-5'),
+        apiKey: 'sk-ant-test-key-0000000000',
+      );
+      expect(reply.model, 'claude-sonnet-5-5');
+      expect(reply.usage, {
+        'claude-sonnet-5-5': const TokenUsage(input: 7, output: 3),
+      });
+    });
+    test('Haikuで応答を控えられたときは、OpusかSonnetを選ぶよう案内する', () async {
+      Future<String> refused(String model) => ClaudeClient(
+        transport: FakeTransport(
+          HttpReply(200, jsonEncode({'stop_reason': 'refusal', 'content': []})),
+        ),
+      )
+          .send(
+            guidedQuestionPrompt(session(), model: model),
+            apiKey: 'sk-ant-test-key-0000000000',
+          )
+          .then<String>(
+            (_) => '',
+            onError: (Object e) => (e as ModelException).message,
+          );
+      expect(await refused('claude-haiku-5-5'), contains('OpusかSonnetを選んで'));
+      expect(await refused('claude-opus-5-5'), isNot(contains('OpusかSonnet')));
+    });
+    test('モデルが見つからないときは、依頼したモデルの名前を示す', () async {
+      final transport = FakeTransport(
+        const HttpReply(
+          404,
+          '{"type":"error","error":{"type":"not_found_error","message":"model"}}',
+        ),
+      );
+      final error = await ClaudeClient(transport: transport)
+          .send(
+            guidedQuestionPrompt(session(), model: 'claude-haiku-5-5'),
+            apiKey: 'sk-ant-test-key-0000000000',
+          )
+          .then<ModelException?>(
+            (_) => null,
+            onError: (Object e) => e as ModelException,
+          );
+      expect(error!.message, contains('claude-haiku-5-5'));
+      expect(error.message, contains('別のモデルを選ぶ'));
     });
     test('サーバー側の代替が働いたときは試行ごとの使用量を合計し、断られた応答も数える', () async {
       final reply = await ClaudeClient(
@@ -1575,6 +1705,63 @@ void main() {
       await g.ask();
       expect(g.active!.current!.text, '誰が使う？');
       expect(g.usage!.calls, 1);
+    });
+
+    test('AIの設定で選んだモデルで問いとまとめを依頼し、端末に残す', () async {
+      model.replies.addAll([
+        question('Q1', ['a', 'b']),
+        question('Q2', ['c', 'd']),
+        recordSummary(),
+      ]);
+      final g = await started();
+      expect(model.prompts.single.model, guidedModel);
+      expect(await g.setModel('claude-sonnet-5-5'), isTrue);
+      await g.answer(const GuidedAnswer.selected(['a']));
+      expect(model.prompts.last.model, 'claude-sonnet-5-5');
+      expect(await g.setModel('claude-haiku-5-5'), isTrue);
+      await g.summarize();
+      expect(model.prompts.last.model, 'claude-haiku-5-5');
+      expect((await GuidedStore(access).read(now)).model, 'claude-haiku-5-5');
+      // 選べないモデルは既定に戻す。
+      await g.setModel('claude-unknown-9');
+      expect(g.state!.model, guidedModel);
+      // 端末に残せなくても、開いている間は選んだモデルを使う。残せなかったことは返す。
+      access.failGuided = true;
+      expect(await g.setModel('claude-haiku-5-5'), isFalse);
+      expect(await g.setEffort('high', summary: true), isFalse);
+      expect(g.state!.model, 'claude-haiku-5-5');
+      expect(g.state!.summaryEffort, 'high');
+      access.failGuided = false;
+    });
+
+    test('AIの設定で選んだEffortで問いとまとめを依頼し、深いほど上限を広げる', () async {
+      model.replies.addAll([
+        question('Q1', ['a', 'b']),
+        question('Q2', ['c', 'd']),
+        recordSummary(),
+      ]);
+      final g = await started();
+      expect(model.prompts.single.effort, 'low');
+      expect(model.prompts.single.maxTokens, 16000);
+      expect(await g.setEffort('xhigh', summary: false), isTrue);
+      expect(await g.setEffort('max', summary: true), isTrue);
+      await g.answer(const GuidedAnswer.selected(['a']));
+      expect(model.prompts.last.effort, 'xhigh');
+      expect(model.prompts.last.maxTokens, 64000);
+      expect(model.prompts.last.timeout, const Duration(seconds: 480));
+      await g.summarize();
+      expect(model.prompts.last.effort, 'max');
+      expect(model.prompts.last.timeout, const Duration(seconds: 900));
+      final kept = await GuidedStore(access).read(now);
+      expect(kept.questionEffort, 'xhigh');
+      expect(kept.summaryEffort, 'max');
+      // 選べない値は既定に戻す。
+      await g.setEffort('extreme', summary: false);
+      expect(g.state!.questionEffort, 'low');
+      expect(
+        guidedSummaryPrompt(session(), effort: 'extreme').effort,
+        'medium',
+      );
     });
 
     test('答え直すと以降の回答を消し、まとめから問いへ戻れる', () async {

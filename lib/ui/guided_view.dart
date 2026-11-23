@@ -502,7 +502,7 @@ class _GuidedPageState extends State<GuidedPage> {
         style: _small,
       ),
       Text(
-        '今月の呼び出し: ${usage.calls} / ${st.monthlyLimit}回（1回の問答で、問いの数＋1回ほど）',
+        '今月の呼び出し: ${usage.calls} / ${st.monthlyLimit}回（1回の問答で、問いの数＋1回ほど）・モデル: ${guidedModelChoice(st.model).label}・Effort: 問い${st.questionEffort}／まとめ${st.summaryEffort}（AIの設定で変えられます）',
         key: const Key('guided-usage'),
         style: _small,
       ),
@@ -970,7 +970,12 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
     super.dispose();
   }
 
-  Future<void> _run(Future<String?> Function() action, String done) async {
+  /// [clearKey]は、キーの保存・削除のとき。ほかの設定を保存しても、入力中のキーは消さない。
+  Future<void> _run(
+    Future<String?> Function() action,
+    String done, {
+    bool clearKey = false,
+  }) async {
     setState(() => busy = true);
     final problem = await action();
     if (!mounted) return;
@@ -978,7 +983,7 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
       busy = false;
       failed = problem != null;
       message = problem ?? done;
-      if (problem == null) key.clear();
+      if (problem == null && clearKey) key.clear();
     });
   }
 
@@ -997,9 +1002,52 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
     }, '月の上限を$n回にしました。');
   }
 
+  Future<void> _setModel(String id) async {
+    final label = guidedModelChoice(id).label;
+    await _run(
+      () async => await widget.controller.setModel(id)
+          ? null
+          : '端末に設定を残せませんでした。「質問に答えてまとめる」の画面を開いている間は$labelを使いますが、次に開いたときは前の設定に戻ることがあります。',
+      'モデルを$labelにしました。',
+    );
+  }
+
+  Widget _effortField({
+    required String name,
+    required String label,
+    required String value,
+    required bool summary,
+  }) => DropdownButtonFormField<String>(
+    key: Key(name),
+    style: fieldTextStyle(context),
+    initialValue: value,
+    isExpanded: true,
+    decoration: InputDecoration(labelText: label),
+    items: [
+      for (final e in guidedEfforts)
+        DropdownMenuItem(
+          value: e.id,
+          child: Text(e.label, key: Key('$name-${e.id}')),
+        ),
+    ],
+    onChanged: busy || widget.controller.state == null
+        ? null
+        : (v) {
+            if (v == null) return;
+            _run(
+              () async =>
+                  await widget.controller.setEffort(v, summary: summary)
+                  ? null
+                  : '端末に設定を残せませんでした。「質問に答えてまとめる」の画面を開いている間は$vを使いますが、次に開いたときは前の設定に戻ることがあります。',
+              '${summary ? 'まとめ' : '問い'}のEffortを$vにしました。',
+            );
+          },
+  );
+
   @override
   Widget build(BuildContext context) {
     final g = widget.controller, usage = g.usage;
+    final model = guidedModelChoice(g.state?.model);
     return HubAlertDialog(
       title: const Text('AIの設定'),
       onClose: busy ? null : () => Navigator.pop(context),
@@ -1048,7 +1096,11 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
                     key: const Key('guided-key-save'),
                     onPressed: busy
                         ? null
-                        : () => _run(() => g.setKey(key.text), 'APIキーを保存しました。'),
+                        : () => _run(
+                            () => g.setKey(key.text),
+                            'APIキーを保存しました。',
+                            clearKey: true,
+                          ),
                     child: const Text('キーを保存'),
                   ),
                   if (g.hasKey)
@@ -1056,10 +1108,69 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
                       key: const Key('guided-key-delete'),
                       onPressed: busy
                           ? null
-                          : () => _run(g.deleteKey, 'APIキーを削除しました。'),
+                          : () => _run(
+                              g.deleteKey,
+                              'APIキーを削除しました。',
+                              clearKey: true,
+                            ),
                       child: const Text('キーを削除'),
                     ),
                 ],
+              ),
+              const Divider(height: 32),
+              Text('モデル', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                key: const Key('guided-model'),
+                style: fieldTextStyle(context),
+                initialValue: model.id,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '問いとまとめを作るモデル'),
+                items: [
+                  for (final m in guidedModels)
+                    DropdownMenuItem(
+                      value: m.id,
+                      child: Text(m.label, key: Key('guided-model-${m.id}')),
+                    ),
+                ],
+                onChanged: busy || g.state == null
+                    ? null
+                    : (picked) {
+                        if (picked != null) _setModel(picked);
+                      },
+              ),
+              const SizedBox(height: 6),
+              Text(
+                model.fallback
+                    ? '${model.note}安全上の理由でこのモデルが応答を控えたときは、Anthropic側で別のモデルが代わりに答えることがあります。実際に応答したモデルはメモに記録します。'
+                    : '${model.note}実際に応答したモデルはメモに記録します。',
+                key: const Key('guided-model-note'),
+                style: _small,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Effort（考える深さ）',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              _effortField(
+                name: 'guided-question-effort',
+                label: '問いを作るとき',
+                value: g.state?.questionEffort ?? guidedQuestionEffort,
+                summary: false,
+              ),
+              const SizedBox(height: 12),
+              _effortField(
+                name: 'guided-summary-effort',
+                label: 'まとめを書くとき',
+                value: g.state?.summaryEffort ?? guidedSummaryEffort,
+                summary: true,
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                '深くするほど、答えが返るまでの時間と費用（考える分を含む出力トークン）が増えます。既定は問いがlow、まとめがmediumです。',
+                key: Key('guided-effort-note'),
+                style: _small,
               ),
               const Divider(height: 32),
               TextField(
@@ -1089,11 +1200,6 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
                 ),
                 for (final line in usageLines(usage)) Text(line, style: _small),
               ],
-              const SizedBox(height: 8),
-              const Text(
-                'モデル: $guidedModel（アプリで固定）。安全上の理由でこのモデルが応答を控えたときは、Anthropic側で別のモデルが代わりに答えることがあります。実際に応答したモデルはメモに記録します。',
-                style: _small,
-              ),
               if (message != null) ...[
                 const SizedBox(height: 12),
                 NoticeBox(message!, error: failed),

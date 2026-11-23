@@ -387,8 +387,9 @@ class ClaudeClient implements ModelClient {
 
   /// 送る本文。資料のブロックにキャッシュの印を付け、2問目以降は同じ前半を再利用できるようにする。
   /// 応答は少しずつ受け取り（stream）、途中で途切れても使ったトークンを数えられるようにする。
+  /// Haikuにはサーバー側の代替がないため、`fallbacks`もベータの指定も付けない。
   static Map<String, Object?> body(GuidedPrompt p) => {
-    'model': guidedModel,
+    'model': guidedModelChoice(p.model).id,
     'max_tokens': p.maxTokens,
     'stream': true,
     'system': p.system,
@@ -409,14 +410,17 @@ class ClaudeClient implements ModelClient {
       'effort': p.effort,
       'format': {'type': 'json_schema', 'schema': p.schema},
     },
-    'fallbacks': 'default',
+    if (guidedModelChoice(p.model).fallback) 'fallbacks': 'default',
   };
 
-  static Map<String, String> headers(String apiKey) => {
+  static Map<String, String> headers(
+    String apiKey, {
+    required String model,
+  }) => {
     'content-type': 'application/json',
     'x-api-key': apiKey,
     'anthropic-version': apiVersion,
-    'anthropic-beta': fallbackBeta,
+    if (guidedModelChoice(model).fallback) 'anthropic-beta': fallbackBeta,
   };
 
   @override
@@ -427,12 +431,12 @@ class ClaudeClient implements ModelClient {
 
   @override
   Future<ModelReply> send(GuidedPrompt prompt, {required String apiKey}) async {
-    final reader = _StreamReader(guidedModel);
+    final reader = _StreamReader(prompt.model);
     final HttpReply reply;
     try {
       reply = await transport.post(
         endpoint,
-        headers(apiKey),
+        headers(apiKey, model: prompt.model),
         jsonEncode(body(prompt)),
         idle: prompt.idleTimeout,
         total: prompt.timeout,
@@ -447,7 +451,9 @@ class ClaudeClient implements ModelClient {
         costUncertain: uncertain,
       )._with(reader.usage);
     }
-    if (reply.status != 200) throw _statusError(reply, apiKey);
+    if (reply.status != 200) {
+      throw _statusError(reply, apiKey, prompt.model);
+    }
     reader.close();
     final used = reader.usage;
     final error = reader.error;
@@ -478,8 +484,11 @@ class ClaudeClient implements ModelClient {
           retryable: true,
         )._with(used);
       }
-      throw const ModelException(
-        'Claudeがこの内容への応答を控えました。きっかけや回答の言い方を変えて試してください。',
+      // Haikuには代わりに答えるモデルがない。Opus・Sonnetなら代わりのモデルが答えることがある。
+      throw ModelException(
+        guidedModelChoice(prompt.model).fallback
+            ? 'Claudeがこの内容への応答を控えました。きっかけや回答の言い方を変えて試してください。'
+            : 'Claudeがこの内容への応答を控えました。きっかけや回答の言い方を変えるか、AIの設定でOpusかSonnetを選んで試してください（代わりのモデルが答えることがあります）。',
       )._with(used);
     }
     if (stop == 'max_tokens') {
@@ -498,10 +507,10 @@ class ClaudeClient implements ModelClient {
     final model = reader.model;
     return ModelReply(
       text: text,
-      model: _modelName.hasMatch(model) ? model : guidedModel,
+      model: _modelName.hasMatch(model) ? model : prompt.model,
       usage: {
         for (final e in used.entries)
-          (_modelName.hasMatch(e.key) ? e.key : guidedModel): e.value,
+          (_modelName.hasMatch(e.key) ? e.key : prompt.model): e.value,
       },
     );
   }
@@ -514,7 +523,11 @@ class ClaudeClient implements ModelClient {
   /// 依頼IDの形（問い合わせに使う。秘密ではない）。
   static final _requestId = RegExp(r'^[A-Za-z0-9_\-]{1,100}$');
 
-  static ModelException _statusError(HttpReply reply, String apiKey) {
+  static ModelException _statusError(
+    HttpReply reply,
+    String apiKey,
+    String model,
+  ) {
     String type = '', detail = '', requestId = '';
     try {
       final value = jsonDecode(reply.body);
@@ -554,7 +567,7 @@ class ClaudeClient implements ModelClient {
         'このAPIキーでは使えません（$code）。Anthropicのワークスペースの設定を確かめてください。',
       ),
       404 => ModelException(
-        'モデル $guidedModel が見つからないか、このAPIキーでは使えません（$code）。提供が終わった場合は、アプリを更新してください。',
+        'モデル $model が見つからないか、このAPIキーでは使えません（$code）。AIの設定で別のモデルを選ぶか、提供が終わった場合はアプリを更新してください。',
       ),
       408 || 409 => ModelException(
         'Claude APIが依頼を処理できませんでした（$code）。$after試してください。',
