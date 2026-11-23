@@ -1979,6 +1979,9 @@ class HubController extends ChangeNotifier {
         if (found == null) {
           throw StateError('このメモは整理に失敗していません。表示を確認してください。');
         }
+        if (!parsed.organizeRetryable(inputId)) {
+          throw StateError('このメモには訂正が届いているか、訂正を依頼中です。訂正した後のメモが整理されるので、やり直しは要りません。');
+        }
         if (parsed.organizeRetryRequestIdFor(inputId) != null ||
             parsed.organizeRetryQueued(inputId)) {
           throw StateError('このメモのやり直しは依頼済みです。次の整理を待ってください。');
@@ -2436,11 +2439,13 @@ class HubController extends ChangeNotifier {
 
   /// 次の一手の手順を、[steps]の全体（手順と終えた数）に置き換える依頼。nullなら外す。手順は本人が書き、AIは作らない。
   /// 進める・戻すも全体を送る（[ItemSteps.done]を1つ増やす・減らす）。
+  /// [seen]は本人が見ていた手順（なければnull）。読み直した今の手順と違えば依頼しない（古い表示から進み具合を巻き戻さない）。
   Future<CaptureResult> requestItemSteps(
     String projectId,
     String itemKey,
-    ItemSteps? steps,
-  ) {
+    ItemSteps? steps, {
+    required ItemSteps? seen,
+  }) {
     if (steps != null && ItemSteps.tryParse(steps.toJson()) == null) {
       throw StateError('手順は$itemStepsMin〜$itemStepsMax個、それぞれ1行・$actionTextChars文字以内で入力してください。');
     }
@@ -2456,6 +2461,9 @@ class HubController extends ChangeNotifier {
         }
         if (found.section != 'next') {
           throw StateError('手順は「次の一手」の項目だけに付けられます。');
+        }
+        if (found.steps != seen) {
+          throw StateError('この項目の手順は、別の端末などで変わっています。今の手順を確かめてから操作してください。');
         }
         if (found.steps == steps) {
           throw StateError(steps == null ? '外す手順はありません。' : '手順は変わっていません。');

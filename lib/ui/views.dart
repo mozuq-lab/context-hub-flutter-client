@@ -2206,7 +2206,12 @@ class _HubViewState extends State<HubView> {
     String done,
   ) async {
     try {
-      final result = await c.requestItemSteps(projectId, item.key, steps);
+      final result = await c.requestItemSteps(
+        projectId,
+        item.key,
+        steps,
+        seen: item.steps,
+      );
       if (mounted) {
         notice(
           context,
@@ -6637,6 +6642,7 @@ class RecordView extends StatelessWidget {
     if (repo == null) return const SizedBox.shrink();
     final attempts = repo.failedAttemptsFor(record.sourceId);
     if (attempts == null) return const SizedBox.shrink();
+    final retryable = repo.organizeRetryable(record.sourceId);
     final requested = repo.organizeRetryRequestIdFor(record.sourceId) != null,
         queued = repo.organizeRetryQueued(record.sourceId),
         supported = repo.intakeFeatures.organizeRetry,
@@ -6666,6 +6672,15 @@ class RecordView extends StatelessWidget {
                     : 'やり直しを依頼済みです（反映待ち）。',
                 key: const Key('organize-retry-requested'),
                 style: const TextStyle(fontSize: 12),
+              ),
+            )
+          else if (supported && !retryable)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                '訂正が届いている（または依頼中の）メモは、訂正した後のメモが整理されます。',
+                key: Key('organize-retry-superseded'),
+                style: TextStyle(fontSize: 12),
               ),
             )
           else if (supported)

@@ -111,6 +111,14 @@ void main() {
       isFalse,
     );
     expect(orderAreas(['b', null, 'a', 'c'], ['c']), ['c', 'a', 'b', null]);
+    // 語彙にない領域は、本体と同じく文字コードの順に並べる。
+    expect(orderAreas(['家', 'apple', '仕事', 'Zoo', 'かぞく'], const []), [
+      'Zoo',
+      'apple',
+      'かぞく',
+      '仕事',
+      '家',
+    ]);
 
     expect(const ItemSteps(plan, 0).label, '手順 1/3: 医療費の領収書を集める');
     expect(const ItemSteps(plan, 3).label, '手順 3/3 済み・項目の完了を確かめる');
@@ -318,6 +326,24 @@ void main() {
         }),
       );
       expect(asked.organizeRetryRequestIdFor(item.inputId), retry.requestId);
+      expect(failed.organizeRetryable(item.inputId), isTrue);
+      // 訂正を依頼中のメモは、訂正した後のメモが整理されるので、やり直しを頼まない（本体はsupersededで断る）。
+      final correction = await service.saveCorrection(
+        'f1111111-2222-4333-8444-555555555555',
+        item.inputId,
+        '訂正した本文',
+      );
+      final correcting = HubRepository(
+        fixture({
+          ...withFailed(files, item.inputId),
+          'Input/${correction.requestId}.md': (await access.readRequest(
+            location,
+            correction.requestId,
+          ))!,
+        }),
+      );
+      expect(correcting.failedAttemptsFor(item.inputId), 1);
+      expect(correcting.organizeRetryable(item.inputId), isFalse);
       final request = asked.intake.firstWhere((i) => i.id == retry.requestId);
       expect(request.title, startsWith('整理のやり直しの依頼'));
       expect(request.state, 'waiting');
@@ -363,6 +389,16 @@ void main() {
     expect(c.repository!.organizeRetryQueued(item.inputId), isTrue);
     await expectLater(
       c.requestOrganizeRetry(item.inputId),
+      throwsA(isA<StateError>()),
+    );
+    // 本人が見ていた手順と、読み直した今の手順が違えば送らない。
+    await expectLater(
+      c.requestItemSteps(
+        projectId,
+        item.key,
+        const ItemSteps(plan, 1),
+        seen: const ItemSteps(plan, 0),
+      ),
       throwsA(isA<StateError>()),
     );
     // 試した後もまた失敗すれば（試行回数が増えれば）、もう一度頼める。

@@ -1689,7 +1689,8 @@ class HubRepository {
           DateTime? last, activeLast;
           for (final p in group) {
             final at = p.lastEvidenceAt;
-            if (at == null) continue;
+            // 最後の根拠は、本体と同じく完了したプロジェクトを除いて数える。
+            if (at == null || p.lifecycle == 'done') continue;
             if (last == null || at.isAfter(last)) last = at;
             if (p.lifecycle == 'active' &&
                 (activeLast == null || at.isAfter(activeLast))) {
@@ -2033,6 +2034,20 @@ class HubRepository {
         _organizeRetries.any(
           (r) => r.inputId == inputId && r.attempts == attempts,
         );
+  }
+
+  /// やり直しを頼める失敗か（本体が断らないもの）。訂正が届いた・訂正を依頼中のメモは、訂正した後のメモが整理されるので頼まない。
+  bool organizeRetryable(String inputId) {
+    final record = _inputs[inputId];
+    if (record == null ||
+        record.kind == 'action' ||
+        failedAttemptsFor(inputId) == null) {
+      return false;
+    }
+    final chain = correctionChainOf(record.id);
+    return chain != null &&
+        chain.last.sourceId == inputId &&
+        correctionRequestIdFor(record.id) == null;
   }
 
   /// 反映を待っている（本体がまだ記録していない）、このメモのやり直しの依頼。
