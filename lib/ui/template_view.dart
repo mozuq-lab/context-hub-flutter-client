@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
+import 'parts.dart';
 import '../app/controller.dart';
 import '../core/models.dart';
 import '../core/templates.dart';
@@ -148,14 +149,14 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
                 padding: EdgeInsets.all(24),
                 child: Center(child: CircularProgressIndicator()),
               )
-            : SingleChildScrollView(
+            : DialogScroll(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
+                    Text(
                       'メモの本文欄へ差し込む見出しです。この端末だけに保存し、Vaultには書きません。中身を書かなかった見出しは、メモの保存前に取り除きます。',
-                      style: TextStyle(fontSize: 12, height: 1.6),
+                      style: noteStyle(context),
                     ),
                     const SizedBox(height: 8),
                     if (list.isEmpty)
@@ -185,7 +186,7 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
                               ].join('\n'),
                               maxLines: 3,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12, height: 1.5),
+                              style: noteStyle(context),
                             ),
                             // 幅の狭い画面でも名前と見出しを読めるよう、操作は下に並べる。
                             Row(
@@ -244,7 +245,7 @@ class _TemplateManagerDialogState extends State<TemplateManagerDialog> {
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
-                      runSpacing: 4,
+                      runSpacing: 8,
                       children: [
                         OutlinedButton.icon(
                           key: const Key('template-add'),
@@ -348,7 +349,7 @@ class _TemplateEditDialogState extends State<TemplateEditDialog> {
     title: Text(widget.template == null ? 'ひな形を追加' : 'ひな形を編集'),
     content: SizedBox(
       width: 520,
-      child: SingleChildScrollView(
+      child: DialogScroll(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -378,6 +379,7 @@ class _TemplateEditDialogState extends State<TemplateEditDialog> {
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 key: const Key('template-project'),
+                style: fieldTextStyle(context),
                 initialValue: project ?? '',
                 isExpanded: true,
                 decoration: const InputDecoration(

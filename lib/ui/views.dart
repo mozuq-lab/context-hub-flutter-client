@@ -1442,7 +1442,7 @@ class _HubViewState extends State<HubView> {
     out.add(
       Text(
         '上限（${c.basket.maxChars}字）に収まらない記録は、本文の途中で切らずに丸ごと省きます。方針は必ず含めます。',
-        style: const TextStyle(fontSize: 12, height: 1.7),
+        style: noteStyle(context),
       ),
     );
     if (missing.isNotEmpty) {
@@ -1483,7 +1483,7 @@ class _HubViewState extends State<HubView> {
                   : Text(
                       '${searchKindLabels[HubRepository.searchKindOf(record)] ?? record.kind} · ${originLabel(record.origin)} · ${recordWhen(record)}'
                       '${(repo.correctionChainOf(id)?.length ?? 1) > 1 ? '\n訂正あり（最新の訂正の本文を渡します）' : ''}',
-                      style: const TextStyle(fontSize: 12, height: 1.7),
+                      style: noteStyle(context),
                     ),
               onTap: record == null || missing.contains(id)
                   ? null
@@ -1571,6 +1571,7 @@ class _HubViewState extends State<HubView> {
             width: 260,
             child: DropdownButtonFormField<String>(
               key: const Key('search-project'),
+              style: fieldTextStyle(context),
               initialValue: searchProject ?? '',
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'プロジェクト'),
@@ -1590,6 +1591,7 @@ class _HubViewState extends State<HubView> {
             width: 180,
             child: DropdownButtonFormField<int>(
               key: const Key('search-period'),
+              style: fieldTextStyle(context),
               initialValue: searchDays ?? 0,
               decoration: const InputDecoration(labelText: '期間'),
               items: const [
@@ -1790,16 +1792,15 @@ class _HubViewState extends State<HubView> {
               Text(
                 '現状の自動で作られる部分が手で書き換えられているため、${timeLabel(project.generatedAt)}の生成から更新されていません。'
                 '下の内容は止まった時点のものです${conflict.count > 1 ? '（新しい版の退避${conflict.count}件）' : ''}。',
-                style: const TextStyle(fontSize: 12, height: 1.6),
+                style: const TextStyle(fontSize: 13, height: 1.6),
               ),
               const SizedBox(height: 10),
               Text(
                 lines.isEmpty
                     ? '手で変えた行は見つかりませんでした（行の削除や並べ替えだけの可能性があります）。'
                     : '手で変えた行${conflict.comparedWithGenerated ? '' : '（最新の生成版との違い。生成側の変化も含みます）'}:',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  fontSize: 13,
                 ),
               ),
               for (final line in lines.take(shown))
@@ -1807,7 +1808,7 @@ class _HubViewState extends State<HubView> {
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     line,
-                    style: const TextStyle(fontSize: 12, height: 1.5),
+                    style: noteStyle(context),
                   ),
                 ),
               if (lines.length > shown)
@@ -1815,7 +1816,7 @@ class _HubViewState extends State<HubView> {
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     'ほか${lines.length - shown}行',
-                    style: const TextStyle(fontSize: 12),
+                    style: noteStyle(context),
                   ),
                 ),
               const SizedBox(height: 12),
@@ -4537,7 +4538,7 @@ class _HubViewState extends State<HubView> {
             const SizedBox(height: 4),
             Wrap(
               spacing: 8,
-              runSpacing: 4,
+              runSpacing: 8,
               children: [
                 if (repo.intakeFeatures.actions)
                   OutlinedButton.icon(
@@ -4996,7 +4997,7 @@ class _HubViewState extends State<HubView> {
       Wrap(
         key: const Key('weekly-steps'),
         spacing: 8,
-        runSpacing: 4,
+        runSpacing: 8,
         children: [
           for (final (i, s) in steps.indexed)
             ChoiceChip(
@@ -5480,8 +5481,8 @@ class _HubViewState extends State<HubView> {
           rowActions(
             context,
             Wrap(
-              spacing: 2,
-              runSpacing: 4,
+              spacing: 6,
+              runSpacing: 6,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text('根拠', style: theme.textTheme.bodySmall),
@@ -5516,7 +5517,9 @@ class _HubViewState extends State<HubView> {
                             : Icons.thumb_down_alt_outlined,
                         size: 14,
                       ),
-                      labelStyle: const TextStyle(fontSize: 12),
+                      labelStyle: const TextStyle(fontSize: 12.5),
+                      // 印と文字の間を詰める（既定では印の後ろが広く空く）。
+                      labelPadding: const EdgeInsets.only(left: 2, right: 6),
                       visualDensity: VisualDensity.compact,
                       selected: reaction == value,
                       tooltip: reaction == value ? 'もう一度押すと反応を外します' : null,
@@ -5978,10 +5981,10 @@ class _HubViewState extends State<HubView> {
           crossAxisAlignment: WrapCrossAlignment.center,
           spacing: 4,
           children: [
-            const Text(
+            Text(
               '望む結果（何をもって完了か）: 未記入',
-              key: Key('project-outcome-empty'),
-              style: TextStyle(fontSize: 12),
+              key: const Key('project-outcome-empty'),
+              style: inlineLabelStyle(context),
             ),
             ?edit,
           ],
@@ -5997,9 +6000,9 @@ class _HubViewState extends State<HubView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 '望む結果（何をもって完了か）',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.labelLarge,
               ),
               const SizedBox(height: 4),
               SelectableText(
@@ -6030,7 +6033,7 @@ class _HubViewState extends State<HubView> {
           Text(
             '領域: ${project.area ?? '未設定'}',
             key: const Key('project-area-label'),
-            style: const TextStyle(fontSize: 12),
+            style: inlineLabelStyle(context),
           ),
           if (supported)
             TextButton.icon(
@@ -6643,7 +6646,7 @@ class RecordView extends StatelessWidget {
       child: Wrap(
         crossAxisAlignment: WrapCrossAlignment.center,
         spacing: 8,
-        runSpacing: 4,
+        runSpacing: 8,
         children: [
           const Icon(Icons.attach_file, size: 18),
           Text('添えたファイル: ${file.label}'),
@@ -7537,7 +7540,7 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
             title: Text(action ? '行動の文面を直す' : 'メモを訂正する'),
             content: SizedBox(
               width: 620,
-              child: SingleChildScrollView(
+              child: DialogScroll(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7551,7 +7554,7 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
                       action
                           ? '直した後の文面を1行で書いてください。元の文面は原文に残ります。Mac miniで処理されると現状の次の一手が直した文面になります。付けた日付は直した後の行動に引き継がれます。'
                           : '訂正後の全文を書いてください。元のメモは残り、訂正として追加されます。Mac miniのAIが読み取るまで、要約や現状は訂正前の内容のままです。',
-                      style: const TextStyle(fontSize: 12, height: 1.6),
+                      style: noteStyle(context),
                     ),
                     const SizedBox(height: 16),
                     TextField(
@@ -7591,7 +7594,7 @@ class _CorrectionDialogState extends State<CorrectionDialog> {
                         padding: const EdgeInsets.only(top: 12),
                         child: SelectableText(
                           '操作ID: $operation',
-                          style: const TextStyle(fontSize: 10),
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ),
                   ],
@@ -7702,7 +7705,6 @@ class _CaptureDialogState extends State<CaptureDialog> {
         // ファイルを添えたメモは、資料として保存するメモにする。
         reference = true;
         kind = 'memo';
-        _formGeneration++;
       });
       _schedulePersist();
     } catch (e) {
@@ -7711,7 +7713,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
   }
 
   Widget _attachmentChooser(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.only(top: 4, bottom: 4),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -7740,21 +7742,17 @@ class _CaptureDialogState extends State<CaptureDialog> {
             onPressed: locked || busy ? null : _pickAttachment,
           ),
         if (attachment != null)
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: Text(
-              'ファイルはMac miniのVault（05_files）に置き、資料棚から開けます。中身はAIへ渡さず、AIが読むのはメモの本文だけです。何のファイルかを本文に書いておくと探しやすくなります（空ならファイル名を本文にします）。',
-              key: Key('capture-attachment-note'),
-              style: TextStyle(fontSize: 11, height: 1.5),
-            ),
+          fieldNote(
+            context,
+            'ファイルはMac miniのVault（05_files）に置き、資料棚から開けます。中身はAIへ渡さず、AIが読むのはメモの本文だけです。何のファイルかを本文に書いておくと探しやすくなります（空ならファイル名を本文にします）。',
+            key: const Key('capture-attachment-note'),
           )
         else if (_lostAttachment case final name?)
           Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
+            padding: const EdgeInsets.only(top: 8),
+            child: NoticeBox(
               '書きかけで選んでいたファイル（$name）は戻せません。添える場合は選び直してください。',
               key: const Key('capture-attachment-lost'),
-              style: const TextStyle(fontSize: 11, height: 1.5),
             ),
           ),
       ],
@@ -7783,6 +7781,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
       CheckboxListTile(
         key: const Key('capture-reference'),
         contentPadding: EdgeInsets.zero,
+        visualDensity: formTileDensity,
+        horizontalTitleGap: formTileGap,
         controlAffinity: ListTileControlAffinity.leading,
         value: reference,
         // ファイルを添えたメモは、必ず資料として保存する。
@@ -7792,16 +7792,16 @@ class _CaptureDialogState extends State<CaptureDialog> {
                 setState(() => reference = v ?? false);
                 _schedulePersist();
               },
-        title: const Text('資料として保存'),
+        title: Text('資料として保存', style: formTileTitle(context)),
         subtitle: Text(
           attachment != null
               ? 'ファイルを添えたメモは資料として保存します。'
               : 'AIの分類に関係なく、資料棚に載せます。アイデアや提案としては扱いません。',
-          style: const TextStyle(fontSize: 12),
         ),
       ),
       if (_canAttach) _attachmentChooser(context),
-      if (reference)
+      if (reference) ...[
+        const SizedBox(height: 12),
         TextField(
           key: const Key('capture-reference-title'),
           controller: referenceTitle,
@@ -7819,6 +7819,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
             helperMaxLines: 3,
           ),
         ),
+      ],
     ],
   );
 
@@ -7870,11 +7871,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
       key: const Key('memo-happened'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('いつのこと', style: TextStyle(fontSize: 12)),
-        const SizedBox(height: 6),
+        fieldLabel(context, 'いつのこと'),
         Wrap(
           spacing: 8,
-          runSpacing: 4,
+          runSpacing: 8,
           children: [
             for (final (label, value) in [
               ('今日', null),
@@ -7896,12 +7896,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
           ],
         ),
         if (happenedOn != null)
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: Text(
-              'この日の出来事として記録します。経緯や現在地はこの日の順に並び、本文の「明日」「来週」もこの日を基準に読まれます。',
-              style: TextStyle(fontSize: 11, height: 1.5),
-            ),
+          fieldNote(
+            context,
+            'この日の出来事として記録します。経緯や現在地はこの日の順に並び、本文の「明日」「来週」もこの日を基準に読まれます。',
+            top: 8,
           ),
       ],
     );
@@ -7987,21 +7985,23 @@ class _CaptureDialogState extends State<CaptureDialog> {
     return Container(
       key: const Key('related-records'),
       margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.fromLTRB(12, 10, 4, 6),
+      padding: const EdgeInsets.fromLTRB(14, 12, 6, 8),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(8),
+        color: scheme.surfaceContainerLow,
+        border: Border.all(color: scheme.outlineVariant),
+        borderRadius: BorderRadius.circular(hubRadiusSmall),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             '前に書いた、関係ありそうな記録',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.labelLarge,
           ),
-          const Text(
+          fieldNote(
+            context,
             '同じことを書いていないか、続きの話ではないかを確かめられます。この端末に読み込んだ記録だけを、文字の重なりで探しています。',
-            style: TextStyle(fontSize: 11, height: 1.5),
+            top: 2,
           ),
           for (final hit in _related) _relatedRow(repo, hit),
         ],
@@ -8040,17 +8040,19 @@ class _CaptureDialogState extends State<CaptureDialog> {
                   hit.latest.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
                 Text(
                   '${timeLabel(hit.root.at).split(' ').first} · $where${hit.latest.kind == 'correction' ? ' · 訂正あり' : ''}',
-                  style: const TextStyle(fontSize: 11),
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
                 Text(
                   searchSnippet(hit.latest.body, hit.shared.take(5).toList()),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, height: 1.5),
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
                 if (canUseProject)
                   TextButton(
@@ -8122,6 +8124,94 @@ class _CaptureDialogState extends State<CaptureDialog> {
     _textFocus.requestFocus();
     _schedulePersist();
   }
+
+  /// ひな形の見出しを本文へ差し込むメニュー。
+  Widget _templateMenu(BuildContext context) => PopupMenuButton<String>(
+    key: const Key('template-menu'),
+    tooltip: 'ひな形の見出しを本文へ差し込む',
+    onSelected: (id) {
+      if (id == _editTemplates) {
+        _manageTemplates();
+        return;
+      }
+      for (final t in _templates) {
+        if (t.id == id) _applyTemplate(t);
+      }
+    },
+    itemBuilder: (context) => [
+      for (final t in _templates)
+        PopupMenuItem(
+          key: Key('template-item-${t.id}'),
+          value: t.id,
+          child: Text(t.name, overflow: TextOverflow.ellipsis),
+        ),
+      if (_templates.isNotEmpty) const PopupMenuDivider(),
+      const PopupMenuItem(
+        key: Key('template-manage'),
+        value: _editTemplates,
+        child: Text('ひな形を編集…'),
+      ),
+    ],
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.playlist_add,
+            size: 18,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'ひな形',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w500,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  /// メモの種類の切り替え。ふつうのメモと、AIの作業の報告（作業要約）の2つを横に並べ、どちらか1つを選ぶ。
+  Widget _kindChooser(BuildContext context) => SegmentedButton<String>(
+    key: const Key('memo-kind'),
+    showSelectedIcon: false,
+    style: SegmentedButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+    ),
+    // 2つは同じ幅になる。狭い画面では印を外し、「AIの作業要約」が途中で折り返さないようにする。
+    segments: [
+      ButtonSegment(
+        value: 'memo',
+        icon: wideKindChooser(context)
+            ? const Icon(Icons.edit_note, size: 18)
+            : null,
+        label: const Text('メモ', key: Key('memo-kind-memo')),
+        tooltip: '思いつき・疑問・作業の記録など、ふつうはこちら',
+      ),
+      ButtonSegment(
+        value: 'work-summary',
+        icon: wideKindChooser(context)
+            ? const Icon(Icons.smart_toy_outlined, size: 18)
+            : null,
+        label: const Text('AIの作業要約', key: Key('memo-kind-work-summary')),
+        tooltip: 'AIが書いた作業の報告を貼るとき（未検証として扱う）',
+      ),
+    ],
+    selected: {kind},
+    // ファイルを添えたメモは、種類を変えない（ファイルはメモにだけ添える）。
+    onSelectionChanged: locked || attachment != null
+        ? null
+        : (v) {
+            setState(() => kind = v.first);
+            _schedulePersist();
+          },
+  );
 
   Future<void> _manageTemplates() async {
     await showDialog<void>(
@@ -8495,14 +8585,15 @@ class _CaptureDialogState extends State<CaptureDialog> {
                     padding: EdgeInsets.all(24),
                     child: Center(child: CircularProgressIndicator()),
                   )
-                : SingleChildScrollView(
+                : DialogScroll(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
+                        fieldNote(
+                          context,
                           '保存先: ${widget.controller.location?.name ?? ''}',
-                          style: const TextStyle(fontSize: 12),
+                          top: 0,
                         ),
                         if (_restoredAt != null && result?.saved != true) ...[
                           const SizedBox(height: 12),
@@ -8548,9 +8639,9 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
+                                Text(
                                   '今週の気づきの問い（AIの推定・未検証）',
-                                  style: TextStyle(fontSize: 12),
+                                  style: noteStyle(context),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
@@ -8560,77 +8651,41 @@ class _CaptureDialogState extends State<CaptureDialog> {
                               ],
                             ),
                           ),
-                          const SizedBox(height: 6),
-                          const Text(
+                          fieldNote(
+                            context,
                             '答えはふつうのメモとして保存し、この問いへの答えだと分かるように記録します。次の週の読み直しで使われます。',
-                            style: TextStyle(fontSize: 12, height: 1.5),
+                            top: 8,
                           ),
                         ],
-                        const SizedBox(height: 8),
-                        if (!locked && widget.answer == null)
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: PopupMenuButton<String>(
-                              key: const Key('template-menu'),
-                              tooltip: 'ひな形の見出しを本文へ差し込む',
-                              onSelected: (id) {
-                                if (id == _editTemplates) {
-                                  _manageTemplates();
-                                  return;
-                                }
-                                for (final t in _templates) {
-                                  if (t.id == id) _applyTemplate(t);
-                                }
-                              },
-                              itemBuilder: (context) => [
-                                for (final t in _templates)
-                                  PopupMenuItem(
-                                    key: Key('template-item-${t.id}'),
-                                    value: t.id,
-                                    child: Text(
-                                      t.name,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                if (_templates.isNotEmpty)
-                                  const PopupMenuDivider(),
-                                const PopupMenuItem(
-                                  key: Key('template-manage'),
-                                  value: _editTemplates,
-                                  child: Text('ひな形を編集…'),
-                                ),
+                        const SizedBox(height: 16),
+                        // 種類は、本文の上に2つの切り替えで並べる（ほとんどはメモのまま）。ひな形は、収まれば同じ行の右に、狭い画面では次の行に置く。
+                        if (widget.answer == null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Wrap(
+                              alignment: WrapAlignment.spaceBetween,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: 12,
+                              runSpacing: 8,
+                              children: [
+                                _kindChooser(context),
+                                if (!locked) _templateMenu(context),
                               ],
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 6,
-                                  horizontal: 4,
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.playlist_add,
-                                      size: 18,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'ひな形',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.primary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
                             ),
                           ),
-                        const SizedBox(height: 4),
+                        // 下書きから作る入力では、下の案内が同じことを伝えるので出さない。
+                        if (widget.answer == null &&
+                            widget.draft == null &&
+                            kind == 'work-summary')
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: fieldNote(
+                              context,
+                              'AIが書いた作業の報告を貼るときの種類です。AIの自己報告（未検証）として読み取り、プロジェクトの現在地・次の一手の材料にします。',
+                              key: const Key('memo-kind-note'),
+                              top: 0,
+                            ),
+                          ),
                         TextField(
                           key: const Key('memo-text'),
                           controller: text,
@@ -8650,60 +8705,12 @@ class _CaptureDialogState extends State<CaptureDialog> {
                         ),
                         if (_related.isNotEmpty && _showRelated && !locked)
                           _relatedBox(),
-                        // 問いへの答えは本人のメモとして残すので、種類を選ばせない。
-                        // 種類はふだん変えないので、たたんでおく（作業要約のときは開く）。
-                        if (widget.answer == null) ...[
-                          const SizedBox(height: 8),
-                          Theme(
-                            data: Theme.of(
-                              context,
-                            ).copyWith(dividerColor: Colors.transparent),
-                            child: ExpansionTile(
-                              key: ValueKey('memo-kind-more-$_formGeneration'),
-                              tilePadding: EdgeInsets.zero,
-                              initiallyExpanded: kind != 'memo',
-                              title: Text(
-                                '種類: ${kind == 'memo' ? 'メモ' : 'AIの作業要約・未検証'}',
-                                style: const TextStyle(fontSize: 13),
-                              ),
-                              subtitle: const Text(
-                                'AIの作業の報告を貼るときだけ変えます',
-                                style: TextStyle(fontSize: 11),
-                              ),
-                              children: [
-                                DropdownButtonFormField<String>(
-                                  key: ValueKey('memo-kind-$_formGeneration'),
-                                  initialValue: kind,
-                                  decoration: const InputDecoration(
-                                    labelText: '種類',
-                                  ),
-                                  items: const [
-                                    DropdownMenuItem(
-                                      value: 'memo',
-                                      child: Text('メモ'),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 'work-summary',
-                                      child: Text('AIの作業要約・未検証'),
-                                    ),
-                                  ],
-                                  // ファイルを添えたメモは、種類を変えない（ファイルはメモにだけ添える）。
-                                  onChanged: locked || attachment != null
-                                      ? null
-                                      : (v) {
-                                          setState(() => kind = v!);
-                                          _schedulePersist();
-                                        },
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 16),
+                        fieldGap,
                         DropdownButtonFormField<String>(
                           key: ValueKey('memo-project-$_formGeneration'),
                           initialValue: project ?? '',
                           isExpanded: true,
+                          style: fieldTextStyle(context),
                           decoration: const InputDecoration(
                             labelText: 'プロジェクト（任意）',
                           ),
@@ -8744,11 +8751,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
                                 },
                         ),
                         if (_canBackdate) ...[
-                          const SizedBox(height: 16),
+                          fieldGap,
                           _happenedChooser(context),
                         ],
                         if (_canReference) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 12),
                           _referenceChooser(context),
                         ],
                         if (widget.draft != null && kind == 'work-summary')
@@ -8758,43 +8765,48 @@ class _CaptureDialogState extends State<CaptureDialog> {
                               '作業要約として保存すると、プロジェクトの現在地・次の一手はこの本文から作られます。次の一手を書き足してください。',
                             ),
                           ),
-                        const SizedBox(height: 16),
-                        const Text(
+                        fieldNote(
+                          context,
                           '保存すると、同期の後にMac miniが受け取り、AIが読み取ります。進み具合は「保存と反映」で見られます。',
-                          style: TextStyle(fontSize: 12, height: 1.6),
+                          top: 16,
                         ),
+                        // この端末だけの設定は、メモの中身の欄と見出しで分けて、控えめにまとめる。
+                        if (_draftKey != null || widget.answer == null) ...[
+                          fieldGap,
+                          fieldLabel(context, 'この端末の設定'),
+                        ],
                         if (_draftKey != null)
                           CheckboxListTile(
                             key: const Key('keep-drafts'),
                             contentPadding: EdgeInsets.zero,
+                            visualDensity: formTileDensity,
+                            horizontalTitleGap: formTileGap,
                             controlAffinity: ListTileControlAffinity.leading,
-                            dense: true,
                             value: _keepDrafts,
                             onChanged: (v) => _setKeepDrafts(v ?? true),
-                            title: const Text(
+                            title: Text(
                               '書きかけをこの端末に残す',
-                              style: TextStyle(fontSize: 12),
+                              style: formTileTitle(context),
                             ),
                             subtitle: const Text(
                               'フォームを閉じたりアプリが終了したりしても、次に開いたときに続きから書けます。保存が確かめられたら消します。Vaultには書きません。',
-                              style: TextStyle(fontSize: 11, height: 1.5),
                             ),
                           ),
                         if (widget.answer == null)
                           CheckboxListTile(
                             key: const Key('show-related'),
                             contentPadding: EdgeInsets.zero,
+                            visualDensity: formTileDensity,
+                            horizontalTitleGap: formTileGap,
                             controlAffinity: ListTileControlAffinity.leading,
-                            dense: true,
                             value: _showRelated,
                             onChanged: (v) => _setShowRelated(v ?? true),
-                            title: const Text(
+                            title: Text(
                               '書いている途中に、関係ありそうな過去の記録を出す',
-                              style: TextStyle(fontSize: 12),
+                              style: formTileTitle(context),
                             ),
                             subtitle: const Text(
-                              'この端末に読み込んだ記録だけを比べます。ネットワークにもAIにも送りません。この端末の設定です。',
-                              style: TextStyle(fontSize: 11, height: 1.5),
+                              'この端末に読み込んだ記録だけを比べます。ネットワークにもAIにも送りません。',
                             ),
                           ),
                         if (error != null)
@@ -8816,7 +8828,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
                             padding: const EdgeInsets.only(top: 12),
                             child: SelectableText(
                               '操作ID: $operation',
-                              style: const TextStyle(fontSize: 10),
+                              style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ),
                       ],
@@ -8880,14 +8892,14 @@ class PinOrderDialog extends StatelessWidget {
         title: const Text('ピン留めの並び'),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
-          child: SingleChildScrollView(
+          child: DialogScroll(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'ピン留めしたプロジェクトは、メニュー・ホーム・「次の一手」の先頭にこの順で並びます。並びはこの端末にだけ保存し、Vaultやほかの端末には伝わりません。',
-                  style: TextStyle(fontSize: 12, height: 1.7),
+                  style: noteStyle(context),
                 ),
                 const SizedBox(height: 8),
                 if (projects.isEmpty) const Text('ピン留めしたプロジェクトはありません。'),
@@ -8908,7 +8920,7 @@ class PinOrderDialog extends StatelessWidget {
                         if (project.lifecycle != 'active')
                           Text(
                             '${project.lifecycleLabel}（「次の一手」には出ません）',
-                            style: const TextStyle(fontSize: 12, height: 1.6),
+                            style: noteStyle(context),
                           ),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
@@ -9043,7 +9055,7 @@ class _WaitDialogState extends State<WaitDialog> {
       title: Text(widget.item.waiting ? '連絡待ちを変える' : '連絡待ちにする'),
       content: SizedBox(
         width: 520,
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -9117,9 +9129,9 @@ class _WaitDialogState extends State<WaitDialog> {
               const SizedBox(height: 6),
               dateChips('review', review, [('3日後', 3), ('1週間後', 7), ('2週間後', 14)]),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 '連絡待ちにした項目は、「次の一手」の一覧と件数から外れ、「連絡待ち」にまとまります。返事が来たら印を外すか、完了にしてください。相手の名前は、ホーム画面のウィジェットと、別のAIへ渡す資料には出しません。',
-                style: TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
             ],
           ),
@@ -9163,7 +9175,7 @@ class _EffortDialogState extends State<EffortDialog> {
     title: const Text('手間の目安'),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
-      child: SingleChildScrollView(
+      child: DialogScroll(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -9175,7 +9187,7 @@ class _EffortDialogState extends State<EffortDialog> {
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
-              runSpacing: 4,
+              runSpacing: 8,
               children: [
                 for (final e in itemEfforts)
                   ChoiceChip(
@@ -9194,9 +9206,9 @@ class _EffortDialogState extends State<EffortDialog> {
               ],
             ),
             const SizedBox(height: 12),
-            const Text(
+            Text(
               '空いた時間に合う項目を「次の一手」で絞り込むための目安です。Mac miniで処理されると現状に反映され、同じ本文の項目には新しい報告が届いても引き継がれます。',
-              style: TextStyle(fontSize: 12, height: 1.6),
+              style: noteStyle(context),
             ),
           ],
         ),
@@ -9235,7 +9247,7 @@ class ContextChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Wrap(
     spacing: 8,
-    runSpacing: 4,
+    runSpacing: 8,
     children: [
       for (final t in options)
         FilterChip(
@@ -9297,7 +9309,7 @@ class _ContextsDialogState extends State<ContextsDialog> {
     title: const Text('場所・道具の札'),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
-      child: SingleChildScrollView(
+      child: DialogScroll(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -9340,9 +9352,9 @@ class _ContextsDialogState extends State<ContextsDialog> {
                 label: const Text('札の一覧を編集'),
               ),
             ),
-            const Text(
+            Text(
               '今いる場所や手元の道具でできる項目を「次の一手」で絞り込むための札です。いくつでも選べ、何も選ばなければ札を外します。Mac miniで処理されると現状に反映され、同じ本文の項目には新しい報告が届いても引き継がれます。',
-              style: TextStyle(fontSize: 12, height: 1.6),
+              style: noteStyle(context),
             ),
           ],
         ),
@@ -9423,7 +9435,7 @@ class _ContextVocabularyDialogState extends State<ContextVocabularyDialog> {
     title: const Text('札の一覧'),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
-      child: SingleChildScrollView(
+      child: DialogScroll(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -9482,9 +9494,9 @@ class _ContextVocabularyDialogState extends State<ContextVocabularyDialog> {
                 ),
               ],
             ),
-            const Text(
+            Text(
               'この一覧は同じVaultを使うすべての端末で共有します。一覧から外しても、その札が付いている項目からは消えません（札を選ぶ画面に「一覧にない」と出ます）。',
-              style: TextStyle(fontSize: 12, height: 1.6),
+              style: noteStyle(context),
             ),
           ],
         ),
@@ -9546,7 +9558,7 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
       title: const Text('誤りとして外す'),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -9570,7 +9582,7 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
                   title: Text(exclusionReasonLabels[r]!),
                   subtitle: Text(
                     effect(r),
-                    style: const TextStyle(fontSize: 12, height: 1.6),
+                    style: noteStyle(context),
                   ),
                   onTap: () => setState(() => reason = r),
                 ),
@@ -9591,9 +9603,9 @@ class _ExcludeDialogState extends State<ExcludeDialog> {
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '完了・解決には数えません。原文は変わりません。外した項目の本文・理由・一言は、同じ読み違いを減らすために、次からのAI読み取りでAIへ渡します。Mac miniが処理すると現状に反映され、プロジェクトの画面から未解決に戻せます。',
-                style: TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
             ],
           ),
@@ -9678,7 +9690,7 @@ class _ActionDialogState extends State<ActionDialog> {
       title: Text(widget.from == null ? '次の一手を追加' : '自分の行動にする'),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -9692,6 +9704,7 @@ class _ActionDialogState extends State<ActionDialog> {
               else
                 DropdownButtonFormField<String>(
                   key: const Key('action-project'),
+                  style: fieldTextStyle(context),
                   initialValue: project,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'プロジェクト'),
@@ -9711,14 +9724,14 @@ class _ActionDialogState extends State<ActionDialog> {
                   onChanged: (v) => setState(() => project = v ?? project),
                 ),
               if (widget.from case final from?) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 Text(
                   '元の行（AIの読み取り）: ${from.text}',
                   key: const Key('action-from'),
-                  style: const TextStyle(fontSize: 12, height: 1.6),
+                  style: noteStyle(context),
                 ),
               ],
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               TextField(
                 key: const Key('action-text'),
                 controller: text,
@@ -9736,12 +9749,11 @@ class _ActionDialogState extends State<ActionDialog> {
                 onChanged: (_) => setState(() {}),
               ),
               if (widget.effortChoice) ...[
-                const SizedBox(height: 12),
-                const Text('手間の目安（任意）', style: TextStyle(fontSize: 12)),
-                const SizedBox(height: 4),
+                const SizedBox(height: 16),
+                fieldLabel(context, '手間の目安（任意）'),
                 Wrap(
                   spacing: 8,
-                  runSpacing: 4,
+                  runSpacing: 8,
                   children: [
                     for (final e in itemEfforts)
                       ChoiceChip(
@@ -9756,9 +9768,8 @@ class _ActionDialogState extends State<ActionDialog> {
               ],
               if (widget.contextChoices case final choices?
                   when choices.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                const Text('場所・道具の札（任意・いくつでも）', style: TextStyle(fontSize: 12)),
-                const SizedBox(height: 4),
+                const SizedBox(height: 16),
+                fieldLabel(context, '場所・道具の札（任意・いくつでも）'),
                 ContextChips(
                   keyPrefix: 'action-context',
                   options: choices,
@@ -9784,7 +9795,7 @@ class _ActionDialogState extends State<ActionDialog> {
                     : widget.from == null
                     ? '本人が追加した行動として、そのまま次の一手に載ります。AIは書き換えず、完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Mac miniで処理されると現状に反映されます。'
                     : '本人が追加した行動として次の一手に載り、元の行はAIの読み取りの欄から外れます。完了か誤りとして外すと報告するまで、新しい作業要約が届いても残ります。Mac miniで処理されると現状に反映されます。',
-                style: const TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
             ],
           ),
@@ -9920,7 +9931,7 @@ class _ScheduleDialogState extends State<ScheduleDialog> {
       title: const Text('期日と次に見直す日'),
       content: SizedBox(
         width: 520,
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -10021,7 +10032,7 @@ class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: Text('${widget.project.title}の状態'),
-    content: SingleChildScrollView(
+    content: DialogScroll(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -10056,9 +10067,9 @@ class _ProjectStatusDialogState extends State<ProjectStatusDialog> {
               ),
             ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             '休止・完了にすると、ホームの後ろにまとめて表示し、AIの帰属候補から外します。メモで明示したプロジェクトは引き続き使えます。依頼は保存され、Mac miniで処理されると反映されます。',
-            style: TextStyle(fontSize: 12, height: 1.6),
+            style: noteStyle(context),
           ),
         ],
       ),
@@ -10104,7 +10115,7 @@ class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
     title: Text('「${widget.project.title}」を統合'),
     content: SizedBox(
       width: 520,
-      child: SingleChildScrollView(
+      child: DialogScroll(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -10119,6 +10130,7 @@ class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
             else
               DropdownButtonFormField<String>(
                 key: const Key('project-merge-into'),
+                style: fieldTextStyle(context),
                 initialValue: selected?.id,
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: '統合先'),
@@ -10150,10 +10162,12 @@ class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
                   '・あとで取り消せます。',
                 ].join('\n'),
                 key: const Key('project-merge-effects'),
-                style: const TextStyle(fontSize: 12, height: 1.7),
+                style: const TextStyle(fontSize: 13, height: 1.6),
               ),
               CheckboxListTile(
                 key: const Key('project-merge-confirm'),
+                visualDensity: formTileDensity,
+                horizontalTitleGap: formTileGap,
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 value: confirmed,
@@ -10164,9 +10178,9 @@ class _ProjectMergeDialogState extends State<ProjectMergeDialog> {
                 ),
               ),
             ],
-            const Text(
+            Text(
               '依頼は保存され、Mac miniで処理されると反映されます。',
-              style: TextStyle(fontSize: 12, height: 1.6),
+              style: noteStyle(context),
             ),
           ],
         ),
@@ -10255,14 +10269,14 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
       ),
       content: SizedBox(
         width: 560,
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'AIはメモをどのプロジェクトに結び付けるかを、名前・別名・キーワードから判断します。メモでよく使う呼び方や、このプロジェクトに特有の言葉を加えてください。',
-                style: TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -10316,7 +10330,7 @@ class _ProjectDefinitionDialogState extends State<ProjectDefinitionDialog> {
               else
                 Text(
                   '依頼は保存され、Mac miniで処理されると反映されます。プロジェクトを指定せずに保存したメモのうち、まだどのプロジェクトにも結び付いていないものは、次のAI読み取りで新しい定義に合わせて見直されます（AIを使います）。${limits == null ? '' : '望む結果もAIへ渡し、メモの結び付けと次の一手を読む手がかりにします。'}',
-                  style: TextStyle(fontSize: 12, height: 1.6),
+                  style: noteStyle(context),
                 ),
             ],
           ),
@@ -10463,7 +10477,7 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
     int lines = 1,
     int? max,
   }) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.only(bottom: 16),
     child: TextField(
       key: Key(key),
       controller: controller,
@@ -10471,9 +10485,10 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
       minLines: lines,
       maxLines: lines == 1 ? 1 : lines + 4,
       maxLength: max,
+      // 書き方の手がかりは、入力を始める前から読めるよう欄の下に出す（欄の中の薄い文字は、名前に隠れて見えない）。
       decoration: InputDecoration(
         labelText: label,
-        hintText: hint,
+        helperText: hint,
         alignLabelWithHint: lines > 1,
       ),
     ),
@@ -10486,14 +10501,15 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
       title: const Text('新しいプロジェクト'),
       content: SizedBox(
         width: 620,
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
+              fieldNote(
+                context,
                 '保存先: ${widget.controller.location?.name ?? ''}',
-                style: const TextStyle(fontSize: 12),
+                top: 0,
               ),
               const SizedBox(height: 16),
               field('project-create-title', title, '名前', max: 200),
@@ -10554,9 +10570,9 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
                 lines: 4,
                 max: 8000,
               ),
-              const Text(
+              Text(
                 '作成の依頼を保存します。Mac miniで処理されるとプロジェクト一覧に表示されます。名前・別名が既存のプロジェクトと重なる場合は作成されません。',
-                style: TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
               if (error != null)
                 Padding(
@@ -10577,7 +10593,7 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
                   padding: const EdgeInsets.only(top: 12),
                   child: SelectableText(
                     '操作ID: $operation',
-                    style: const TextStyle(fontSize: 10),
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
             ],
@@ -10684,7 +10700,7 @@ class _StepsDialogState extends State<StepsDialog> {
       title: Text(old == null ? '手順に分ける' : '手順を直す'),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -10709,7 +10725,7 @@ class _StepsDialogState extends State<StepsDialog> {
                 steps == null
                     ? '次の一手の一覧には、今の1歩だけが出ます。'
                     : '次の一手の一覧には「${steps.label}」と出ます。${old != null && steps.done > 0 ? '（変えていない先頭の${steps.done}つは終えたままにします）' : ''}',
-                style: const TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
             ],
           ),
@@ -10776,7 +10792,7 @@ class _AreaDialogState extends State<AreaDialog> {
       title: const Text('領域'),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -10814,9 +10830,9 @@ class _AreaDialogState extends State<AreaDialog> {
                 },
                 child: const Text('領域の一覧と並びを編集'),
               ),
-              const Text(
+              Text(
                 '領域は、プロジェクトをまとめる責任の範囲です。ホームと週次レビューで領域ごとにまとまります。AIは領域を付けません。',
-                style: TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
             ],
           ),
@@ -10894,7 +10910,7 @@ class _AreaVocabularyDialogState extends State<AreaVocabularyDialog> {
     title: const Text('領域の一覧'),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 480),
-      child: SingleChildScrollView(
+      child: DialogScroll(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -10953,9 +10969,9 @@ class _AreaVocabularyDialogState extends State<AreaVocabularyDialog> {
                 ),
               ],
             ),
-            const Text(
+            Text(
               'この一覧と並びは同じVaultを使うすべての端末で共有し、ホームと週次レビューの領域の順になります。一覧から外しても、その領域が付いているプロジェクトからは消えません。',
-              style: TextStyle(fontSize: 12, height: 1.6),
+              style: noteStyle(context),
             ),
           ],
         ),

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'parts.dart';
 import '../app/controller.dart';
 import 'views.dart';
 import 'preference_sync_view.dart';
@@ -22,6 +23,7 @@ class ContextHubApp extends StatelessWidget {
     debugShowCheckedModeBanner: false,
     theme: hubTheme(Brightness.light),
     darkTheme: hubTheme(Brightness.dark),
+    builder: hubThemeForWidth,
     home: HubShell(controller: controller),
   );
 }
@@ -1368,9 +1370,9 @@ class _HubShellState extends State<HubShell> {
               ],
             ),
             const SizedBox(height: 24),
-            const Text(
+            Text(
               'サンプルは架空の内容です。同期はSyncthing等で行い、更新は「再読込」で確認します。',
-              style: TextStyle(fontSize: 12, height: 1.6),
+              style: noteStyle(context),
             ),
           ],
         ),
@@ -1399,7 +1401,7 @@ Future<void> showHomeWidgetSettings(
         title: const Text('ホーム画面ウィジェットの表示'),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
-          child: SingleChildScrollView(
+          child: DialogScroll(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1421,6 +1423,7 @@ Future<void> showHomeWidgetSettings(
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String?>(
                   key: const Key('home-widget-project'),
+                  style: fieldTextStyle(context),
                   initialValue: project,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: '対象のプロジェクト'),
@@ -1537,7 +1540,7 @@ Future<void> _showNotificationSettings(
         title: Text(title),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
-          child: SingleChildScrollView(
+          child: DialogScroll(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'parts.dart';
 import '../core/people.dart';
 import 'views.dart' show NoticeBox;
 
@@ -56,14 +57,14 @@ class _PersonDialogState extends State<PersonDialog> {
       title: Text(person == null ? '人を登録' : '${person.name}の名前と呼び名'),
       content: SizedBox(
         width: 520,
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'メモに書く呼び方で登録すると、その名前が出てくる記録と、名前が出てくる未完了の次の一手・未解決を、Mac miniが人ごとに集めます（AIは使いません）。同じ名前の別人や、名前を含む別の語も拾うことがあるため、呼び名は2文字以上にしてください。',
-                style: TextStyle(fontSize: 12, height: 1.6),
+                style: noteStyle(context),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -92,9 +93,9 @@ class _PersonDialogState extends State<PersonDialog> {
               if (problem != null)
                 NoticeBox(problem, error: true)
               else
-                const Text(
+                Text(
                   '依頼は保存され、Mac miniで処理されると、次のAI読み取りから一覧が作られます。人の名前はこの端末と同期先のVaultにだけ残り、別のAIへ渡す文脈には含めません。',
-                  style: TextStyle(fontSize: 12, height: 1.6),
+                  style: noteStyle(context),
                 ),
             ],
           ),

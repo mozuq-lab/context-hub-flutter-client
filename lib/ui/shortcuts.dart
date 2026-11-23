@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'parts.dart';
 
 /// キーボード操作の対応表。画面のショートカット、Macのメニューバー、「キーボード操作」の一覧で共用する。
 /// Macでは⌘、ほかの端末（Androidの物理キーボードなど）ではCtrlを使う。
@@ -125,7 +126,7 @@ Future<void> showKeyboardHelp(BuildContext context) => showDialog<void>(
       title: const Text('キーボード操作'),
       content: SizedBox(
         width: 520,
-        child: SingleChildScrollView(
+        child: DialogScroll(
           child: Table(
             columnWidths: const {0: IntrinsicColumnWidth()},
             defaultVerticalAlignment: TableCellVerticalAlignment.middle,

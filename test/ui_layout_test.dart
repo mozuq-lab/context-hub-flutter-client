@@ -42,5 +42,46 @@ void main() {
     final chip = find.byKey(const Key('search-kind-memo'));
     expect(t.widget<FilterChip>(chip).showCheckmark, isTrue);
   });
-}
 
+  testWidgets('メモの種類は、たたまずに2つの切り替えで選び、作業要約として保存できる', (t) async {
+    final a = MemoryUIAccess();
+    await sample(t, a, fixture().files);
+    await t.tap(find.byKey(const Key('new-memo')).first);
+    await t.pumpAndSettle();
+    // 「種類」を開いた中にさらに選択欄がある形にしない。
+    expect(find.byType(ExpansionTile), findsNothing);
+    final kind = find.byKey(const Key('memo-kind'));
+    expect(t.widget<SegmentedButton<String>>(kind).selected, {'memo'});
+    expect(find.byKey(const Key('memo-kind-note')), findsNothing);
+    await t.tap(find.byKey(const Key('memo-kind-work-summary')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('memo-kind-note')), findsOneWidget);
+    await t.enterText(find.byKey(const Key('memo-text')), 'AIの作業の報告を貼る');
+    await t.ensureVisible(find.byKey(const Key('save-memo')));
+    await t.tap(find.byKey(const Key('save-memo')));
+    await t.pumpAndSettle();
+    expect(find.text('この端末に保存しました'), findsOneWidget);
+    expect(a.requests.values.single, contains('work-summary'));
+  });
+
+  testWidgets('狭い画面のダイアログは、画面の端から16だけ空けて本文の幅を広く取る', (t) async {
+    // 種類の切り替えは、狭い画面では印を外して文字を折り返させない。
+    await sample(
+      t,
+      MemoryUIAccess(),
+      fixture().files,
+      size: const Size(400, 860),
+    );
+    await t.tap(find.byKey(const Key('new-memo')).first);
+    await t.pumpAndSettle();
+    final surface = find
+        .descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(Material),
+        )
+        .first;
+    expect(t.getSize(surface).width, greaterThanOrEqualTo(400 - 32 - 0.5));
+    final label = find.byKey(const Key('memo-kind-work-summary'));
+    expect(t.getSize(label).height, lessThan(24));
+  });
+}
