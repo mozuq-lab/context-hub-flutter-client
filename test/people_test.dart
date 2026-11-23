@@ -121,7 +121,7 @@ void main() {
     Map<String, dynamic> request(String id, Map<String, dynamic> fields) => {
       'schema_version': 1,
       'request_id': id,
-      'source': 'flutter-client/x',
+      'source': 'context-hub-client/x',
       'occurred_at': '2026-11-20T10:00:00Z',
       'operation': 'person-definition',
       'confirmed': true,

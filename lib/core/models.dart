@@ -1124,7 +1124,7 @@ class NewProjectRequest {
     final header = {
       'schema_version': 1,
       'request_id': 'REQ-${'0' * 32}',
-      'source': 'flutter-client/${'0' * 36}',
+      'source': 'context-hub-client/${'0' * 36}',
       'occurred_at': '0000-00-00T00:00:00.000000Z',
       ...fields,
     };

@@ -35,7 +35,7 @@ if [[ "$target" == all || "$target" == android ]]; then
     chmod 600 .local-signing/context-hub-test.jks
   fi
   "$flutter_bin" build apk --release
-  cp build/app/outputs/flutter-apk/app-release.apk artifacts/context-hub-flutter-android.apk
+  cp build/app/outputs/flutter-apk/app-release.apk artifacts/context-hub-client-android.apk
 fi
 if [[ "$target" != android ]]; then
   if [[ "$macos_build_method" == project ]]; then
@@ -53,13 +53,13 @@ if [[ "$target" != android ]]; then
   previous_app="$stage/previous-app"
   # 復元にも失敗した場合は、以前のアプリを一時領域に残す。
   trap 'if [[ ! -e "$previous_app" && ! -L "$previous_app" ]]; then rm -rf -- "$stage"; fi' EXIT
-  app_name='ContextHub Flutter.app'
+  app_name='ContextHub Client.app'
   app_bundle="$stage/$app_name"
-  archive_name=context-hub-flutter-macos.zip
+  archive_name=context-hub-client-macos.zip
   ditto "build/macos/Build/Products/Release/$app_name" "$app_bundle"
 
   if [[ "$target" == macos-signed ]]; then
-    archive_name=context-hub-flutter-macos-developer-id.zip
+    archive_name=context-hub-client-macos-developer-id.zip
     # 内側のframeworkから先に署名する。
     find "$app_bundle/Contents/Frameworks" -depth -type d -name '*.framework' -print0 > "$stage/frameworks"
     while IFS= read -r -d '' framework; do

@@ -18,7 +18,7 @@ class ContextHubApp extends StatelessWidget {
   final HubController controller;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'ContextHub',
+    title: 'ContextHub Client',
     debugShowCheckedModeBanner: false,
     theme: hubTheme(Brightness.light),
     darkTheme: hubTheme(Brightness.dark),
@@ -373,7 +373,7 @@ class _HubShellState extends State<HubShell> {
           PlatformMenuItemGroup(
             members: [
               PlatformMenuItem(
-                label: 'ContextHub Flutterについて',
+                label: 'ContextHub Clientについて',
                 onSelected: () {
                   if (idle) about();
                 },
@@ -496,7 +496,7 @@ class _HubShellState extends State<HubShell> {
 
   void about() => showAboutDialog(
     context: context,
-    applicationName: 'ContextHub Flutter',
+    applicationName: 'ContextHub Client',
     applicationVersion: appVersion,
     applicationLegalese: 'MIT License · mozuq-lab',
   );
@@ -1506,7 +1506,7 @@ Future<void> _showNotificationSettings(
 }) async {
   var busy = false;
   // アプリの通知そのものか、このお知らせの種類だけが、端末の設定で止められている。
-  final howTo = '端末の設定で、ContextHub Flutterの通知と、その中の「$channel」を許可してください。';
+  final howTo = '端末の設定で、ContextHub Clientの通知と、その中の「$channel」を許可してください。';
   String? problem = enabled && blocked
       ? '通知が止められているため、いまは通知されません。$howToその後、アプリを開き直してください。'
       : null;

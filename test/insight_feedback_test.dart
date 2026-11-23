@@ -432,7 +432,7 @@ void main() {
       final raw = encodePacket({
         'schema_version': 1,
         'request_id': requestId,
-        'source': 'flutter-client/95111111-2222-4333-8444-555555555555',
+        'source': 'context-hub-client/95111111-2222-4333-8444-555555555555',
         'occurred_at': '2026-11-15T01:00:00.000Z',
         'operation': 'insight-reaction',
         'run_id': runId,
@@ -464,7 +464,7 @@ void main() {
         'item_key': reaction['key'],
         'reaction': 'off-target',
         'decided_at': '2026-11-15T01:00:00.000Z',
-        'source': 'flutter-client/95111111-2222-4333-8444-555555555555',
+        'source': 'context-hub-client/95111111-2222-4333-8444-555555555555',
         'source_event_id': requestId,
         'created_at': '2026-11-20T00:00:00.000Z',
       });

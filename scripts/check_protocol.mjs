@@ -10,13 +10,13 @@ const path=`Input/${basename(file)}`, raw=await readFile(file,'utf8');
 const expected=JSON.parse(await readFile(expectedFile,'utf8'));
 const packet=parseIntake(path,raw,8000);
 assert.equal(packet.text,expected.text);
-assert.equal(packet.source,`flutter-client/${expected.operationId}`);
+assert.equal(packet.source,`context-hub-client/${expected.operationId}`);
 assert.equal(packet.project,expected.project);
 // 選んで深掘りのメモはmeta（文字列だけ）を付ける。付けない入力ではmetaがないことも確かめる。
 assert.deepEqual(packet.meta,expected.meta);
 // 出来事の日付は、選んだときだけ付く。
 assert.equal(packet.happened_on,expected.happenedOn);
-const root=await mkdtemp(join(tmpdir(),'ctx-flutter-protocol-'));
+const root=await mkdtemp(join(tmpdir(),'ctx-client-protocol-'));
 try {
   const config=defaultConfig(join(root,'vault'),join(root,'state'));
   const vault=new Vault(config);await vault.init();

@@ -193,7 +193,7 @@ void main() {
       files['Input/REQ-${op1.replaceAll('-', '')}.md'] = encodePacket({
         'schema_version': 1,
         'request_id': 'REQ-${op1.replaceAll('-', '')}',
-        'source': 'flutter-client/$op1',
+        'source': 'context-hub-client/$op1',
         'occurred_at': '2026-10-01T00:00:00.000Z',
         'operation': 'correct',
         'target_id': questionInput,
@@ -363,7 +363,7 @@ void main() {
     final raw = encodePacket({
       'schema_version': 1,
       'request_id': requestId,
-      'source': 'flutter-client/$op1',
+      'source': 'context-hub-client/$op1',
       'occurred_at': '2026-10-01T00:00:00.000Z',
       'operation': 'correct',
       'target_id': questionInput,

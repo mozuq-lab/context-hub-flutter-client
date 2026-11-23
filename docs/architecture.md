@@ -115,7 +115,7 @@ Androidの期日の通知も任意の設定で、既定は無効です。確認�
 
 対象はApple SiliconのmacOS 12以降とAndroidです。Macのsecurity-scoped bookmark、AndroidのローカルExternalStorageProviderのSAF権限を利用します。全ストレージ権限・クラウドprovider・SQLite・新規サーバーは利用しません。
 
-同期・モデル・Gateway・常駐サービスをアプリから操作しません。ネットワークへの接続は、選んで深掘りのClaude APIへの依頼だけです。アプリを閉じている間に動くのは、Androidで確認待ちの通知か期日の通知を有効にしたときの数時間おきの確認だけです。Macのbundle IDは `com.mozuqlab.contexthub.flutter`、Androidは `com.mozuqlab.context_hub_client` です。
+同期・モデル・Gateway・常駐サービスをアプリから操作しません。ネットワークへの接続は、選んで深掘りのClaude APIへの依頼だけです。アプリを閉じている間に動くのは、Androidで確認待ちの通知か期日の通知を有効にしたときの数時間おきの確認だけです。Macのbundle IDは `com.mozuqlab.contexthub.client`、Androidは `com.mozuqlab.context_hub_client` です。
 
 OSフォルダー選択と再起動後の権限保持、実端末・実同期などの確認範囲は[検証状況](verification.md)、データ保全と復旧は[SECURITY.md](../SECURITY.md)を参照してください。
 

@@ -707,7 +707,7 @@ void main() {
   test('保存期間を過ぎて片付けられた答えを、答え待ちとして示さない', () {
     const id = 'REQ-0123456789abcdef0123456789abcdef';
     const raw =
-        '---\n{"schema_version":1,"request_id":"$id","source":"flutter-client/x","occurred_at":"2026-09-01T00:00:00.000Z","operation":"ask"}\n---\n前の問い';
+        '---\n{"schema_version":1,"request_id":"$id","source":"context-hub-client/x","occurred_at":"2026-09-01T00:00:00.000Z","operation":"ask"}\n---\n前の問い';
     Map<String, String> files(String receivedAt) => {
       ...fixtureFiles(),
       'Input/$id.md': raw,
@@ -746,7 +746,7 @@ void main() {
       'status': 'pending',
       'question': '前の問い',
       'project': null,
-      'source': 'flutter-client/x',
+      'source': 'context-hub-client/x',
       'source_event_id': id,
       'asked_at': '2026-10-29T00:00:00.000Z',
       'attempts': 0,

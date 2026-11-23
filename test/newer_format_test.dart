@@ -39,11 +39,11 @@ void main() {
     final raw = encodePacket({
       'schema_version': 1,
       'request_id': requestId,
-      'source': 'flutter-client/$op',
+      'source': 'context-hub-client/$op',
       'occurred_at': '2026-10-01T00:00:00.000Z',
       'operation': 'capture',
       'kind': 'memo',
-      'tool': 'context-hub-flutter',
+      'tool': 'context-hub-client',
     }, '新しい本体で受け付けたメモ');
     files['Input/$requestId.md'] = raw;
     files['90_system/intake/$requestId.json'] = jsonEncode({

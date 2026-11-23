@@ -14,7 +14,7 @@ try{
  await addProject(config,{id:'garden',title:'家庭菜園',aliases:['菜園'],keywords:['苗']});
  for(let i=0;i<count;i++){
   const request_id=`REQ-${i.toString(16).padStart(32,'0')}`,path=`Input/${request_id}.md`;
-  const meta={schema_version:1,request_id,operation:'capture',kind:i%5===0?'work-summary':'memo',source:'growth-test-device',occurred_at:new Date(Date.UTC(2026,9,1)+i*3600_000).toISOString(),tool:'context-hub-flutter',...(i%2===0?{project:'garden'}:{})};
+  const meta={schema_version:1,request_id,operation:'capture',kind:i%5===0?'work-summary':'memo',source:'growth-test-device',occurred_at:new Date(Date.UTC(2026,9,1)+i*3600_000).toISOString(),tool:'context-hub-client',...(i%2===0?{project:'garden'}:{})};
   await vault.create(path,markdown(meta,`架空のメモ${i}: 菜園の苗の様子`));
   await utimes(join(config.vaultPath,path),new Date(0),new Date(0));
  }

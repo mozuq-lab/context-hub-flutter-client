@@ -66,7 +66,7 @@ Map<String, String> processed(
     },
   });
   files['00_inbox/2026-11-21_$newInput.md'] =
-      '---\nschema_version: 1\nid: $newInput\nkind: memo\nsource: flutter-client\nsource_event_id: $requestId\noccurred_at: 2026-11-21T09:00:00+09:00\nreceived_at: 2026-11-21T00:00:01.000Z\norigin: user-note\n---\n帰りに牛乳を買う\n';
+      '---\nschema_version: 1\nid: $newInput\nkind: memo\nsource: context-hub-client\nsource_event_id: $requestId\noccurred_at: 2026-11-21T09:00:00+09:00\nreceived_at: 2026-11-21T00:00:01.000Z\norigin: user-note\n---\n帰りに牛乳を買う\n';
   if (organized) {
     final receipt =
         jsonDecode(

@@ -4,7 +4,7 @@
     <!-- 確認待ちの通知（任意の設定）。本人が設定を入れたときだけ、端末の許可画面を出す。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
-        android:label="ContextHub Flutter"
+        android:label="ContextHub Client"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:name="${applicationName}"

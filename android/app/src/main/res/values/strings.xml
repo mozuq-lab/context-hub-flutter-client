@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="widget_name">ContextHub</string>
+    <string name="widget_name">ContextHub Client</string>
     <string name="widget_description">次の一手と確認待ちの件数を表示し、メモの追加を開きます。</string>
     <string name="widget_empty">アプリを開いてVaultを読み込むと表示されます</string>
     <string name="widget_capture">メモを追加</string>
