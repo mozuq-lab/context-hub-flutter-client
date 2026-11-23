@@ -216,6 +216,9 @@ class _HubViewState extends State<HubView> {
   /// 「次の一手」画面で表示する欄（next または open）。
   String nextSection = 'next';
 
+  /// 期日の通知から開いた回数（[HubController.dueOpened]）のうち、画面に反映した分。
+  int _dueOpened = 0;
+
   /// 「次の一手」画面の手間の目安での絞り込み（[effortFilters]のキー）。nullならすべて。
   String? effortFilter;
 
@@ -3790,6 +3793,13 @@ class _HubViewState extends State<HubView> {
   /// 進行中のプロジェクトの「次の一手」（または未解決）を、ピン留めしたものから順に、残りは最新の根拠が新しい順にまとめる。
   /// 本人が付けた期日が過ぎた・今日・7日以内の項目はプロジェクトをまたいで先頭に出し、見直す日が先の項目はたたむ。
   List<Widget> nextView() {
+    // 期日の通知から開いたら、通知で数えた項目が隠れないよう、次の一手の欄に戻して絞り込みを外す。
+    if (c.dueOpened != _dueOpened) {
+      _dueOpened = c.dueOpened;
+      nextSection = 'next';
+      effortFilter = null;
+      contextFilter = null;
+    }
     final now = DateTime.now(),
         today = hubToday(now),
         projects = repo.actionableProjects,

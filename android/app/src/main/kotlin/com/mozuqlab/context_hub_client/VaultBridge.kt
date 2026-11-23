@@ -67,8 +67,9 @@ class VaultBridge(
     private val secrets = File(data, "secrets").apply { mkdirs() }
     private val sample = File(data, "sample-vault")
     private var picker: MethodChannel.Result? = null
-    /** 通知の許可画面の結果を待っている呼び出し。 */
+    /** 通知の許可画面の結果を待っている呼び出しと、その通知の種類。 */
     private var permission: MethodChannel.Result? = null
+    private var permissionKind: Any? = null
     private val channel = MethodChannel(messenger, "com.mozuqlab.contexthub/vault")
     init {
         channel.setMethodCallHandler { call, result ->
@@ -117,15 +118,17 @@ class VaultBridge(
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
             } else if (call.method == "attentionNotifications") {
-                // 確認待ちの通知の有効・無効。有効にできた（通知が許可されている）ときだけtrueを返す。
+                // 数時間おきの確認の有効・無効（確認待ちと期日で共有）。有効にできた（kindの通知が許可されている）ときだけtrueを返す。
                 try {
                     val app = context.applicationContext
+                    val kind = args["kind"] ?: "attention"
+                    AttentionCheck.setActive(app, if (args["enabled"] == true) args["active"] ?: listOf(kind) else emptyList<String>())
                     if (args["enabled"] != true) {
                         AttentionCheck.cancel(app)
                         result.success(false)
-                    } else if (AttentionCheck.allowed(app)) {
+                    } else if (AttentionCheck.allowed(app, kind)) {
                         result.success(AttentionCheck.schedule(app))
-                    } else {
+                    } else if (!AttentionCheck.allowed(app)) {
                         // 許可がない間は、通知できない確認を続けない。
                         AttentionCheck.cancel(app)
                         if (args["request"] == true && activity != null && permission == null &&
@@ -133,8 +136,14 @@ class VaultBridge(
                             activity.checkSelfPermission(AttentionCheck.PERMISSION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                             // 本人が設定を入れたときだけ、端末の許可画面を出す。
                             permission = result
+                            permissionKind = kind
                             activity.requestPermissions(arrayOf(AttentionCheck.PERMISSION), AttentionCheck.PERMISSION_REQUEST)
                         } else result.success(false)
+                    } else {
+                        // アプリの通知は許可されているが、このお知らせの種類だけが端末の設定で止められている。
+                        // 有効にしているもう一方の種類が通知できれば確認を続け、どれも通知できなければ確認を止める。
+                        if (AttentionCheck.allowedAny(app)) AttentionCheck.schedule(app) else AttentionCheck.cancel(app)
+                        result.success(false)
                     }
                 } catch (_: Exception) {
                     if (permission === result) permission = null
@@ -145,13 +154,13 @@ class VaultBridge(
                 try {
                     // 確認の途中でアプリの画面が開いたら、アプリが件数を出すので通知しない。
                     if (activity != null || !MainActivity.visible) {
-                        AttentionCheck.show(context.applicationContext, args["key"] as String, args["title"] as String, args["text"] as String)
+                        AttentionCheck.show(context.applicationContext, args["kind"], args["key"] as String, args["title"] as String, args["text"] as String)
                     }
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
             } else if (call.method == "clearAttention") {
                 try {
-                    AttentionCheck.clear(context.applicationContext)
+                    AttentionCheck.clear(context.applicationContext, args["kind"])
                     result.success(null)
                 } catch (_: Exception) { fail(result) }
             } else if (call.method == "backgroundDone") {
@@ -176,10 +185,12 @@ class VaultBridge(
     fun permissionResult(request: Int): Boolean {
         if (request != AttentionCheck.PERMISSION_REQUEST) return false
         val result = permission ?: return true
+        val kind = permissionKind ?: "attention"
         permission = null
+        permissionKind = null
         try {
             val app = context.applicationContext
-            result.success(AttentionCheck.allowed(app) && AttentionCheck.schedule(app))
+            result.success(AttentionCheck.allowed(app, kind) && AttentionCheck.schedule(app))
         } catch (_: Exception) { fail(result) }
         return true
     }
