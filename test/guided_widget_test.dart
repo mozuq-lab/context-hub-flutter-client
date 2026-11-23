@@ -56,7 +56,8 @@ void main() {
   }
 
   Future<void> tapKey(WidgetTester tester, String key) async {
-    await tester.ensureVisible(find.byKey(Key(key)));
+    // 画面の外（スクロールの先）にある操作も、見える位置まで送ってから押す。
+    await tester.ensureVisible(find.byKey(Key(key), skipOffstage: false));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key(key)));
     await tester.pumpAndSettle();
@@ -84,8 +85,35 @@ void main() {
     await tapKey(tester, 'guided-key-save');
     expect(secrets.value, 'sk-ant-test-key-0000000000');
     expect(find.text('APIキー: 登録済み'), findsOneWidget);
+    // モデルはAIの設定で選び、端末に残す。入力中のキーは消さない。
+    await tester.enterText(find.byKey(const Key('guided-key')), '入力中');
+    await tapKey(tester, 'guided-model-claude-sonnet-5-5');
+    expect(find.text('モデルをSonnet 5.5にしました。'), findsOneWidget);
+    expect(find.text('入力中'), findsOneWidget);
+    expect(
+      (jsonDecode(access.states[GuidedStore.fileName]!) as Map)['model'],
+      'claude-sonnet-5-5',
+    );
+    await tapKey(tester, 'guided-model-claude-haiku-5-5');
+    expect(
+      tester.widget<Text>(find.byKey(const Key('guided-model-note'))).data,
+      contains('代わりのモデルはありません'),
+    );
+    await tapKey(tester, 'guided-model-claude-opus-5-5');
+    await tapKey(tester, 'guided-summary-effort');
+    await tester.tap(find.byKey(const Key('guided-summary-effort-high')).last);
+    await tester.pumpAndSettle();
+    expect(find.text('まとめのEffortをhighにしました。'), findsOneWidget);
+    expect(
+      (jsonDecode(access.states[GuidedStore.fileName]!) as Map)['summary_effort'],
+      'high',
+    );
     await tapKey(tester, 'guided-settings-close');
     expect(find.byKey(const Key('guided-no-key')), findsNothing);
+    expect(
+      find.textContaining('モデル: Opus 5.5・Effort: 問いlow／まとめhigh（AIの設定で変えられます）'),
+      findsOneWidget,
+    );
 
     // 資料は本人がオンにしたときだけ送る。送る全文は始める前に開いて見せ、そのまま送る。
     expect(
@@ -133,6 +161,9 @@ void main() {
 
     await tapKey(tester, 'guided-wrap');
     expect(find.byKey(const Key('guided-summary')), findsOneWidget);
+    expect(model.prompts.first.effort, 'low');
+    expect(model.prompts.last.effort, 'high');
+    expect(model.prompts.last.model, 'claude-opus-5-5');
     await tester.enterText(
       find.byKey(const Key('guided-summary')),
       '## まとめ\n読取を直し、テストとレビューをした。',

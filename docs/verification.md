@@ -396,6 +396,12 @@
 - Kotlinは、Androidのクラスをrobolectricの`android-all`（API 34）とFlutterの埋め込みjarで置き換え、`R`とandroidx.lifecycleを手書きの代用品にしてコンパイルし、エラーが出ないことを確かめた（代用品の定義が実物と合っている保証はありません）。Swiftはコンパイルしていません（読み合わせだけ）。
 - 未検証: Mac・Androidのファイル選択画面、Vaultへの写し、既定のアプリで開く動作（`VaultBridge.swift`・`VaultBridge.kt`の追加）。この環境にXcode・Android SDKがなく、ビルドと実機での確認をしていません。大きなファイル（数十MB）を写す時間と、同期（iCloud Drive・Syncthingなど）でファイルが本体に届くまでの時間も未確認です。
 
+## 質問に答えてまとめるのモデルとEffortの選択（2026-11-23）
+
+- Linux上のFlutter 3.47.9で、静的解析と共通テストを実行（結果はPRに記載）。
+- 「AIの設定」で選んだモデルが`guided.json`に残り、問いとまとめの依頼に使われること、一覧にない値・古い状態ファイルでは既定のOpus 5.5に戻ること、Haikuでは`fallbacks`と`anthropic-beta`を付けないこと、404の案内に依頼したモデルの名前が出ること、設定画面でモデルを選んでも入力中のAPIキーが消えないこと、問いとまとめのEffortを別々に選んで依頼に使い・端末に残し・選べない値は既定（問いlow・まとめmedium）に戻すこと、high以上で出力の上限と待つ時間を広げることを`test/guided_test.dart`・`test/guided_widget_test.dart`で確認（偽のClaude APIを使用）。
+- 未検証: 実際のClaude APIでSonnet 5.5・Haiku 5.5を呼んだときと、high以上のEffortで呼んだときの応答時間・応答と、問いやまとめの質（モデルの課金があるため未実施）。xhigh・maxでは、考えている間に応答が90秒以上届かず途切れたと判断する可能性があります。Haiku 5.5の料金は依頼が10万トークン以下の料金表で概算します。
+
 ## 再検証
 
 基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.47.9を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。
