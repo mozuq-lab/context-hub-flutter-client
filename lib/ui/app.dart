@@ -158,17 +158,18 @@ class _HubShellState extends State<HubShell> {
       );
       return;
     }
-    if (action == 'attention' &&
+    if ((action == 'attention' || action == 'due') &&
         DateTime.now().difference(c.repository!.snapshot.loadedAt) >
             const Duration(seconds: 10)) {
       // アプリを開いたままだった場合は、通知のもとになった同期済みの内容を読み込んでから開く。
       await c.reload();
       if (!mounted) return;
     }
-    if (action == 'next' || action == 'attention') {
-      // 記録の詳細などを開いていたら閉じて、次の一手の一覧（通知からは、増えた判断待ちを判断できる画面）へ戻る。
+    if (action == 'next' || action == 'attention' || action == 'due') {
+      // 記録の詳細などを開いていたら閉じて、次の一手の一覧（確認待ちの通知からは、増えた判断待ちを判断できる画面）へ戻る。
       navigator.popUntil((route) => route.isFirst);
-      show(action == 'next' ? 'next' : c.attentionLanding);
+      if (action == 'due') c.dueOpened++;
+      show(action == 'attention' ? c.attentionLanding : 'next');
       return;
     }
     if (c.captureWarning != null) {
@@ -1050,6 +1051,16 @@ class _HubShellState extends State<HubShell> {
           enabled: !c.loading,
           onTap: () => showAttentionSettings(context, c),
         ),
+      if (c.attentionNotificationsSupported && has)
+        ListTile(
+          key: const Key('due-settings'),
+          leading: const Icon(Icons.event_outlined),
+          title: const Text('期日の通知'),
+          subtitle: Text(c.dueNotify ? 'オン' : 'オフ'),
+          trailing: chevron,
+          enabled: !c.loading,
+          onTap: () => showDueSettings(context, c),
+        ),
       if (has && (c.preferenceSyncSupported || c.preferenceSyncEnabled))
         ListTile(
           key: const Key('preference-sync-settings'),
@@ -1437,20 +1448,74 @@ Future<void> showHomeWidgetSettings(
 }
 
 /// アプリを閉じている間に確認待ちが増えたとき、端末へ通知するかを選ぶ（Androidだけ）。
-Future<void> showAttentionSettings(
-  BuildContext context,
-  HubController c,
-) async {
-  var enabled = c.attentionNotify, busy = false;
-  String? problem = c.attentionNotify && c.attentionNotifyBlocked
-      ? '端末で通知が許可されていないため、いまは通知されません。端末の設定でContextHub Clientの通知を許可してから、アプリを開き直してください。'
+Future<void> showAttentionSettings(BuildContext context, HubController c) =>
+    _showNotificationSettings(
+      context,
+      name: 'attention',
+      title: '確認待ちの通知',
+      description:
+          'アプリを閉じている間も、数時間おきにこの端末に同期済みのVaultを読み、'
+          '確認待ちの候補・作業記録の下書き・更新が止まった現状が増えたときだけ通知します。'
+          '通知に出すのは件数と種類だけで、本文は出しません。'
+          '読むのは端末内のフォルダーだけで、ネットワークには接続しません。'
+          '同期が遅れていると、通知も遅れます。'
+          '端末を再起動した後は、アプリを一度開くと確認を再開します。',
+      label: '確認待ちが増えたら通知する',
+      channel: '確認待ちのお知らせ',
+      enabled: c.attentionNotify,
+      blocked: c.attentionNotifyBlocked,
+      change: c.setAttentionNotify,
+    );
+
+/// 期限切れか今日が期日の項目があるとき、端末へ通知するかを選ぶ（Androidだけ）。
+Future<void> showDueSettings(BuildContext context, HubController c) =>
+    _showNotificationSettings(
+      context,
+      name: 'due',
+      title: '期日の通知',
+      description:
+          'アプリを閉じている間も、数時間おきにこの端末に同期済みのVaultを読み、'
+          '次の一手・未解決に期限切れか今日が期日の項目があれば、1日（日本時間の日付）に1回まで通知します。'
+          '数え方は「次の一手」の画面と同じで、完了・解決にした項目、誤りとして外した項目、'
+          '連絡待ち・「いつかやる」の項目、見直す日まで休ませている項目は数えません。'
+          '見直す日が来ただけの項目と、明日以降の期日は通知しません。'
+          '通知に出すのは件数だけで、本文とプロジェクト名は出しません。'
+          '夜（22時〜7時）は通知せず、朝以降の確認で知らせます。'
+          '読むのは端末内のフォルダーだけで、ネットワークには接続しません。'
+          '確認は数時間おきで、端末の省電力の都合で遅れることがあります。時刻どおりに知りたい期日は、カレンダーへ入れてください。'
+          '同期が止まっていると、古い内容で数えます。'
+          '端末を再起動した後は、アプリを一度開くと確認を再開します。',
+      label: '期日が来たら通知する',
+      channel: '期日のお知らせ',
+      enabled: c.dueNotify,
+      blocked: c.dueNotifyBlocked,
+      change: c.setDueNotify,
+    );
+
+/// アプリを閉じている間の通知の設定画面。[name]は画面の要素の鍵に使う。
+Future<void> _showNotificationSettings(
+  BuildContext context, {
+  required String name,
+  required String title,
+  required String description,
+  required String label,
+  required String channel,
+  required bool enabled,
+  required bool blocked,
+  required Future<bool> Function(bool) change,
+}) async {
+  var busy = false;
+  // アプリの通知そのものか、このお知らせの種類だけが、端末の設定で止められている。
+  final howTo = '端末の設定で、ContextHub Clientの通知と、その中の「$channel」を許可してください。';
+  String? problem = enabled && blocked
+      ? '通知が止められているため、いまは通知されません。$howToその後、アプリを開き直してください。'
       : null;
   await showDialog<void>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
-        key: const Key('attention-dialog'),
-        title: const Text('確認待ちの通知'),
+        key: Key('$name-dialog'),
+        title: Text(title),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: SingleChildScrollView(
@@ -1458,20 +1523,15 @@ Future<void> showAttentionSettings(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'アプリを閉じている間も、数時間おきにこの端末に同期済みのVaultを読み、'
-                  '確認待ちの候補・作業記録の下書き・更新が止まった現状が増えたときだけ通知します。'
-                  '通知に出すのは件数と種類だけで、本文は出しません。'
-                  '読むのは端末内のフォルダーだけで、ネットワークには接続しません。'
-                  '同期が遅れていると、通知も遅れます。'
-                  '端末を再起動した後は、アプリを一度開くと確認を再開します。',
-                  style: TextStyle(fontSize: 13, height: 1.6),
+                Text(
+                  description,
+                  style: const TextStyle(fontSize: 13, height: 1.6),
                 ),
                 const SizedBox(height: 12),
                 SwitchListTile(
-                  key: const Key('attention-notify'),
+                  key: Key('$name-notify'),
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('確認待ちが増えたら通知する'),
+                  title: Text(label),
                   value: enabled,
                   onChanged: busy
                       ? null
@@ -1482,10 +1542,10 @@ Future<void> showAttentionSettings(
                           });
                           var ok = false;
                           try {
-                            ok = await c.setAttentionNotify(v);
+                            ok = await change(v);
                             if (!ok) {
                               problem =
-                                  '端末で通知が許可されていません。端末の設定でContextHub Clientの通知を許可してから、もう一度お試しください。';
+                                  '通知が止められているため、有効にできません。$howToその後、もう一度お試しください。';
                             }
                           } catch (e) {
                             problem = HubController.message(e);
@@ -1502,7 +1562,7 @@ Future<void> showAttentionSettings(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
                       problem!,
-                      key: const Key('attention-problem'),
+                      key: Key('$name-problem'),
                       style: TextStyle(
                         fontSize: 13,
                         color: Theme.of(context).colorScheme.error,

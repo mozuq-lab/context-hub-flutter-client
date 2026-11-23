@@ -25,6 +25,8 @@ object LaunchActions {
     const val NEXT = PREFIX + "NEXT"
     /** 確認待ちの通知から、増えた判断待ちを判断できる画面を開く。 */
     const val ATTENTION = PREFIX + "ATTENTION"
+    /** 期日の通知から、同期済みの内容を読み込んで次の一手の画面を開く。 */
+    const val DUE = PREFIX + "DUE"
 
     /**
      * アイコン長押しのショートカットを登録する（Android 7.1以降）。
@@ -62,6 +64,7 @@ object LaunchActions {
             GUIDED -> "guided"
             NEXT -> "next"
             ATTENTION -> "attention"
+            DUE -> "due"
             else -> null
         }
     }
