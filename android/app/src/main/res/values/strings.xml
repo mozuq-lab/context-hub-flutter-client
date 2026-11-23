@@ -12,4 +12,6 @@
     <string name="shortcut_next_long">次の一手を見る</string>
     <string name="attention_channel">確認待ちのお知らせ</string>
     <string name="attention_channel_description">アプリを閉じている間に、確認待ちの候補・作業記録の下書き・更新が止まった現状が増えたことを知らせます。</string>
+    <string name="due_channel">期日のお知らせ</string>
+    <string name="due_channel_description">アプリを閉じている間に、期限切れか今日が期日の次の一手・未解決があることを、1日に1回まで件数だけで知らせます。</string>
 </resources>

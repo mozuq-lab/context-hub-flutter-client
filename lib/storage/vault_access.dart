@@ -68,34 +68,47 @@ abstract class VaultAccess {
   /// どちらも本人が確かめて保存し、アプリはカレンダーの権限を取らない。Vaultには触れない。
   Future<void> addToCalendar(CalendarEvent event) async {}
 
-  /// アプリを閉じている間の確認待ちの通知を使える端末か（Androidだけ）。
+  /// アプリを閉じている間の通知（確認待ち・期日）を使える端末か（Androidだけ）。
   bool get attentionNotificationsSupported => false;
 
-  /// 確認待ちの通知を有効・無効にする。有効にできた（通知が許可されている）ときだけtrue。
+  /// 数時間おきの確認を有効・無効にする。有効にできた（[kind]の通知が許可されている）ときだけtrue。
   ///
+  /// [kind]は[notificationKinds]のどれか（確認待ちは`attention`、期日は`due`）。確認は両方で共有する。
   /// [request]がtrueなら、許可がまだのときに端末の許可画面を出す（本人が設定を入れたときだけ）。
-  /// 有効にすると数時間おきの確認を登録し、無効にすると登録と出ている通知を消す。
+  /// 有効にすると数時間おきの確認を登録し、無効にすると登録と出ているすべての通知を消す。
+  /// どちらかの通知を使っている間は、無効にせずに有効のまま呼ぶ。
+  /// [active]は有効にしている種類のすべて（省略すると[kind]だけ）。端末はこの種類のお知らせが
+  /// すべて止められている間は確認を行わず、有効にするときにすべて止められていれば登録を消す。
   Future<bool> setAttentionNotifications({
     required bool enabled,
     bool request = false,
+    String kind = 'attention',
+    Set<String>? active,
   }) async => false;
 
-  /// 確認待ちが増えたことを端末に通知する。[key]が前回と同じなら出し直さない。
+  /// 端末に通知する。[key]が[kind]の前回の通知と同じなら出し直さない。
   Future<void> showAttentionNotification({
     required String key,
     required String title,
     required String text,
+    String kind = 'attention',
   }) async {}
 
-  /// 出ている確認待ちの通知を消す（アプリで件数を出したとき）。
-  Future<void> clearAttentionNotification() async {}
+  /// 出ている[kind]の通知を消す（確認待ちは、アプリで件数を出したとき）。
+  ///
+  /// 期日（`due`）は通知を消すだけで、その日に通知した記録は残す（同じ日に知らせ直さない）。
+  Future<void> clearAttentionNotification({String kind = 'attention'}) async {}
 
   /// アプリを閉じている間の確認が終わったことを端末へ伝える。
   Future<void> finishBackgroundCheck() async {}
 }
 
 /// 起動時の操作として受け付ける名前。ほかの値は無視する。
-const launchActions = {'capture', 'guided', 'next', 'attention'};
+/// `due`は期日の通知から開いたときで、同期済みの内容を読み込んでから次の一手を開く。
+const launchActions = {'capture', 'guided', 'next', 'attention', 'due'};
+
+/// アプリを閉じている間の通知の種類。確認待ち（attention）と期日（due）。
+const notificationKinds = {'attention', 'due'};
 
 class NativeVaultAccess implements VaultAccess {
   static const channel = MethodChannel('com.mozuqlab.contexthub/vault');
@@ -255,11 +268,19 @@ class NativeVaultAccess implements VaultAccess {
   Future<bool> setAttentionNotifications({
     required bool enabled,
     bool request = false,
+    String kind = 'attention',
+    Set<String>? active,
   }) async {
     if (!attentionNotificationsSupported) return false;
+    final kinds = active ?? {kind};
+    if (!notificationKinds.containsAll({kind, ...kinds})) {
+      throw ArgumentError.value(kind);
+    }
     return await channel.invokeMethod<bool>('attentionNotifications', {
           'enabled': enabled,
           'request': request,
+          'kind': kind,
+          'active': kinds.toList(),
         }) ==
         true;
   }
@@ -269,19 +290,23 @@ class NativeVaultAccess implements VaultAccess {
     required String key,
     required String title,
     required String text,
+    String kind = 'attention',
   }) async {
     if (!attentionNotificationsSupported) return;
+    if (!notificationKinds.contains(kind)) throw ArgumentError.value(kind);
     await channel.invokeMethod('showAttention', {
       'key': key,
       'title': title,
       'text': text,
+      'kind': kind,
     });
   }
 
   @override
-  Future<void> clearAttentionNotification() async {
+  Future<void> clearAttentionNotification({String kind = 'attention'}) async {
     if (!attentionNotificationsSupported) return;
-    await channel.invokeMethod('clearAttention');
+    if (!notificationKinds.contains(kind)) throw ArgumentError.value(kind);
+    await channel.invokeMethod('clearAttention', {'kind': kind});
   }
 
   @override

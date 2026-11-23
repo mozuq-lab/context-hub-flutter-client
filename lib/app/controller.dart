@@ -919,6 +919,16 @@ class HubController extends ChangeNotifier {
 
   /// 設定は有効だが、端末で通知が許可されていない（起動時に確かめた結果）。
   bool attentionNotifyBlocked = false;
+
+  /// アプリを閉じている間の期日の通知を使う設定（Androidだけ）。確認待ちの通知とは別に切り替える。
+  bool dueNotify = false;
+
+  /// 期日の通知の設定は有効だが、端末で通知が許可されていない（起動時に確かめた結果）。
+  bool dueNotifyBlocked = false;
+
+  /// 期日の通知から「次の一手」を開いた回数。画面は、増えたら「次の一手」の欄に戻し、絞り込みを外す
+  /// （通知で数えた項目が、前に開いていた欄や絞り込みで隠れないように）。
+  int dueOpened = 0;
   String _visiblePage = 'home';
   int? _dockBadgeSent;
   bool _attentionScheduleChecked = false;
@@ -1016,11 +1026,7 @@ class HubController extends ChangeNotifier {
   Future<bool> setAttentionNotify(bool enabled) async {
     if (location == null) throw StateError('先にVaultを選んでください。');
     await _loadSeen();
-    if (enabled &&
-        !await access.setAttentionNotifications(enabled: true, request: true)) {
-      return false;
-    }
-    if (!enabled) await access.setAttentionNotifications(enabled: false);
+    if (!await _switchNotifications('attention', enabled)) return false;
     attentionNotify = enabled;
     attentionNotifyBlocked = false;
     await _writeSettings();
@@ -1028,20 +1034,103 @@ class HubController extends ChangeNotifier {
     return true;
   }
 
+  /// 期日の通知の設定を変える。有効にできなかった（端末で通知が許可されていない）ときはfalse。
+  Future<bool> setDueNotify(bool enabled) async {
+    if (location == null) throw StateError('先にVaultを選んでください。');
+    await _loadSeen();
+    if (!await _switchNotifications('due', enabled)) return false;
+    dueNotify = enabled;
+    dueNotifyBlocked = false;
+    await _writeSettings();
+    _changed();
+    return true;
+  }
+
+  /// 有効にしている通知の種類。[change]の種類だけを入れ替えて数える。
+  Set<String> _notifyKinds([String? change, bool enabled = false]) => {
+    if (change == 'attention' ? enabled : attentionNotify) 'attention',
+    if (change == 'due' ? enabled : dueNotify) 'due',
+  };
+
+  /// [kind]の通知を切り替える。数時間おきの確認は2種類で共有するため、もう一方の通知を
+  /// 使っている間は、無効にしても確認の登録を残し、[kind]の出ている通知だけを消す。
+  /// 有効にするときは、許可がまだなら端末の許可画面を出す。許可されなければfalse。
+  Future<bool> _switchNotifications(String kind, bool enabled) async {
+    final active = _notifyKinds(kind, enabled);
+    if (enabled) {
+      final ok = await access.setAttentionNotifications(
+        enabled: true,
+        request: true,
+        kind: kind,
+        active: active,
+      );
+      // 許可画面で許可されたら、もう一方の「許可されていない」表示も確かめ直す。
+      if (ok) await _recheckBlocked(kind == 'attention' ? 'due' : 'attention');
+      return ok;
+    }
+    final rest = active.firstOrNull;
+    if (rest == null) {
+      await access.setAttentionNotifications(
+        enabled: false,
+        kind: kind,
+        active: const {},
+      );
+    } else {
+      // 残る種類だけを確認の対象として伝え直す（残る種類も止められていれば、確認の登録を消す）。
+      final ok = await access.setAttentionNotifications(
+        enabled: true,
+        kind: rest,
+        active: active,
+      );
+      _setBlocked(rest, !ok);
+      await access.clearAttentionNotification(kind: kind);
+    }
+    return true;
+  }
+
+  /// [kind]の通知が有効で「許可されていない」と示しているとき、許可を確かめ直す。
+  Future<void> _recheckBlocked(String kind) async {
+    final blocked = kind == 'attention'
+        ? attentionNotifyBlocked
+        : dueNotifyBlocked;
+    if (!blocked || !_notifyKinds().contains(kind)) return;
+    try {
+      final ok = await access.setAttentionNotifications(
+        enabled: true,
+        kind: kind,
+        active: _notifyKinds(),
+      );
+      _setBlocked(kind, !ok);
+    } catch (_) {
+      // 確かめられなくても、切り替えは続ける。
+    }
+  }
+
+  void _setBlocked(String kind, bool blocked) {
+    if (kind == 'attention') {
+      attentionNotifyBlocked = blocked;
+    } else {
+      dueNotifyBlocked = blocked;
+    }
+  }
+
   /// 起動のたびに一度、設定が有効なら数時間おきの確認を登録し直す（端末の再起動で消えるため）。
   void _ensureAttentionSchedule() {
     if (_attentionScheduleChecked) return;
     _attentionScheduleChecked = true;
-    if (!attentionNotify || !access.attentionNotificationsSupported) return;
-    access
-        .setAttentionNotifications(enabled: true)
-        .then((granted) {
-          if (granted || _disposed || !attentionNotify) return;
-          // 端末の設定で通知を止められている。設定の画面で知らせる。
-          attentionNotifyBlocked = true;
-          notifyListeners();
-        })
-        .catchError((Object _) {});
+    if (!access.attentionNotificationsSupported) return;
+    final active = _notifyKinds();
+    for (final kind in active) {
+      access
+          .setAttentionNotifications(enabled: true, kind: kind, active: active)
+          .then((granted) {
+            if (granted || _disposed || !_notifyKinds().contains(kind)) return;
+            // 端末の設定で通知を止められている。設定の画面で知らせる。
+            _setBlocked(kind, true);
+            notifyListeners();
+          })
+          .catchError((Object _) {});
+    }
   }
 
   @override
@@ -3085,6 +3174,7 @@ class HubController extends ChangeNotifier {
         final settings = AttentionSettings.fromJson(value['attention']);
         _attention = settings.state;
         attentionNotify = settings.notify;
+        dueNotify = settings.due;
       }
     } catch (_) {
       // 読めない記録は空として扱う。保存先の設定はrestoreで別に扱う。
@@ -3118,8 +3208,12 @@ class HubController extends ChangeNotifier {
     if (_today.isNotEmpty) 'today': _today,
     if (_weekly.isNotEmpty) 'weeklyReview': _weekly,
     if (!autoReload) 'autoReload': false,
-    if (_attention.identity != null || attentionNotify)
-      'attention': AttentionSettings(_attention, attentionNotify).toJson(),
+    if (_attention.identity != null || attentionNotify || dueNotify)
+      'attention': AttentionSettings(
+        _attention,
+        attentionNotify,
+        due: dueNotify,
+      ).toJson(),
   };
 
   /// 既読の記録を容量内に収めて設定を作る。古いVault→本文→古いプロジェクトの順に削る。

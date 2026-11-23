@@ -40,8 +40,16 @@ class AttentionAccess extends MemoryUIAccess {
   final badges = <int>[];
   final notices = <(String, String, String)>[];
   final toggles = <({bool enabled, bool request})>[];
-  int cleared = 0, snapshots = 0, finished = 0;
+
+  /// 期日の通知と、各呼び出しの通知の種類・有効にしている種類（[toggles]と同じ順）。
+  final dueNotices = <(String, String, String)>[];
+  final kinds = <String>[];
+  final actives = <Set<String>>[];
+  int cleared = 0, dueCleared = 0, snapshots = 0, finished = 0;
   bool granted = true;
+
+  /// 期日のお知らせの種類だけが端末の設定で止められている。
+  bool dueBlocked = false;
   String? action;
 
   /// 読み込んだ時刻。nullなら今。
@@ -84,9 +92,13 @@ class AttentionAccess extends MemoryUIAccess {
   Future<bool> setAttentionNotifications({
     required bool enabled,
     bool request = false,
+    String kind = 'attention',
+    Set<String>? active,
   }) async {
     toggles.add((enabled: enabled, request: request));
-    return enabled && granted;
+    kinds.add(kind);
+    actives.add(active ?? {kind});
+    return enabled && granted && !(kind == 'due' && dueBlocked);
   }
 
   @override
@@ -94,9 +106,17 @@ class AttentionAccess extends MemoryUIAccess {
     required String key,
     required String title,
     required String text,
-  }) async => notices.add((key, title, text));
+    String kind = 'attention',
+  }) async => (kind == 'due' ? dueNotices : notices).add((key, title, text));
   @override
-  Future<void> clearAttentionNotification() async => cleared++;
+  Future<void> clearAttentionNotification({String kind = 'attention'}) async {
+    if (kind == 'due') {
+      dueCleared++;
+    } else {
+      cleared++;
+    }
+  }
+
   @override
   Future<void> finishBackgroundCheck() async => finished++;
 }

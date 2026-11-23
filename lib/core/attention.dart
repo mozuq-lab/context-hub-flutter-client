@@ -219,21 +219,26 @@ class AttentionState {
 
 /// 端末の設定ファイル（settings.json）の`attention`に残す内容。既読の記録と、通知を使うかどうか。
 class AttentionSettings {
-  const AttentionSettings(this.state, this.notify);
+  const AttentionSettings(this.state, this.notify, {this.due = false});
   final AttentionState state;
 
   /// アプリを閉じている間の確認待ちの通知を使う（Androidだけ）。
   final bool notify;
 
+  /// アプリを閉じている間の期日の通知を使う（Androidだけ）。確認待ちの通知とは別に切り替える。
+  final bool due;
+
   Map<String, Object?> toJson() => {
     ...state.toJson(),
     if (notify) 'notify': true,
+    if (due) 'due': true,
   };
 
   /// 読めない値は、記録なし・通知なしとして扱う。
   static AttentionSettings fromJson(Object? value) => AttentionSettings(
     AttentionState.fromJson(value),
     value is Map && value['notify'] == true,
+    due: value is Map && value['due'] == true,
   );
 }
 
