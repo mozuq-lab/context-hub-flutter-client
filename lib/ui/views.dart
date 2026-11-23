@@ -589,76 +589,109 @@ class _HubViewState extends State<HubView> {
     ].join(' · ').nullIfEmpty;
   }
 
-  Widget recordCard(
+  /// 記録の一覧の1行。題名・種類と状態と日時（1行）・印・検索の抜粋を並べ、押すと詳細を開く。
+  Widget recordRow(
     HubRecord r, {
     Key? key,
     List<String>? words,
     String? badge,
   }) {
     final theme = Theme.of(context);
-    return Card(
+    return InkWell(
       key: key,
-      child: InkWell(
-        onTap: () => open(r.id),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 8, 14),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      r.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall?.copyWith(fontSize: 15),
+      onTap: () => open(r.id),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 6, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    r.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      height: 1.45,
                     ),
-                    const SizedBox(height: 4),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    [
+                      if (words != null)
+                        searchKindLabels[HubRepository.searchKindOf(r)] ??
+                            r.kind,
+                      originLabel(r.origin),
+                      stateLabel(r.status),
+                      compactWhen(r),
+                    ].join(' · '),
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  if (badge != null)
                     Text(
-                      '${words == null ? '' : '${searchKindLabels[HubRepository.searchKindOf(r)] ?? r.kind} · '}${originLabel(r.origin)} · ${stateLabel(r.status)}\n${recordWhen(r)}',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                    if (badge != null)
-                      Text(
-                        badge,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.tertiary,
-                        ),
+                      badge,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.tertiary,
                       ),
-                    if (words != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text.rich(
-                          key: const Key('search-snippet'),
-                          TextSpan(
-                            children: highlightSpans(
-                              searchSnippet(r.body, words),
-                              words,
-                              theme.colorScheme.primaryContainer,
-                            ),
+                    ),
+                  if (words != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text.rich(
+                        key: const Key('search-snippet'),
+                        TextSpan(
+                          children: highlightSpans(
+                            searchSnippet(r.body, words),
+                            words,
+                            theme.colorScheme.primaryContainer,
                           ),
-                          style: const TextStyle(fontSize: 13, height: 1.6),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
                         ),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontSize: 13,
+                          height: 1.6,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                  ],
-                ),
+                    ),
+                ],
               ),
-              if (HubRepository.bundleKinds.contains(r.kind))
-                BasketToggle(controller: c, record: r),
-              Icon(
-                Icons.chevron_right,
-                size: 20,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ],
-          ),
+            ),
+            if (HubRepository.bundleKinds.contains(r.kind))
+              BasketToggle(controller: c, record: r),
+            Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ],
         ),
       ),
     );
   }
+
+  /// 記録の一覧。1枚の面に行を並べ、行の間に細い線を引く（1件ずつの枠を並べるより軽く、目で追いやすい）。
+  Widget recordList(
+    Iterable<HubRecord> records, {
+    Key Function(HubRecord)? keyOf,
+    List<String>? words,
+    String? Function(HubRecord)? badgeOf,
+  }) => groupCard([
+    // 行ごとの鍵（検索結果の'search-result'など）は同じものが並ぶので、記録ごとに包んで兄弟の鍵を分ける。
+    for (final r in records)
+      KeyedSubtree(
+        key: ValueKey('record-row-${r.id}'),
+        child: recordRow(
+          r,
+          key: keyOf?.call(r),
+          words: words,
+          badge: badgeOf?.call(r),
+        ),
+      ),
+  ]);
 
   @override
   Widget build(BuildContext context) {
@@ -1159,16 +1192,7 @@ class _HubViewState extends State<HubView> {
           ],
         ),
       );
-      children.addAll(
-        repo.recent
-            .take(5)
-            .map(
-              (r) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: recordCard(r),
-              ),
-            ),
-      );
+      if (repo.recent.isNotEmpty) children.add(recordList(repo.recent.take(5)));
       // 保存と反映の状況は1行にまとめ、詳細は「保存と反映」で見る。
       // 受け取られた依頼は記録として残り続けるので、数えるのはまだ受け取られていないものと問題だけ。
       final waiting = repo.intake.where((s) => s.state == 'waiting').length,
@@ -1267,14 +1291,13 @@ class _HubViewState extends State<HubView> {
         );
       }
       if (repo.intake.isEmpty && c.pending.isEmpty) {
-        children.add(const Text('この端末から保存したものはありません。'));
+        children.add(emptyText(context, 'この端末から保存したものはありません。'));
       }
-      for (final status in repo.intake) {
+      if (repo.intake.isNotEmpty) {
         children.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Card(
-              child: ListTile(
+          groupCard([
+            for (final status in repo.intake)
+              ListTile(
                 title: Text(intakeStateLabel(status.state)),
                 subtitle: Text(
                   [
@@ -1303,8 +1326,7 @@ class _HubViewState extends State<HubView> {
                   );
                 },
               ),
-            ),
-          ),
+          ]),
         );
       }
     } else {
@@ -1317,28 +1339,24 @@ class _HubViewState extends State<HubView> {
         ),
       );
       if (records.isEmpty) {
-        children.add(const Text('まだ記録がありません。'));
+        children.add(emptyText(context, 'まだ記録がありません。'));
       } else {
         children.add(
           Padding(
-            padding: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.only(bottom: 10),
             child: Text(
               '${records.length}件（新しい順）',
-              style: const TextStyle(fontSize: 12),
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
         );
+        children.add(
+          recordList(
+            records.take(shown),
+            badgeOf: ideas ? ideaBadge : null,
+          ),
+        );
       }
-      children.addAll(
-        records
-            .take(shown)
-            .map(
-              (r) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: recordCard(r, badge: ideas ? ideaBadge(r) : null),
-              ),
-            ),
-      );
       children.add(moreButton(records.length));
     }
     return Align(
@@ -1457,67 +1475,64 @@ class _HubViewState extends State<HubView> {
       );
     }
     out.add(const SizedBox(height: 16));
+    final rows = <Widget>[];
     for (var i = 0; i < ids.length; i++) {
       final id = ids[i], record = repo.records[id];
-      out.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Card(
-            key: Key('basket-item-$i'),
-            child: ListTile(
-              contentPadding: const EdgeInsets.fromLTRB(20, 8, 8, 8),
-              leading: Text(
-                '${i + 1}',
-                style: const TextStyle(
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
-              title: Text(
-                record == null || missing.contains(id)
-                    ? '見つからない記録'
-                    : record.title,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: record == null || missing.contains(id)
-                  ? const Text('同期で消えたか、まだ届いていません。')
-                  : Text(
-                      '${searchKindLabels[HubRepository.searchKindOf(record)] ?? record.kind} · ${originLabel(record.origin)} · ${recordWhen(record)}'
-                      '${(repo.correctionChainOf(id)?.length ?? 1) > 1 ? '\n訂正あり（最新の訂正の本文を渡します）' : ''}',
-                      style: noteStyle(context),
-                    ),
-              onTap: record == null || missing.contains(id)
-                  ? null
-                  : () => open(id),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    key: Key('basket-up-$i'),
-                    tooltip: '上へ',
-                    onPressed: i == 0 ? null : () => c.moveInBasket(i, i - 1),
-                    icon: const Icon(Icons.arrow_upward),
-                  ),
-                  IconButton(
-                    key: Key('basket-down-$i'),
-                    tooltip: '下へ',
-                    onPressed: i == ids.length - 1
-                        ? null
-                        : () => c.moveInBasket(i, i + 1),
-                    icon: const Icon(Icons.arrow_downward),
-                  ),
-                  IconButton(
-                    key: Key('basket-remove-$i'),
-                    tooltip: 'かごから外す',
-                    onPressed: () => c.removeFromBasket(id),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
+      rows.add(
+        ListTile(
+          key: Key('basket-item-$i'),
+          contentPadding: const EdgeInsets.fromLTRB(20, 8, 8, 8),
+          leading: Text(
+            '${i + 1}',
+            style: const TextStyle(
+              fontFeatures: [FontFeature.tabularFigures()],
             ),
+          ),
+          title: Text(
+            record == null || missing.contains(id)
+                ? '見つからない記録'
+                : record.title,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: record == null || missing.contains(id)
+              ? const Text('同期で消えたか、まだ届いていません。')
+              : Text(
+                  '${searchKindLabels[HubRepository.searchKindOf(record)] ?? record.kind} · ${originLabel(record.origin)} · ${recordWhen(record)}'
+                  '${(repo.correctionChainOf(id)?.length ?? 1) > 1 ? '\n訂正あり（最新の訂正の本文を渡します）' : ''}',
+                  style: noteStyle(context),
+                ),
+          onTap: record == null || missing.contains(id)
+              ? null
+              : () => open(id),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                key: Key('basket-up-$i'),
+                tooltip: '上へ',
+                onPressed: i == 0 ? null : () => c.moveInBasket(i, i - 1),
+                icon: const Icon(Icons.arrow_upward),
+              ),
+              IconButton(
+                key: Key('basket-down-$i'),
+                tooltip: '下へ',
+                onPressed: i == ids.length - 1
+                    ? null
+                    : () => c.moveInBasket(i, i + 1),
+                icon: const Icon(Icons.arrow_downward),
+              ),
+              IconButton(
+                key: Key('basket-remove-$i'),
+                tooltip: 'かごから外す',
+                onPressed: () => c.removeFromBasket(id),
+                icon: const Icon(Icons.close),
+              ),
+            ],
           ),
         ),
       );
     }
+    if (rows.isNotEmpty) out.add(groupCard(rows));
     return out;
   }
 
@@ -1666,21 +1681,25 @@ class _HubViewState extends State<HubView> {
       _searchResults = repo.search(query, filter);
     }
     final results = _searchResults;
-    out.add(Text('${results.length}件', key: const Key('search-count')));
-    out.add(const SizedBox(height: 12));
-    for (final r in results.take(shown)) {
-      final estimated =
-          searchProject != null &&
-          repo.projectRelation(r, searchProject!) == 'estimated';
+    out.add(
+      Text(
+        '${results.length}件',
+        key: const Key('search-count'),
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    );
+    out.add(const SizedBox(height: 10));
+    if (results.isNotEmpty) {
       out.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: recordCard(
-            r,
-            key: const Key('search-result'),
-            words: words,
-            badge: estimated ? 'AI推定の関連（帰属未確定）' : null,
-          ),
+        recordList(
+          results.take(shown),
+          keyOf: (_) => const Key('search-result'),
+          words: words,
+          badgeOf: (r) =>
+              searchProject != null &&
+                  repo.projectRelation(r, searchProject!) == 'estimated'
+              ? 'AI推定の関連（帰属未確定）'
+              : null,
         ),
       );
     }
@@ -2719,45 +2738,45 @@ class _HubViewState extends State<HubView> {
         ),
       const SizedBox(height: 16),
       if (people.isEmpty && waiting.isEmpty)
-        const Text(
+        emptyText(
+          context,
           'まだ登録した人はいません。よく一緒に仕事をする人や、返事を待っている人を登録すると、その人が出てくる記録をまとめて見返せます。',
-          key: Key('people-empty'),
-          style: TextStyle(height: 1.7),
+          key: const Key('people-empty'),
         ),
-      for (final person in people)
-        Card(
-          child: ListTile(
-            key: Key('person-${person.id}'),
-            leading: const Icon(Icons.person_outline),
-            title: Text(person.name),
-            subtitle: Text(
-              [
-                if (person.aliases.isNotEmpty)
-                  '呼び名: ${person.aliases.join('、')}',
-                person.page == null
-                    ? '一覧はまだ作られていません（次のAI読み取りで作られます）'
-                    : '最後に出てきた日: ${person.lastSeen == null ? 'まだありません' : displayTime(person.lastSeen).substring(0, 10)} · 記録 ${person.records}件 · 未完了の項目 ${person.openItems}件',
-              ].join('\n'),
-              style: const TextStyle(height: 1.6),
+      // 1人ずつの枠を並べず、1枚の面に行を並べる（最近のメモなどの一覧とそろえる）。
+      if (people.isNotEmpty || waiting.isNotEmpty)
+        groupCard([
+          for (final person in people)
+            ListTile(
+              key: Key('person-${person.id}'),
+              leading: const Icon(Icons.person_outline),
+              title: Text(person.name),
+              subtitle: Text(
+                [
+                  if (person.aliases.isNotEmpty)
+                    '呼び名: ${person.aliases.join('、')}',
+                  person.page == null
+                      ? '一覧はまだ作られていません（次のAI読み取りで作られます）'
+                      : '最後に出てきた日: ${person.lastSeen == null ? 'まだありません' : displayTime(person.lastSeen).substring(0, 10)} · 記録 ${person.records}件 · 未完了の項目 ${person.openItems}件',
+                ].join('\n'),
+                style: const TextStyle(height: 1.6),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => widget.onNavigate('person:${person.id}'),
             ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => widget.onNavigate('person:${person.id}'),
-          ),
-        ),
-      for (final pending in waiting)
-        Card(
-          child: ListTile(
-            key: Key('pending-person-${pending.personId}'),
-            enabled: false,
-            leading: const Icon(Icons.hourglass_empty),
-            title: Text(pending.name),
-            subtitle: Text(
-              pending.state == 'accepted'
-                  ? 'Mac miniが受け取り済み。人の定義の同期を待っています。'
-                  : '登録を依頼済み（Mac miniでの処理を待っています）',
+          for (final pending in waiting)
+            ListTile(
+              key: Key('pending-person-${pending.personId}'),
+              enabled: false,
+              leading: const Icon(Icons.hourglass_empty),
+              title: Text(pending.name),
+              subtitle: Text(
+                pending.state == 'accepted'
+                    ? 'Mac miniが受け取り済み。人の定義の同期を待っています。'
+                    : '登録を依頼済み（Mac miniでの処理を待っています）',
+              ),
             ),
-          ),
-        ),
+        ]),
     ];
   }
 
@@ -3137,9 +3156,9 @@ class _HubViewState extends State<HubView> {
               if (reported)
                 const SizedBox.shrink()
               else if (pending)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 10),
-                  child: Text('見送り済み（反映待ち）', style: TextStyle(fontSize: 12)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Text('見送り済み（反映待ち）', style: noteStyle(context)),
                 )
               else
                 TextButton.icon(
@@ -3267,7 +3286,7 @@ class _HubViewState extends State<HubView> {
                 style: const TextStyle(fontSize: 12),
               )
             else if (reported)
-              const Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12))
+              Text('報告済み（反映待ち）', style: noteStyle(context))
             else if (e.someday)
               const Text('「いつかやる」へ移しました', style: TextStyle(fontSize: 12)),
             rowActions(
@@ -3395,7 +3414,7 @@ class _HubViewState extends State<HubView> {
                     focus.full
                         ? '今日の3つは埋まっています。続けるなら、先に今日の3つから外してください。'
                         : '今日も続けるか、期日を付けるか、今日はやらないかを選んでください。',
-                    style: const TextStyle(fontSize: 12),
+                    style: noteStyle(context),
                   ),
                   const SizedBox(height: 12),
                   for (final e in carry) carryRow(e),
@@ -3572,10 +3591,10 @@ class _HubViewState extends State<HubView> {
     final key = item.key, tag = key.substring(0, 12);
     // 完了・解決の報告が反映待ちの間は、ほかの操作を出さない（本体が断るため）。
     if (repo.itemRequestIdFor(key) != null) {
-      return const [
+      return [
         Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('報告済み（反映待ち）', style: noteStyle(context)),
         ),
       ];
     }
@@ -3726,35 +3745,35 @@ class _HubViewState extends State<HubView> {
           label: Text(section == 'next' ? '完了にする' : '解決にする'),
         ),
       if (scheduling)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Text('期日を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('期日を依頼済み（反映待ち）', style: noteStyle(context)),
         ),
       if (effortPending)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('目安を依頼済み（反映待ち）', style: noteStyle(context)),
         ),
       if (contextsPending)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Text('札を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('札を依頼済み（反映待ち）', style: noteStyle(context)),
         ),
       if (stepsPending)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Text('手順を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('手順を依頼済み（反映待ち）', style: noteStyle(context)),
         ),
       if (steps && !stepsPending) ?stepButton(project.id, item, tag),
       if (waitPending)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('連絡待ちを依頼済み（反映待ち）', style: noteStyle(context)),
         ),
       if (somedayPending)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: Text('「いつかやる」を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('「いつかやる」を依頼済み（反映待ち）', style: noteStyle(context)),
         ),
       // 今日の3つ（この端末だけ）。
       todayToggle(project.id, key),
@@ -3826,9 +3845,9 @@ class _HubViewState extends State<HubView> {
                     case final item?)
                   ...itemButtons(project, section, entry, item)
                 else if (repo.itemRequestIdFor(key) != null)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Text('報告済み（反映待ち）', style: TextStyle(fontSize: 12)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Text('報告済み（反映待ち）', style: noteStyle(context)),
                   ),
               // 「提案」の行は、自分の行動にするのが主な操作なので、そのまま出す。
               if (entry.itemKey == null &&
@@ -4215,22 +4234,24 @@ class _HubViewState extends State<HubView> {
         entryCard([for (final e in checks) crossEntry(e)]),
       ],
       if (projects.isEmpty && front.isEmpty && resting.isEmpty && waits.isEmpty)
-        const Padding(
-          padding: EdgeInsets.only(top: 24),
-          child: Text('進行中のプロジェクトはありません。'),
+        Padding(
+          padding: const EdgeInsets.only(top: 20),
+          child: emptyText(context, '進行中のプロジェクトはありません。'),
         )
       else if (filtering && count[section] != 0 && matched == 0)
         Padding(
           key: const Key('effort-filter-empty'),
-          padding: const EdgeInsets.only(top: 24),
-          child: Text(
+          padding: const EdgeInsets.only(top: 20),
+          child: emptyText(
+            context,
             '「${[if (filter != null) effortFilters[filter], if (contextChoice != null) contextChoice == contextFilterNone ? '札なし' : '@$contextChoice'].join('・')}」に合う${sectionLabels[section]}はありません。目安と札は各項目の「…」から付けられます。',
           ),
         )
       else if (count[section] == 0)
         Padding(
-          padding: const EdgeInsets.only(top: 24),
-          child: Text(
+          padding: const EdgeInsets.only(top: 20),
+          child: emptyText(
+            context,
             section == 'next'
                 ? '進行中のプロジェクトに次の一手はありません。'
                 : '進行中のプロジェクトに未解決はありません。',
@@ -5170,9 +5191,9 @@ class _HubViewState extends State<HubView> {
             ),
           ),
           if (pending)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('依頼済み（反映待ち）', style: noteStyle(context)),
             )
           else if (actionable)
             Wrap(
@@ -5654,9 +5675,9 @@ class _HubViewState extends State<HubView> {
     if (item == null || item.resolved) return const SizedBox.shrink();
     // 行動にした行は、操作を出さない（本体が一覧を作り直すと外れる）。
     if (repo.takenOver(item.inputId, item.text)) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 6),
-        child: Text('自分の行動にしました（反映待ち）', style: TextStyle(fontSize: 12)),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Text('自分の行動にしました（反映待ち）', style: noteStyle(context)),
       );
     }
     return unassignedItemActions(item, takeOver: true);
@@ -5666,9 +5687,9 @@ class _HubViewState extends State<HubView> {
   /// 本人が追加した行動には、対応した本体のとき、期日・手間の目安・定例の回の操作も「…」に出す。
   Widget unassignedItemActions(NowItemRef item, {bool takeOver = false}) {
     if (repo.itemRequestIdFor(item.key) != null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 6),
-        child: Text('操作済み（反映待ち）', style: TextStyle(fontSize: 12)),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Text('操作済み（反映待ち）', style: noteStyle(context)),
       );
     }
     final tag = item.key.substring(0, 12),
@@ -5803,19 +5824,19 @@ class _HubViewState extends State<HubView> {
             label: const Text('却下'),
           ),
           if (scheduling && records)
-            const Text('期日を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Text('期日を依頼済み（反映待ち）', style: noteStyle(context)),
           if (effortPending && records)
-            const Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Text('目安を依頼済み（反映待ち）', style: noteStyle(context)),
           if (contextsPending && records)
-            const Text('札を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Text('札を依頼済み（反映待ち）', style: noteStyle(context)),
           if (stepsPending && records)
-            const Text('手順を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Text('手順を依頼済み（反映待ち）', style: noteStyle(context)),
           if (steps && !stepsPending)
             ?stepButton(unassignedScope, item, 'unassigned-$tag'),
           if (waitPending && records)
-            const Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Text('連絡待ちを依頼済み（反映待ち）', style: noteStyle(context)),
           if (somedayPending && records)
-            const Text('「いつかやる」を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+            Text('「いつかやる」を依頼済み（反映待ち）', style: noteStyle(context)),
           if (more.isNotEmpty)
             PopupMenuButton<VoidCallback>(
               key: Key('unassigned-more-$tag'),
@@ -5886,7 +5907,7 @@ class _HubViewState extends State<HubView> {
     title: Text(item.display, maxLines: 2, overflow: TextOverflow.ellipsis),
     subtitle: Text(item.excluded ? '却下' : '完了'),
     trailing: repo.itemRequestIdFor(item.key) != null
-        ? const Text('反映待ち', style: TextStyle(fontSize: 12))
+        ? Text('反映待ち', style: noteStyle(context))
         : TextButton(
             key: Key('unassigned-reopen-${item.key.substring(0, 12)}'),
             onPressed: busy ? null : () => reportUnassigned(item, 'reopen'),
@@ -6439,7 +6460,7 @@ class _HubViewState extends State<HubView> {
                   SelectableText(draft.text),
                   const SizedBox(height: 8),
                   if (repo.draftRequestIdFor(draft.id) != null)
-                    const Text('操作済み（反映待ち）', style: TextStyle(fontSize: 12))
+                    Text('操作済み（反映待ち）', style: noteStyle(context))
                   else
                     Wrap(
                       spacing: 8,
@@ -6532,7 +6553,14 @@ class BasketToggle extends StatelessWidget {
         key: Key('basket-toggle-${record.id}'),
         tooltip: inside ? '文脈かごから外す' : '文脈かごに入れる',
         onPressed: () => _toggle(context),
-        icon: Icon(inside ? Icons.check_circle : Icons.add_circle_outline),
+        // 一覧の行では主役の題名より目立たないよう、小さめ・控えめの色にする（入っているときだけ強調色）。
+        icon: Icon(
+          inside ? Icons.check_circle : Icons.add_circle_outline,
+          size: 20,
+          color: inside
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       );
     },
   );
@@ -6925,7 +6953,7 @@ class RecordView extends StatelessWidget {
     }
     final Widget child;
     if (repo.somedayReviewRequestIdFor('idea', id) != null) {
-      child = const Text('「いつかやる」を依頼済み（反映待ち）', style: TextStyle(fontSize: 12));
+      child = Text('「いつかやる」を依頼済み（反映待ち）', style: noteStyle(context));
     } else if (repo.somedayIdea(id)) {
       child = const Text(
         '「いつかやる」に置いています。見直しは「いつかやる」の画面で行います。',
@@ -7308,6 +7336,35 @@ String recordWhen(HubRecord record) {
   return h == null
       ? timeLabel(record.at ?? record.generatedAt)
       : '${h.date}のこと（${displayTime(h.recordedAt)}に記録）';
+}
+
+/// 一覧の1行に収める短い日時。今日・昨日はそう書き、今年の日付は年と時間帯（JST）を省く。
+/// 出来事の日付があれば「M月D日のこと」とする（正午に置いた時刻は出さない）。
+String compactWhen(HubRecord record, [String? today]) {
+  final h = happenedOf(record);
+  final now = today ?? hubToday();
+  String day(String date) {
+    final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(date);
+    if (m == null) return date;
+    final md = '${int.parse(m[2]!)}月${int.parse(m[3]!)}日';
+    return m[1] != now.substring(0, 4) ? '${m[1]}年$md' : md;
+  }
+
+  String stamp(String label) {
+    final m = RegExp(r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})').firstMatch(label);
+    if (m == null) return label;
+    final date = m[1]!, time = m[2]!;
+    if (date == now) return '今日 $time';
+    if (date == addScheduleDays(now, -1)) return '昨日 $time';
+    return '${day(date)} $time';
+  }
+
+  // 出来事の日付は今日より前しか指定できない。一覧は書いた順に並ぶので、書いた日時も添える。
+  if (h != null) {
+    final when = h.date == addScheduleDays(now, -1) ? '昨日' : day(h.date);
+    return '$whenのこと · ${stamp(displayTime(h.recordedAt))}に記録';
+  }
+  return stamp(timeLabel(record.at ?? record.generatedAt));
 }
 
 /// 記録の詳細の日時。出来事の日付があれば、その日と実際に書いた日時を示す（発生日時はその日の正午に置いた値なので出さない）。

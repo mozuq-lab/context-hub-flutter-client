@@ -290,7 +290,7 @@ class _AskPanelState extends State<AskPanel> {
           const SizedBox(height: 20),
         ],
         if (repo.asks.isEmpty)
-          const Text('まだ問いはありません。', key: Key('ask-empty'))
+          emptyText(context, 'まだ問いはありません。', key: const Key('ask-empty'))
         else
           for (final (i, t) in repo.asks.indexed) thread(t, i),
       ],

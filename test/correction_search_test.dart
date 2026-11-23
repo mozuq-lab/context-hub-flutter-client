@@ -295,6 +295,9 @@ void main() {
       scrollable: main,
     );
     expect(find.text('さらに読み込む（残り12件）'), findsOneWidget);
+    // 行の高さによっては端に少しだけ見えた位置で止まるので、押す前に全体を見える位置へ動かす。
+    await tester.ensureVisible(find.byKey(const Key('show-more')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('show-more')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('show-more')), findsNothing);

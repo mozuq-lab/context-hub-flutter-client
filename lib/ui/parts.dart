@@ -160,6 +160,18 @@ Widget entryNote(BuildContext context, String text, {bool problem = false}) {
 /// 注記のうち、確かめが要る問題ではなく、性質を示すだけのもの（控えめに出す）。
 const softEntryNotes = {'AI自己報告・未検証', 'プロジェクトとの関連は候補です'};
 
+/// 一覧が空のときの一言。本文より控えめに出す。
+Widget emptyText(BuildContext context, String text, {Key? key}) => Padding(
+  padding: const EdgeInsets.symmetric(vertical: 4),
+  child: Text(
+    text,
+    key: key,
+    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    ),
+  ),
+);
+
 /// 行の小さな状態（「反映待ち」など）。
 Widget statusText(BuildContext context, String text, {Key? key}) => Padding(
   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
