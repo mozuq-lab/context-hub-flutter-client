@@ -161,6 +161,10 @@ void main() {
     expect(find.byKey(const Key('related-none')), findsNothing);
     expect(find.byKey(const Key('related-records')), findsNothing);
 
+    // 長くても、比べる特徴のない本文（ひらがなだけ）は比べていないので出さない。
+    await type('きょうはとてもいいてんきでしたねあしたもはれるといいな');
+    expect(find.byKey(const Key('related-none')), findsNothing);
+
     await type('今日は晩ごはんにカレーを作って、明日の朝の分も残しておいた。');
     final count = c.repository!.relatedCandidates.length;
     expect(count, greaterThan(0));

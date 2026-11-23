@@ -8032,8 +8032,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
     } catch (_) {
       return; // 探せなくても入力は続ける。
     }
-    // 待つ間に閉じた・読み直した・設定を止めたときは、古い結果を出さない。
-    if (!mounted || widget.controller.repository != repo || !_showRelated) {
+    // 待つ間に閉じた・設定を止めたときは、古い結果を出さない。
+    if (!mounted || !_showRelated) return;
+    // 待つ間に読み直したときは、新しい記録で探し直す（前の記録の結果や件数を残さない）。
+    if (widget.controller.repository != repo) {
+      _scheduleRelated();
       return;
     }
     final next = relatedRecords(
@@ -8042,7 +8045,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
       index: index,
       project: project,
     );
-    final none = next.isEmpty && relatedDraftLongEnough(text.text)
+    final none = next.isEmpty && relatedSearchable(text.text)
         ? index.features.length
         : null;
     // 読み直しで点や本文が変わることがあるので、毎回置き換える。
@@ -8472,6 +8475,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
     if (!mounted) return;
     setState(() {
       _initial();
+      _related = const [];
+      _relatedNone = null;
       operation = const Uuid().v4();
       locked = false;
       result = null;
@@ -8612,7 +8617,11 @@ class _CaptureDialogState extends State<CaptureDialog> {
             operation = const Uuid().v4();
           }
         });
-        if (state == null) await _persist();
+        if (state == null) {
+          // 保存中に消した関係ありそうな記録を、鍵が外れたので探し直す。
+          _scheduleRelated();
+          await _persist();
+        }
       }
     } finally {
       if (mounted) {

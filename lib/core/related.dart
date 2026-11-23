@@ -42,6 +42,11 @@ const relatedMinChars = 20;
 bool relatedDraftLongEnough(String draft) =>
     draft.replaceAll(RegExp(r'\s'), '').runes.length >= relatedMinChars;
 
+/// 本文が長さに届き、比べられる特徴も[minShared]個以上あるか（ひらがなだけ・数字だけの本文は比べない）。
+bool relatedSearchable(String draft, {int minShared = 3}) =>
+    relatedDraftLongEnough(draft) &&
+    relatedFeatures(draft).length >= minShared;
+
 /// 1回に比べる記録の上限（新しい順）。超えた古い記録は比べない。
 const relatedMaxScan = 3000;
 
@@ -153,9 +158,8 @@ List<RelatedRecord> relatedRecords(
   int minShared = 3,
   int maxScan = relatedMaxScan,
 }) {
-  if (!relatedDraftLongEnough(draft)) return const [];
+  if (!relatedSearchable(draft, minShared: minShared)) return const [];
   final mine = relatedFeatures(draft);
-  if (mine.length < minShared) return const [];
   index ??= _buildIndex(_texts(repo, maxScan));
   final candidates = repo.relatedCandidates;
   final total = index.features.length;
