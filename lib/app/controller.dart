@@ -1473,6 +1473,14 @@ class HubController extends ChangeNotifier {
         repository!.secretInReferenceTitle(draft.referenceTitle!)) {
       throw StateError(referenceTitleSecretMessage);
     }
+    if (draft.attachment case final file?) {
+      if (!attachmentsAvailable) {
+        throw StateError('この端末か、Mac miniの本体がファイルの添付に対応していません。');
+      }
+      if (repository!.secretInReferenceTitle(file.name)) {
+        throw StateError(fileNameSecretMessage);
+      }
+    }
     final draftId = draft.gitDraftId;
     if (draftId != null) {
       // 保存確認待ちの操作がある間は、同じ下書きから二重に入力を作らない。
@@ -2088,6 +2096,49 @@ class HubController extends ChangeNotifier {
       (service, parsed, operation) =>
           service.saveOrganizeRetry(operation, inputId, attempts),
     );
+  }
+
+  /// ファイルを選んでメモに添えられるか（端末と本体の両方が対応し、架空サンプルでない）。
+  bool get attachmentsAvailable =>
+      access.attachmentsSupported &&
+      location != null &&
+      location!.handle != 'sample' &&
+      (repository?.intakeFeatures.attachments ?? false);
+
+  /// メモに添えるファイルを選ぶ（端末の選択画面）。名前は本体の規則で整える。選ばなければnull。
+  Future<PickedAttachment?> pickAttachment() async {
+    final picked = await access.pickAttachment();
+    if (picked == null) return null;
+    final max =
+        repository?.intakeFeatures.attachmentLimits?.nameMaxBytes ??
+        fileNameMaxBytes;
+    return PickedAttachment(
+      picked.token,
+      sanitizeFileName(picked.name, maxBytes: max),
+      picked.bytes,
+    );
+  }
+
+  /// メモに添えたファイル（Vaultの05_files）を、端末の既定のアプリで開く。
+  Future<void> openVaultFile(HubFile file) async {
+    if (location == null || !access.attachmentsSupported) {
+      throw StateError('この端末ではファイルを開けません。');
+    }
+    if (!attachmentPathPattern.hasMatch(file.path)) {
+      throw StateError('ファイルの場所を確かめられません。');
+    }
+    // 開くとプログラムとして動く種類のファイルは開かない（Vaultに書ける誰かが置いたものを実行しないため）。
+    if (launchableFileName(file.name) ||
+        launchableFileName(file.path.split('/').last)) {
+      throw StateError(attachmentFailureMessages['file_launchable']!);
+    }
+    try {
+      await access.openVaultFile(location!, file.path);
+    } on StateError {
+      rethrow;
+    } catch (_) {
+      throw StateError('ファイルを開けません。Vaultを読めるか（保存先と権限）を確かめてください。');
+    }
   }
 
   /// 保存済みのメモを資料棚に載せる・名前を変える・外した資料を戻す（[action]が`add`）か、資料棚から外す（`remove`）依頼。

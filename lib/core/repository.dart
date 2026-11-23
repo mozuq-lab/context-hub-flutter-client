@@ -3399,7 +3399,10 @@ class HubRepository {
               : actionCapture
               ? '次の一手への追加: ${doc.body}（${m['project'] == null ? 'プロジェクト未定' : projects[m['project']]?.title ?? m['project']}）'
               : m['operation'] == 'capture' && m['reference'] == true
-              ? '資料として保存: ${m['reference_title'] is String ? m['reference_title'] : readableTitle(doc.body)}'
+              ? '資料として保存: ${m['reference_title'] is String ? m['reference_title'] : readableTitle(doc.body)}${switch (m['attachment']) {
+                  {'name': final String name} => '（ファイル: $name）',
+                  _ => '',
+                }}'
               : readableTitle(doc.body),
           at: timestamp(m['occurred_at']),
         );
@@ -4686,6 +4689,8 @@ class HubRepository {
                 e['urls'],
               ).where((u) => RegExp(r'^https?://').hasMatch(u)).toList(),
               skippedUrls: e['skipped_urls'] as int,
+              // 添えたファイルは、本体が書く05_filesの場所だけを開く（形が違えば示さない）。
+              file: HubFile.fromJson(e['file']),
               projects: strings(e['projects']),
               project: optional(e['project']),
               corrected: e['corrected'] as bool,
@@ -4706,6 +4711,7 @@ class HubRepository {
               label: e['label'] as String,
               title: optional(e['title']),
               markId: optional(e['mark_id']),
+              file: HubFile.fromJson(e['file']),
               projects: strings(e['projects']),
               project: optional(e['project']),
               removedAt: timestamp(e['removed_at']),

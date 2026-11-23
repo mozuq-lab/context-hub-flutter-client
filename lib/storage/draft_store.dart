@@ -15,6 +15,7 @@ class WritingDraft {
     this.happenedOn,
     this.reference = false,
     this.referenceTitle,
+    this.attachmentName,
     required this.updatedAt,
   });
   final String text, kind;
@@ -26,6 +27,10 @@ class WritingDraft {
   /// 資料として保存するか、と本人が付けた資料の名前（空ならnull）。
   final bool reference;
   final String? referenceTitle;
+
+  /// 選んでいたファイルの名前。ファイルそのものは端末の参照で、アプリを閉じると使えないため、
+  /// 戻したときに選び直してもらう案内にだけ使う。
+  final String? attachmentName;
 
   /// 作業記録の下書きから書いている場合、書き始めたときの下書きhash。
   final String? gitDraftHash;
@@ -43,6 +48,7 @@ class WritingDraft {
     if (happenedOn != null) 'h': happenedOn,
     if (reference) 'r': true,
     if (referenceTitle != null) 'rt': referenceTitle,
+    if (attachmentName != null) 'an': attachmentName,
     'at': updatedAt.toUtc().toIso8601String(),
   };
 
@@ -51,6 +57,7 @@ class WritingDraft {
     final text = value['t'], kind = value['k'], at = value['at'];
     final project = value['p'], hash = value['g'], op = value['o'];
     final happened = value['h'], reference = value['r'], title = value['rt'];
+    final attachment = value['an'];
     if (text is! String ||
         text.length > DraftStore.maxChars ||
         !['memo', 'work-summary'].contains(kind) ||
@@ -62,7 +69,9 @@ class WritingDraft {
         (happened != null &&
             (happened is! String || !happenedOnPattern.hasMatch(happened))) ||
         (reference != null && reference != true) ||
-        (title != null && (title is! String || title.length > 1000))) {
+        (title != null && (title is! String || title.length > 1000)) ||
+        (attachment != null &&
+            (attachment is! String || attachment.length > 1000))) {
       return null;
     }
     return WritingDraft(
@@ -74,6 +83,7 @@ class WritingDraft {
       happenedOn: happened as String?,
       reference: reference == true,
       referenceTitle: reference == true ? title as String? : null,
+      attachmentName: reference == true ? attachment as String? : null,
       updatedAt: DateTime.parse(at),
     );
   }

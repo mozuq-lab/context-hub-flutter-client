@@ -35,6 +35,7 @@ class IntakeFeatures {
     this.areaLimits,
     this.stepLimits,
     this.referenceTitleMax,
+    this.attachmentLimits,
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -92,6 +93,15 @@ class IntakeFeatures {
 
   /// 資料の名前の文字数の上限（`references.title_max_chars`）。対応前の本体はnull。
   final int? referenceTitleMax;
+
+  /// メモに添えられるファイルの大きさの上限（バイト）とファイル名の上限（UTF-8のバイト数）（`attachments`）。対応前の本体はnull。
+  final ({int maxBytes, int nameMaxBytes})? attachmentLimits;
+
+  /// PDF・画像などのファイルをメモに添えて、資料として保存できる（captureの`attachment`。ファイルはInput/filesに置く）。
+  bool get attachments =>
+      references &&
+      captureFields.contains('attachment') &&
+      attachmentLimits != null;
 
   /// メモを資料として保存し（captureの`reference`・`reference_title`）、保存済みのメモを資料棚に加える・外す・名前を変えられる（reference-mark）。
   bool get references =>
@@ -285,6 +295,12 @@ class IntakeFeatures {
           {'max_chars': final int chars, 'vocabulary_max': final int vocabulary}
               when chars >= 1 && vocabulary >= 1 =>
             (maxChars: chars, vocabularyMax: vocabulary),
+          _ => null,
+        },
+        attachmentLimits: switch (m['attachments']) {
+          {'max_bytes': final int bytes, 'name_max_bytes': final int name}
+              when bytes >= 1 && name >= 1 =>
+            (maxBytes: bytes, nameMaxBytes: name),
           _ => null,
         },
         referenceTitleMax: switch (m['references']) {

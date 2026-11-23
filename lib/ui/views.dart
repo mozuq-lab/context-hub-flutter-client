@@ -16,6 +16,7 @@ import '../core/today.dart';
 import '../storage/capture_service.dart';
 import '../storage/basket_store.dart';
 import '../storage/draft_store.dart';
+import '../storage/vault_access.dart' show PickedAttachment;
 import '../core/people.dart';
 import '../core/related.dart';
 import '../core/parser.dart' show clip;
@@ -6630,6 +6631,34 @@ class RecordView extends StatelessWidget {
     );
   }
 
+  /// メモに添えたファイル（PDF・画像など）。訂正を見ているときも元のメモのファイルを示す。
+  Widget attachmentPanel(BuildContext context) {
+    final root =
+        controller.repository?.correctionChainOf(record.id)?.first ?? record;
+    final file = root.attachment;
+    if (file == null) return const SizedBox.shrink();
+    return Padding(
+      key: const Key('record-attachment'),
+      padding: const EdgeInsets.only(top: 16),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          const Icon(Icons.attach_file, size: 18),
+          Text('添えたファイル: ${file.label}'),
+          if (controller.access.attachmentsSupported)
+            OutlinedButton(
+              key: const Key('record-attachment-open'),
+              style: compactOutlinedStyle(context),
+              onPressed: () => openHubFile(context, controller, file),
+              child: const Text('開く'),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// 整理（AIの読み取り）に失敗したメモの、失敗の理由と「整理をやり直す」。
   /// 本人が頼んだ1件だけを、次の整理でもう一度試す（本体が1回だけ試し、原文は変えない）。
   /// 資料棚に載っているか、と資料に加える・名前を変える・外す・戻す操作。資料の一覧を書く本体にだけ出す。
@@ -7118,6 +7147,8 @@ class RecordView extends StatelessWidget {
                 listenable: controller,
                 builder: (context, _) => retryPanel(context),
               ),
+            if (const ['memo', 'correction'].contains(record.kind))
+              attachmentPanel(context),
             if (const [
               'memo',
               'work-summary',
@@ -7632,6 +7663,104 @@ class _CaptureDialogState extends State<CaptureDialog> {
   bool reference = false;
   final referenceTitle = TextEditingController();
 
+  /// メモに添えるファイル（端末で選んだもの。名前は本体の規則で整えたもの）。ファイルを添えたメモは資料として保存する。
+  PickedAttachment? attachment;
+
+  /// 戻した書きかけで選んでいたファイルの名前（ファイルは戻せないため、選び直してもらう）。
+  String? _lostAttachment;
+
+  /// ファイルを添えられるか。下書きから作る入力と問いへの答えには出さず、端末と本体の両方が対応しているときだけ。
+  bool get _canAttach =>
+      _canReference &&
+      widget.draft == null &&
+      widget.controller.attachmentsAvailable;
+
+  ({int maxBytes, int nameMaxBytes}) get _attachmentLimits =>
+      widget.controller.repository?.intakeFeatures.attachmentLimits ??
+      (maxBytes: 0, nameMaxBytes: fileNameMaxBytes);
+
+  Future<void> _pickAttachment() async {
+    try {
+      final picked = await widget.controller.pickAttachment();
+      if (picked == null || !mounted) return;
+      final max = _attachmentLimits.maxBytes;
+      final problem = picked.bytes < 1
+          ? '空のファイルは添えられません。'
+          : picked.bytes > max
+          ? 'ファイルが大きすぎます（上限${fileLimitLabel(max)}を超えています）。小さくしてから選び直してください。'
+          : (widget.controller.repository?.secretInReferenceTitle(
+                  picked.name,
+                ) ??
+                false)
+          ? fileNameSecretMessage
+          : null;
+      setState(() {
+        error = problem;
+        if (problem != null) return;
+        attachment = picked;
+        _lostAttachment = null;
+        // ファイルを添えたメモは、資料として保存するメモにする。
+        reference = true;
+        kind = 'memo';
+        _formGeneration++;
+      });
+      _schedulePersist();
+    } catch (e) {
+      if (mounted) setState(() => error = HubController.message(e));
+    }
+  }
+
+  Widget _attachmentChooser(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (attachment case final file?)
+          InputChip(
+            key: const Key('capture-attachment'),
+            avatar: const Icon(Icons.attach_file, size: 18),
+            label: Text(
+              '${file.name}（${fileSizeLabel(file.bytes)}）',
+              overflow: TextOverflow.ellipsis,
+            ),
+            deleteButtonTooltipMessage: 'ファイルを外す',
+            onDeleted: locked
+                ? null
+                : () {
+                    setState(() => attachment = null);
+                    _schedulePersist();
+                  },
+          )
+        else
+          OutlinedButton.icon(
+            key: const Key('capture-attach'),
+            style: compactOutlinedStyle(context),
+            icon: const Icon(Icons.attach_file, size: 18),
+            label: const Text('ファイルを添える（PDF・画像など）'),
+            onPressed: locked || busy ? null : _pickAttachment,
+          ),
+        if (attachment != null)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'ファイルはMac miniのVault（05_files）に置き、資料棚から開けます。中身はAIへ渡さず、AIが読むのはメモの本文だけです。何のファイルかを本文に書いておくと探しやすくなります（空ならファイル名を本文にします）。',
+              key: Key('capture-attachment-note'),
+              style: TextStyle(fontSize: 11, height: 1.5),
+            ),
+          )
+        else if (_lostAttachment case final name?)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '書きかけで選んでいたファイル（$name）は戻せません。添える場合は選び直してください。',
+              key: const Key('capture-attachment-lost'),
+              style: const TextStyle(fontSize: 11, height: 1.5),
+            ),
+          ),
+      ],
+    ),
+  );
+
   /// 資料として保存できるか。問いへの答えは資料にせず、対応前の本体にも出さない。
   bool get _canReference =>
       widget.answer == null &&
@@ -7656,18 +7785,22 @@ class _CaptureDialogState extends State<CaptureDialog> {
         contentPadding: EdgeInsets.zero,
         controlAffinity: ListTileControlAffinity.leading,
         value: reference,
-        onChanged: locked
+        // ファイルを添えたメモは、必ず資料として保存する。
+        onChanged: locked || attachment != null
             ? null
             : (v) {
                 setState(() => reference = v ?? false);
                 _schedulePersist();
               },
         title: const Text('資料として保存'),
-        subtitle: const Text(
-          'AIの分類に関係なく、資料棚に載せます。アイデアや提案としては扱いません。',
-          style: TextStyle(fontSize: 12),
+        subtitle: Text(
+          attachment != null
+              ? 'ファイルを添えたメモは資料として保存します。'
+              : 'AIの分類に関係なく、資料棚に載せます。アイデアや提案としては扱いません。',
+          style: const TextStyle(fontSize: 12),
         ),
       ),
+      if (_canAttach) _attachmentChooser(context),
       if (reference)
         TextField(
           key: const Key('capture-reference-title'),
@@ -8029,6 +8162,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
     happenedOn = null;
     reference = false;
     referenceTitle.text = '';
+    attachment = null;
+    _lostAttachment = null;
   }
 
   /// 続きでプロジェクトを指定しないときに引き継ぐ、前のメモのプロジェクトの名前（統合済みなら統合先）。続きでない・指定がなければnull。
@@ -8081,6 +8216,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
           : null;
       reference = _canReference && stored.reference;
       referenceTitle.text = reference ? stored.referenceTitle ?? '' : '';
+      // 保存の記録を作る前に止まった書きかけ（ファイルを写している途中など）も、ファイルは戻せないため選び直してもらう。
+      _lostAttachment = reference && (op == null || state == null)
+          ? stored.attachmentName
+          : null;
       _restoredAt = stored.updatedAt;
       if (op != null && state != null) {
         // 保存を試みた操作は、同じ操作IDで確認だけを行う（再送しない）。
@@ -8125,6 +8264,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
         happenedOn: happenedOn,
         reference: reference,
         referenceTitle: reference ? _referenceTitleValue : null,
+        attachmentName: reference ? attachment?.name ?? _lostAttachment : null,
         updatedAt: DateTime.now(),
       ),
     );
@@ -8186,7 +8326,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
 
   Future<void> submit() async {
     // 中身を書かなかったひな形の見出しは保存しない。文字数は取り除いた後の本文で数える。
-    final body = stripEmptyTemplateHeadings(
+    var body = stripEmptyTemplateHeadings(
       text.text,
       templateHeadings(_templates),
     );
@@ -8194,6 +8334,13 @@ class _CaptureDialogState extends State<CaptureDialog> {
       setState(() => error = 'ひな形の見出しだけで、中身がありません。見出しの下に書いてから保存してください。');
       return;
     }
+    final file = attachment;
+    if (file != null && (!_canAttach || kind != 'memo' || !reference)) {
+      setState(() => error = 'ファイルを添えられなくなりました（本体か保存先が変わりました）。ファイルを外してから保存してください。');
+      return;
+    }
+    // ファイルだけを添えたときは、ファイル名を本文にする。
+    if (body.trim().isEmpty && file != null) body = file.name;
     if (body.trim().isEmpty || body.length > 8000) {
       setState(() => error = '本文は1〜8000文字で入力してください。');
       return;
@@ -8257,6 +8404,9 @@ class _CaptureDialogState extends State<CaptureDialog> {
           reference: _canReference && reference,
           referenceTitle: title,
           referenceTitleMax: _referenceTitleMax,
+          attachment: file,
+          attachmentMaxBytes: _attachmentLimits.maxBytes,
+          fileNameMaxBytes: _attachmentLimits.nameMaxBytes,
         ),
       );
       await _settled(r);
@@ -8264,8 +8414,18 @@ class _CaptureDialogState extends State<CaptureDialog> {
         setState(() => result = r);
       }
     } catch (e) {
+      // 保存の記録（journal）を作る前に止まった場合（ファイルを写せなかった・形式の誤りなど）は、直して送り直せるようにする。
+      // 写しかけのファイルと重ならないよう、次の保存は別の操作IDにする。記録後に結果が不明になった場合は、同じ操作IDで確認する。
+      final state = await widget.controller.operationState(operation);
       if (mounted) {
-        setState(() => error = HubController.message(e));
+        setState(() {
+          error = HubController.message(e);
+          if (state == null) {
+            locked = false;
+            operation = const Uuid().v4();
+          }
+        });
+        if (state == null) await _persist();
       }
     } finally {
       if (mounted) {
@@ -8527,7 +8687,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
                                       child: Text('AIの作業要約・未検証'),
                                     ),
                                   ],
-                                  onChanged: locked
+                                  // ファイルを添えたメモは、種類を変えない（ファイルはメモにだけ添える）。
+                                  onChanged: locked || attachment != null
                                       ? null
                                       : (v) {
                                           setState(() => kind = v!);

@@ -7,6 +7,7 @@ import '../core/intake_features.dart' show unassignedScope;
 import '../core/review_candidates.dart';
 import '../core/parser.dart';
 import '../core/preferences.dart';
+import '../core/attachments.dart' as attachments;
 import 'vault_access.dart';
 
 class CaptureDraft {
@@ -24,8 +25,18 @@ class CaptureDraft {
     this.reference = false,
     this.referenceTitle,
     this.referenceTitleMax = referenceTitleChars,
+    this.attachment,
+    this.attachmentMaxBytes = 0,
+    this.fileNameMaxBytes = attachments.fileNameMaxBytes,
   });
   final String operationId;
+
+  /// メモに添えるファイル（名前は本体の規則で整えたもの）。資料として保存するメモにだけ付け、対応した本体にだけ送る。
+  /// 保存のときに`Input/files/<受付ID>`へ写してから依頼を書く。
+  final PickedAttachment? attachment;
+
+  /// 添えられるファイルの大きさとファイル名の上限。本体が`intake-features.json`で示す値を渡す。
+  final int attachmentMaxBytes, fileNameMaxBytes;
 
   /// 資料として保存する（AIの分類に関係なく資料棚に載せる）。対応した本体にだけ送る。
   final bool reference;
@@ -298,6 +309,25 @@ class CaptureService {
         '資料の名前は1行・${draft.referenceTitleMax}文字以内で、前後に空白を付けずに書いてください。',
       );
     }
+    final file = draft.attachment;
+    if (file != null &&
+        (draft.kind != 'memo' ||
+            !draft.reference ||
+            draft.gitDraftId != null ||
+            !attachments.validFileName(
+              file.name,
+              maxBytes: draft.fileNameMaxBytes,
+            ))) {
+      throw const FormatException('ファイルは、資料として保存するメモにだけ添えられます。');
+    }
+    if (file != null &&
+        (file.bytes < 1 || file.bytes > draft.attachmentMaxBytes)) {
+      throw FormatException(
+        file.bytes < 1
+            ? '空のファイルは添えられません。'
+            : 'ファイルが大きすぎます（上限${attachments.fileLimitLabel(draft.attachmentMaxBytes)}）。',
+      );
+    }
     // 本体の対応表と同じ範囲（1〜3650日）に収める。
     final maxDays = draft.maxBackdateDays.clamp(1, 3650);
     if (draft.happenedOn != null &&
@@ -327,6 +357,7 @@ class CaptureService {
           if (draft.happenedOn != null) ['happened_on', draft.happenedOn],
           if (draft.continues != null) ['continues', draft.continues],
           if (draft.reference) ['reference', draft.referenceTitle],
+          if (file != null) ['attachment', file.name, file.bytes],
         ]),
       ),
       {
@@ -347,6 +378,28 @@ class CaptureService {
         'reference_title': ?draft.referenceTitle,
       },
       draft.text,
+      // ファイルは依頼より先にInput/filesへ写す（本体はファイルが届くまで依頼を保留する）。
+      // 写した後・確認情報を書く前に止まると、依頼のないファイルが残る（本体は依頼のないファイルを使わない）。
+      stage: file == null
+          ? null
+          : (requestId) async {
+              final staged = await access.stageAttachment(
+                location,
+                requestId,
+                file,
+                maxBytes: draft.attachmentMaxBytes,
+              );
+              if (staged.bytes < 1 || staged.bytes > draft.attachmentMaxBytes) {
+                throw StateError('ファイルの大きさが変わりました。選び直してください。');
+              }
+              return {
+                'attachment': {
+                  'name': file.name,
+                  'bytes': staged.bytes,
+                  'sha256': staged.sha256,
+                },
+              };
+            },
     );
   });
 
@@ -1241,8 +1294,9 @@ class CaptureService {
     String operationId,
     String fingerprint,
     Map<String, dynamic> fields,
-    String text,
-  ) async {
+    String text, {
+    Future<Map<String, dynamic>> Function(String requestId)? stage,
+  }) async {
     await _checkJournals();
     final name = '$operationId.json';
     // 書き終える前に止まったjournalは、同じ操作IDで書き直す（何も送っていないため）。
@@ -1258,6 +1312,7 @@ class CaptureService {
       incomplete = true;
     }
     final requestId = 'REQ-${operationId.replaceAll('-', '')}';
+    final staged = stage == null ? const {} : await stage(requestId);
     final occurredAt = DateTime.now().toUtc().toIso8601String();
     final raw = encodePacket({
       'schema_version': 1,
@@ -1265,6 +1320,7 @@ class CaptureService {
       'source': 'context-hub-client/$operationId',
       'occurred_at': occurredAt,
       ...fields,
+      ...staged,
     }, text);
     final j = <String, dynamic>{
       'version': 1,

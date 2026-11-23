@@ -21,6 +21,36 @@ class VaultLocation {
   );
 }
 
+/// ファイルを添える・開く操作でネイティブが返す理由（エラーコード）と、本人向けの説明。
+const attachmentFailureMessages = {
+  'attachment_not_file':
+      'フォルダーやパッケージ（.rtfd・.pagesなど）は添えられません。1つのファイルを選ぶか、PDFなどに書き出してから選んでください。',
+  'attachment_unreadable':
+      '選んだファイルを読めません（クラウドにだけあるファイルなど）。端末に保存してから選び直してください。',
+  'attachment_too_large': 'ファイルが上限より大きくなっています。小さくしてから選び直してください。',
+  'attachment_lost': '選んだファイルを使えなくなりました（アプリを開き直したなど）。ファイルを選び直してください。',
+  'attachment_conflict':
+      '前に写しかけた別のファイルと重なりました。もう一度保存してください（新しい保存として写し直します）。',
+  'file_missing': 'ファイルがまだこの端末に届いていません。同期が終わってから開いてください。',
+  'file_no_app': 'このファイルを開けるアプリがありません。',
+  'file_launchable': '実行できる種類のファイルは、アプリからは開きません。',
+};
+
+/// 端末で本人が選んだ、メモに添えるファイル。[token]は端末側の参照で、アプリを閉じると使えなくなる。
+/// [name]は端末が合成済みの文字（NFC）にそろえた元の名前、[bytes]は選んだ時点の大きさ。
+class PickedAttachment {
+  const PickedAttachment(this.token, this.name, this.bytes);
+  final String token, name;
+  final int bytes;
+}
+
+/// Vaultの`Input/files/<受付ID>`へ写したファイルの大きさとSHA-256（16進の小文字）。
+class StagedAttachment {
+  const StagedAttachment(this.bytes, this.sha256);
+  final int bytes;
+  final String sha256;
+}
+
 abstract class VaultAccess {
   Future<VaultLocation?> pickVault();
   Future<VaultLocation> sampleVault(Map<String, String> files);
@@ -101,6 +131,25 @@ abstract class VaultAccess {
 
   /// アプリを閉じている間の確認が終わったことを端末へ伝える。
   Future<void> finishBackgroundCheck() async {}
+
+  /// ファイルを選んでメモに添え、Vaultのファイルを開ける端末か（MacとAndroid）。
+  bool get attachmentsSupported => false;
+
+  /// 端末のファイル選択画面を開く。選ばなければnull。Vaultには触れない。
+  Future<PickedAttachment?> pickAttachment() async => null;
+
+  /// 選んだファイルを`Input/files/<requestId>`へ写し、写した大きさとSHA-256を返す。
+  /// [maxBytes]を超えるファイルは写さずに失敗する。同じ名前のファイルが既にあれば、内容が同じときだけ成功する。
+  Future<StagedAttachment> stageAttachment(
+    VaultLocation location,
+    String requestId,
+    PickedAttachment file, {
+    required int maxBytes,
+  }) => throw UnsupportedError('この端末ではファイルを添えられません。');
+
+  /// Vault内のファイル（`05_files`）を、端末の既定のアプリで開く。
+  Future<void> openVaultFile(VaultLocation location, String path) =>
+      throw UnsupportedError('この端末ではファイルを開けません。');
 }
 
 /// 起動時の操作として受け付ける名前。ほかの値は無視する。
@@ -313,6 +362,77 @@ class NativeVaultAccess implements VaultAccess {
   Future<void> finishBackgroundCheck() async {
     if (!attentionNotificationsSupported) return;
     await channel.invokeMethod('backgroundDone');
+  }
+
+  @override
+  bool get attachmentsSupported => calendarSupported;
+
+  /// ファイルを添える・開く操作の失敗を、本人に分かる理由にする（Vaultの選び直しを促さない）。
+  static Future<T> _attachmentCall<T>(Future<T> Function() call) async {
+    try {
+      return await call();
+    } on PlatformException catch (e) {
+      final message = attachmentFailureMessages[e.code];
+      if (message != null) throw StateError(message);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<PickedAttachment?> pickAttachment() async {
+    if (!attachmentsSupported) return null;
+    final result = await _attachmentCall(
+      () => channel.invokeMapMethod<String, Object?>('pickAttachment'),
+    );
+    if (result == null) return null;
+    if (result case {
+      'token': final String token,
+      'name': final String name,
+      'bytes': final int bytes,
+    } when token.isNotEmpty && bytes >= 0) {
+      return PickedAttachment(token, name, bytes);
+    }
+    throw const FormatException('選んだファイルを確かめられません。');
+  }
+
+  @override
+  Future<StagedAttachment> stageAttachment(
+    VaultLocation location,
+    String requestId,
+    PickedAttachment file, {
+    required int maxBytes,
+  }) async {
+    if (!attachmentsSupported) {
+      throw UnsupportedError('この端末ではファイルを添えられません。');
+    }
+    final result = await _attachmentCall(
+      () => channel.invokeMapMethod<String, Object?>('stageAttachment', {
+        'handle': location.handle,
+        'requestId': requestId,
+        'token': file.token,
+        'maxBytes': maxBytes,
+      }),
+    );
+    if (result case {
+      'bytes': final int bytes,
+      'sha256': final String sha256,
+    } when bytes >= 0 && RegExp(r'^[a-f0-9]{64}$').hasMatch(sha256)) {
+      return StagedAttachment(bytes, sha256);
+    }
+    throw const FormatException('写したファイルを確かめられません。');
+  }
+
+  @override
+  Future<void> openVaultFile(VaultLocation location, String path) async {
+    if (!attachmentsSupported) {
+      throw UnsupportedError('この端末ではファイルを開けません。');
+    }
+    await _attachmentCall(
+      () => channel.invokeMethod('openVaultFile', {
+        'handle': location.handle,
+        'path': path,
+      }),
+    );
   }
 }
 

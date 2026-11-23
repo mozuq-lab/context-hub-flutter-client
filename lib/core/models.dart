@@ -4,6 +4,10 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unicode;
 
+import 'attachments.dart';
+
+export 'attachments.dart';
+
 String digest(String value) => sha256.convert(utf8.encode(value)).toString();
 String recordId(String path) => 'record-${digest(path).substring(0, 24)}';
 
@@ -69,6 +73,10 @@ class HubRecord {
   String status;
   final List<String> warnings, references;
   final Map<String, Object?> metadata;
+
+  /// メモに添えたファイル（原文のfrontmatterの`attachment`）。メモ以外と、形が違うものはnull。
+  HubFile? get attachment =>
+      kind == 'memo' ? HubFile.fromJson(metadata['attachment']) : null;
   HubRecord({
     required this.sourceId,
     required this.path,
@@ -1682,12 +1690,16 @@ class ReferenceEntry {
     this.failed = false,
     required this.urls,
     required this.skippedUrls,
+    this.file,
     required this.projects,
     required this.project,
     required this.corrected,
     required this.pendingCorrection,
     required this.occurredAt,
   });
+
+  /// メモに添えたファイル（PDF・画像など）。なければnull。
+  final HubFile? file;
 
   /// 元のメモ（訂正を除いた最初の入力）のID。
   final String inputId;
@@ -1726,12 +1738,16 @@ class RemovedReference {
     required this.label,
     required this.title,
     this.markId,
+    this.file,
     required this.projects,
     required this.project,
     required this.removedAt,
     required this.occurredAt,
   });
   final String inputId, label;
+
+  /// メモに添えたファイル。資料棚から外してもファイルとメモは残る。
+  final HubFile? file;
   final String? title, project;
 
   /// 外した記録のID。

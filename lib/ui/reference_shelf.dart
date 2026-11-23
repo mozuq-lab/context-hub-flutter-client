@@ -196,6 +196,16 @@ class _EntryCard extends StatelessWidget {
                 ),
               ),
             ),
+            if (entry.file case final file?)
+              sourceLink(
+                context,
+                key: Key('reference-file-${entry.inputId}'),
+                icon: Icons.attach_file,
+                label: file.label,
+                onPressed: controller.access.attachmentsSupported
+                    ? () => openHubFile(context, controller, file)
+                    : null,
+              ),
             for (final url in entry.urls)
               sourceLink(
                 context,
@@ -288,6 +298,16 @@ class _RemovedCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(entry.label, style: theme.textTheme.titleSmall),
+            if (entry.file case final file?)
+              sourceLink(
+                context,
+                key: Key('reference-file-${entry.inputId}'),
+                icon: Icons.attach_file,
+                label: file.label,
+                onPressed: controller.access.attachmentsSupported
+                    ? () => openHubFile(context, controller, file)
+                    : null,
+              ),
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
@@ -350,6 +370,19 @@ Future<void> _openUrl(
     await controller.access.openExternal(url);
   } catch (_) {
     if (context.mounted) notice(context, 'リンクを開けませんでした。');
+  }
+}
+
+/// メモに添えたファイル（Vaultの05_files）を、端末の既定のアプリで開く。開けなければ理由を示す。
+Future<void> openHubFile(
+  BuildContext context,
+  HubController controller,
+  HubFile file,
+) async {
+  try {
+    await controller.openVaultFile(file);
+  } catch (e) {
+    if (context.mounted) notice(context, HubController.message(e));
   }
 }
 

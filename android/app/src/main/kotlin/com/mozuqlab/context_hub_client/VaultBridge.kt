@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract as Docs
+import android.provider.OpenableColumns
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -23,7 +24,9 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.text.Normalizer
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -67,6 +70,10 @@ class VaultBridge(
     private val secrets = File(data, "secrets").apply { mkdirs() }
     private val sample = File(data, "sample-vault")
     private var picker: MethodChannel.Result? = null
+    /** メモに添えるファイルの選択画面の結果を待っている呼び出し。 */
+    private var attachmentPicker: MethodChannel.Result? = null
+    /** 本人が選択画面で選んだファイル（参照の名前→URI）。選んだURIはアプリの画面がある間だけ読める。 */
+    private val picked = ConcurrentHashMap<String, Uri>()
     /** 通知の許可画面の結果を待っている呼び出しと、その通知の種類。 */
     private var permission: MethodChannel.Result? = null
     private var permissionKind: Any? = null
@@ -84,6 +91,35 @@ class VaultBridge(
                         Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                         Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION), 8831)
                 } catch (_: Exception) { picker = null; fail(result) }
+            } else if (call.method == "pickAttachment") {
+                // メモに添えるファイルを選ぶ。Vaultには触れず、名前・大きさと参照だけを返す。
+                if (attachmentPicker != null || activity == null) { fail(result); return@setMethodCallHandler }
+                attachmentPicker = result
+                try {
+                    activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), 8832)
+                } catch (_: Exception) { attachmentPicker = null; fail(result) }
+            } else if (call.method == "openVaultFile") {
+                // Vaultのファイル（05_files）を端末の既定のアプリで開く。開くアプリへは、そのファイルを読む権限だけを一時的に渡す。
+                // フォルダーをたどる問い合わせは、ほかのVaultの操作と同じく読取用のスレッドで行い、画面を止めない。
+                executor.execute {
+                    try {
+                        val handle = args["handle"] as String
+                        require(handle != "sample")
+                        val file = vaultFile(tree(handle), args["path"] as String)
+                        val mime = resolver.getType(file.uri)?.takeIf { it.isNotEmpty() } ?: "application/octet-stream"
+                        // インストーラーなど、開くとプログラムとして動く種類は開かない（Dartでも名前で断る）。
+                        if (mime == "application/vnd.android.package-archive") throw AttachmentFailure("file_launchable")
+                        main.post {
+                            try {
+                                requireNotNull(activity).startActivity(Intent(Intent.ACTION_VIEW)
+                                    .setDataAndType(file.uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                                result.success(null)
+                            } catch (_: android.content.ActivityNotFoundException) { result.error("file_no_app", null, null) }
+                            catch (_: Exception) { fail(result) }
+                        }
+                    } catch (e: Exception) { main.post { failWith(result, e) } }
+                }
             } else if (call.method == "openExternal") {
                 try {
                     val uri = Uri.parse(args["url"] as String)
@@ -174,7 +210,7 @@ class VaultBridge(
                     if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
                         android.util.Log.w("ContextHub", e.javaClass.simpleName + ": " + e.stackTrace.take(3).joinToString())
                     }
-                    main.post { fail(result) }
+                    main.post { failWith(result, e) }
                 }
             }
         }
@@ -196,9 +232,14 @@ class VaultBridge(
     }
     /** アプリを開いたまま新しい起動時の操作が届いたことをFlutter側へ知らせる。 */
     fun notifyLaunchAction() = channel.invokeMethod("launchAction", null)
+    /** ファイルを添える・開く操作の理由（Dartが本人向けの説明にする。Vaultの選び直しを促さない）。 */
+    private class AttachmentFailure(val code: String) : Exception(code)
+    private fun failWith(result: MethodChannel.Result, e: Exception) =
+        if (e is AttachmentFailure) result.error(e.code, null, null) else fail(result)
     private fun fail(result: MethodChannel.Result) = result.error("vault_access",
         "Vaultへアクセスできません。ローカルの選択フォルダーと権限を確認し、必要なら再選択してください。", null)
     fun activityResult(request: Int, code: Int, intent: Intent?): Boolean {
+        if (request == 8832) return attachmentResult(code, intent)
         if (request != 8831) return false
         val result = picker ?: return true
         picker = null
@@ -213,6 +254,112 @@ class VaultBridge(
             result.success(mapOf("handle" to uri.toString(), "name" to info(root).name))
         } catch (_: Exception) { fail(result) }
         return true
+    }
+    /** ファイルの選択画面の結果。名前は合成済みの文字（NFC）にそろえ、大きさが分からなければ失敗にする。 */
+    private fun attachmentResult(code: Int, intent: Intent?): Boolean {
+        val result = attachmentPicker ?: return true
+        attachmentPicker = null
+        val uri = intent?.data
+        if (code != Activity.RESULT_OK || uri == null) { result.success(null); return true }
+        // 名前と大きさの問い合わせは、クラウドのproviderでは時間がかかるため読取用のスレッドで行う。
+        executor.execute {
+            try {
+                val (name, size) = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null).use { c ->
+                    require(c != null && c.moveToFirst())
+                    Pair(if (c.isNull(0)) null else c.getString(0), if (c.isNull(1)) null else c.getLong(1))
+                }
+                val bytes = size ?: (try { resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }?.takeIf { it >= 0 } } catch (_: Exception) { null })
+                    ?: throw AttachmentFailure("attachment_unreadable")
+                val token = UUID.randomUUID().toString()
+                picked[token] = uri
+                main.post { result.success(mapOf("token" to token, "name" to Normalizer.normalize(name ?: "file", Normalizer.Form.NFC), "bytes" to bytes)) }
+            } catch (e: Exception) { main.post { failWith(result, e) } }
+        }
+        return true
+    }
+    /** 選んだファイルを読む。読めなければ（クラウドにだけある・権限が切れたなど）理由付きで失敗にする。 */
+    private fun openSource(uri: Uri): InputStream =
+        (try { resolver.openInputStream(uri) } catch (_: Exception) { null }) ?: throw AttachmentFailure("attachment_unreadable")
+    /** 名前の子フォルダー。なければ作る（同じ名前の別の種類があれば失敗）。 */
+    private fun childDir(parent: Uri, name: String): Entry {
+        var dir = children(parent).firstOrNull { it.name == name }
+        if (dir == null) {
+            val uri = Docs.createDocument(resolver, parent, Docs.Document.MIME_TYPE_DIR, name) ?: error("作成不可")
+            dir = info(uri); require(dir.name == name)
+        }
+        require(dir.dir)
+        return dir
+    }
+    /** 読みながら大きさとSHA-256（16進の小文字）を求める。上限を超えれば失敗。 */
+    private fun digestOf(stream: InputStream, limit: Long): Pair<Long, String> = stream.use {
+        val digest = MessageDigest.getInstance("SHA-256"); val buffer = ByteArray(1 shl 20); var total = 0L
+        while (true) {
+            val n = it.read(buffer)
+            if (n < 0) break
+            total += n; if (total > limit) throw AttachmentFailure("attachment_too_large")
+            digest.update(buffer, 0, n)
+        }
+        Pair(total, digest.digest().joinToString("") { b -> "%02x".format(b.toInt() and 0xff) })
+    }
+    /**
+     * 選んだファイルをInput/files/<受付ID>へ写す。一時ファイルへ書いてfsyncし、まだない名前へrenameで公開してから読み直す。
+     * 同じ受付IDのファイルが既にあれば（保存の途中で止まった後の再試行）、内容が同じときだけ使う。
+     */
+    private fun stage(root: Uri, id: String, source: Uri, limit: Long): Map<String, Any> {
+        val files = childDir(childDir(root, "Input").uri, "files")
+        val existing = children(files.uri).firstOrNull { it.name == id }
+        if (existing != null) {
+            // 同じ受付IDに別の内容が既にある（前に写しかけた別のファイル）。Dartは別の操作IDで保存し直す。
+            val now = digestOf(openSource(source), limit)
+            val old = if (existing.dir) null else try { digestOf(resolver.openInputStream(existing.uri) ?: error("読取不可"), limit) } catch (_: Exception) { null }
+            if (old != now) throw AttachmentFailure("attachment_conflict")
+            return mapOf("bytes" to now.first, "sha256" to now.second)
+        }
+        val temp = Docs.createDocument(resolver, files.uri, "application/octet-stream", ".ctx-${UUID.randomUUID()}.tmp") ?: error("作成不可")
+        val digest = MessageDigest.getInstance("SHA-256"); var total = 0L
+        try {
+            val pfd = resolver.openFileDescriptor(temp, "w") ?: error("書込不可")
+            android.os.ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { out ->
+                openSource(source).use { input ->
+                    val buffer = ByteArray(1 shl 20)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        total += n; if (total > limit) throw AttachmentFailure("attachment_too_large")
+                        digest.update(buffer, 0, n); out.write(buffer, 0, n)
+                    }
+                }
+                out.flush(); Os.fsync(pfd.fileDescriptor)
+            }
+            require(children(files.uri).none { it.name == id })
+        } catch (e: Exception) {
+            // 公開する前の失敗では、書きかけの一時ファイルを消す。
+            try { Docs.deleteDocument(resolver, temp) } catch (_: Exception) {}
+            throw e
+        }
+        val hash = digest.digest().joinToString("") { b -> "%02x".format(b.toInt() and 0xff) }
+        // 公開の結果が分からないときは一時ファイルを残す（受付IDのファイルが既にあれば、再試行で内容を確かめる）。
+        val renamed = Docs.renameDocument(resolver, temp, id) ?: error("確定不可")
+        val published = info(renamed)
+        if (published.name != id || published.dir) {
+            // 同じ名前が同時にでき、providerが別の名前（「REQ-… (1)」など）にした。残すと依頼のないファイルになるため消す。
+            try { Docs.deleteDocument(resolver, renamed) } catch (_: Exception) {}
+            throw AttachmentFailure("attachment_conflict")
+        }
+        require(digestOf(resolver.openInputStream(renamed) ?: error("読取不可"), limit) == Pair(total, hash))
+        return mapOf("bytes" to total, "sha256" to hash)
+    }
+    /** Vault内のメモに添えたファイル（05_files/<年-月>/<キー>/<名前>）。名前で1段ずつたどる。 */
+    private fun vaultFile(root: Uri, path: String): Entry {
+        val parts = path.split('/')
+        require(parts.size == 4 && parts[0] == "05_files" && parts[1].matches(Regex("[0-9]{4}-(0[1-9]|1[0-2])")) &&
+            parts[2].matches(Regex("[0-9a-f]{24}")) && parts[3].isNotEmpty() && !parts[3].startsWith('.') && !path.contains('\\'))
+        var current = Entry(root, "", true)
+        for ((index, part) in parts.withIndex()) {
+            current = children(current.uri).firstOrNull { it.name == part } ?: throw AttachmentFailure("file_missing")
+            require(if (index < parts.size - 1) current.dir else !current.dir)
+        }
+        return current
     }
     // stampは更新時刻（ミリ秒）と大きさ。providerが返さない場合はnullで、その場合は毎回読む。
     private data class Entry(val uri: Uri, val name: String, val dir: Boolean, val stamp: String? = null, val size: Long? = null)
@@ -487,6 +634,15 @@ class VaultBridge(
             val known = (args["known"] as? Map<*, *>)?.entries
                 ?.mapNotNull { (k, v) -> if (k is String && v is String) k to v else null }?.toMap() ?: emptyMap()
             return snapshot(handle, skip, known)
+        }
+        if (method == "stageAttachment") {
+            require(handle != "sample")
+            val id = args["requestId"] as String
+            require(id.matches(Regex("REQ-[a-f0-9]{32}")))
+            val source = picked[args["token"] as String] ?: throw AttachmentFailure("attachment_lost")
+            val limit = (args["maxBytes"] as Number).toLong()
+            require(limit > 0)
+            return stage(tree(handle), id, source, limit)
         }
         require(method in listOf("readRequest", "writeRequest"))
         val id = args["requestId"] as String
