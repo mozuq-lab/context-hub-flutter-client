@@ -1649,3 +1649,92 @@ String normalizeProjectOutcome(String text) {
       .join('\n');
   return projectOutcomeLines(value).isEmpty ? '' : value;
 }
+
+/// 資料の名前の文字数の上限（本体の`REFERENCE_TITLE_CHARS`）。本体が`intake-features.json`で示す値を優先する。
+const referenceTitleChars = 100;
+
+/// 資料の名前として送れるか（1行・前後に空白なし・上限以内）。本体の検証と同じ規則。
+bool validReferenceTitle(Object? value, {int max = referenceTitleChars}) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= max &&
+    value.trim() == value &&
+    !RegExp(
+      r'[\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]',
+      unicode: true,
+    ).hasMatch(value);
+
+/// 本体が書く資料の一覧（90_system/references.json）の、資料棚に載る1件。新しい順に並ぶ。
+/// [label]は資料棚に示す文（本人が付けた名前、なければAIの要約、AIが読み取る前は本文の1行目）。
+class ReferenceEntry {
+  const ReferenceEntry({
+    required this.inputId,
+    required this.label,
+    required this.title,
+    required this.aiSummary,
+    required this.addedByPerson,
+    required this.unorganized,
+    required this.urls,
+    required this.skippedUrls,
+    required this.projects,
+    required this.project,
+    required this.corrected,
+    required this.pendingCorrection,
+    required this.occurredAt,
+  });
+
+  /// 元のメモ（訂正を除いた最初の入力）のID。
+  final String inputId;
+  final String label;
+
+  /// 本人が付けた資料の名前。付けていなければnull。
+  final String? title;
+
+  /// AIの一行要約（未検証）。AIがまだ読み取っていなければnull。
+  final String? aiSummary;
+
+  /// 本人が資料にした（true）か、AIが参考資料に分類した（false）か。
+  final bool addedByPerson;
+
+  /// AIがまだ読み取っていない（本人が資料にしたメモだけがこの状態で載る）。
+  final bool unorganized;
+
+  /// 本文から取り出したURL（http・httpsだけ。取得・確認はしていない）と、載せなかったURLの数。
+  final List<String> urls;
+  final int skippedUrls;
+
+  /// 資料が載るプロジェクト（AIの関連候補を含む）と、本人が指定したプロジェクト。
+  final List<String> projects;
+  final String? project;
+  final bool corrected, pendingCorrection;
+  final DateTime? occurredAt;
+}
+
+/// 本人が資料棚から外した資料（外した日時の新しい順）。[title]は外す前に付けていた名前で、戻すときに使う。
+class RemovedReference {
+  const RemovedReference({
+    required this.inputId,
+    required this.label,
+    required this.title,
+    required this.projects,
+    required this.project,
+    required this.removedAt,
+    required this.occurredAt,
+  });
+  final String inputId, label;
+  final String? title, project;
+  final List<String> projects;
+  final DateTime? removedAt, occurredAt;
+}
+
+/// 資料の一覧。[generatedAt]は本体が一覧を作った時刻（依頼が一覧に反映されたかの判断に使う）。
+class ReferenceIndex {
+  const ReferenceIndex({
+    required this.generatedAt,
+    required this.entries,
+    required this.removed,
+  });
+  final DateTime generatedAt;
+  final List<ReferenceEntry> entries;
+  final List<RemovedReference> removed;
+}

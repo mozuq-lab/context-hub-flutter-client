@@ -132,6 +132,7 @@ void main() {
     await tester.tap(find.text('閉じる'));
     await tester.pumpAndSettle();
     await openForm(tester);
+    await tester.ensureVisible(find.byKey(const Key('show-related')));
     await tester.tap(find.byKey(const Key('show-related')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('memo-text')), draftText);

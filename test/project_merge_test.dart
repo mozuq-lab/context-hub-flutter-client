@@ -481,12 +481,19 @@ void main() {
     expect(find.byKey(const Key('merged-projects')), findsNothing);
     await tester.tap(find.byKey(const Key('project-hub-tool')).first);
     await tester.pumpAndSettle();
-    // 資料は本体が作ったREFERENCES.mdをそのまま示す。
+    // 資料棚は本体が書いた資料の一覧から並べ、本体が作ったREFERENCES.mdも開ける。
     await tester.tap(find.byKey(const Key('project-shelf')));
     await tester.pumpAndSettle();
     expect(find.text('まとめツールの資料'), findsWidgets);
+    expect(find.byKey(const Key('reference-shelf')), findsOneWidget);
+    expect(find.textContaining('https://example.com/spec'), findsWidgets);
+    await tester.ensureVisible(find.byKey(const Key('reference-generated')));
+    await tester.tap(find.byKey(const Key('reference-generated')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('shelf-body')), findsOneWidget);
     expect(find.textContaining('https://example.com/spec'), findsWidgets);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.pageBack();
     await tester.pumpAndSettle();
 

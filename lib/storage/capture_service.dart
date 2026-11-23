@@ -21,8 +21,20 @@ class CaptureDraft {
     this.happenedOn,
     this.maxBackdateDays = defaultMaxBackdateDays,
     this.continues,
+    this.reference = false,
+    this.referenceTitle,
+    this.referenceTitleMax = referenceTitleChars,
   });
   final String operationId;
+
+  /// 資料として保存する（AIの分類に関係なく資料棚に載せる）。対応した本体にだけ送る。
+  final bool reference;
+
+  /// 資料として保存するときに本人が付けた資料の名前。空ならAIの要約を資料の名前にする。
+  final String? referenceTitle;
+
+  /// 資料の名前の上限。本体が`intake-features.json`で示す値を渡す。
+  final int referenceTitleMax;
 
   /// 続きとして書いたときの前のメモの入力ID（訂正を除いた元の入力）。対応した本体にだけ送る。
   final String? continues;
@@ -276,6 +288,16 @@ class CaptureService {
                 draft.kind == 'action'))) {
       throw const FormatException('本文は1〜8000文字、種別とprojectは有効な値を指定してください。');
     }
+    if (draft.referenceTitle != null &&
+        (!draft.reference ||
+            !validReferenceTitle(
+              draft.referenceTitle,
+              max: draft.referenceTitleMax,
+            ))) {
+      throw FormatException(
+        '資料の名前は1行・${draft.referenceTitleMax}文字以内で、前後に空白を付けずに書いてください。',
+      );
+    }
     // 本体の対応表と同じ範囲（1〜3650日）に収める。
     final maxDays = draft.maxBackdateDays.clamp(1, 3650);
     if (draft.happenedOn != null &&
@@ -304,6 +326,7 @@ class CaptureService {
             ],
           if (draft.happenedOn != null) ['happened_on', draft.happenedOn],
           if (draft.continues != null) ['continues', draft.continues],
+          if (draft.reference) ['reference', draft.referenceTitle],
         ]),
       ),
       {
@@ -320,6 +343,8 @@ class CaptureService {
           'meta': ?meta,
         'happened_on': ?draft.happenedOn,
         'continues': ?draft.continues,
+        if (draft.reference) 'reference': true,
+        'reference_title': ?draft.referenceTitle,
       },
       draft.text,
     );
@@ -662,6 +687,34 @@ class CaptureService {
       'operation': 'organize-retry',
       'input_id': inputId,
       'attempts': attempts,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 保存済みのメモを資料棚に載せる（[action]が`add`）か、資料棚から外す（`remove`）依頼。
+  /// 名前を変えるのも外した資料を戻すのも`add`で、変更後の名前（[title]、nullならAIの要約のまま）を送る。
+  Future<CaptureResult> saveReferenceMark(
+    String operationId,
+    String inputId,
+    String action, {
+    String? title,
+    int titleMax = referenceTitleChars,
+  }) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !inputIdPattern.hasMatch(inputId) ||
+        !const ['add', 'remove'].contains(action) ||
+        (title != null &&
+            (action != 'add' || !validReferenceTitle(title, max: titleMax)))) {
+      throw FormatException(
+        '資料の名前は1行・$titleMax文字以内で、前後に空白を付けずに書いてください。',
+      );
+    }
+    final fields = <String, dynamic>{
+      'operation': 'reference-mark',
+      'input_id': inputId,
+      'action': action,
+      'title': ?title,
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

@@ -27,6 +27,7 @@ import 'guided_view.dart';
 import 'shortcuts.dart';
 import 'notice.dart';
 import 'ask_view.dart';
+import 'reference_shelf.dart';
 import 'parts.dart';
 import 'theme.dart';
 
@@ -1527,8 +1528,28 @@ class _HubViewState extends State<HubView> {
     }
     final words = HubRepository.searchTokens(query);
     final filter = searchFilter;
+    final unassignedShelf =
+        repo.referenceIndex != null &&
+        (repo.unassignedReferences.isNotEmpty ||
+            repo.unassignedRemovedReferences.isNotEmpty);
     final out = <Widget>[
       title('検索', 'タイトルと本文から探します。語は空白で区切ります。絞り込みだけでも一覧できます。'),
+      if (unassignedShelf)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const Key('unassigned-shelf'),
+              style: compactOutlinedStyle(context),
+              onPressed: showUnassignedShelf,
+              icon: const Icon(Icons.bookmarks_outlined, size: 18),
+              label: Text(
+                'プロジェクト未定の資料（${repo.unassignedReferences.length}件）',
+              ),
+            ),
+          ),
+        ),
       TextField(
         key: const Key('search-query'),
         controller: queryController,
@@ -2932,10 +2953,56 @@ class _HubViewState extends State<HubView> {
   void showHistory(HubProject project) =>
       showGenerated(project, project.history, '経緯', 'HISTORY.md', 'history');
 
-  /// 本体が生成するプロジェクトの資料（REFERENCES.md）を開く。
-  /// URLは本文のリンクとして示し、押したときだけ外部のブラウザで開く（http・httpsだけ）。
-  void showShelf(HubProject project) =>
+  /// プロジェクトの資料棚を開く。本体が資料の一覧を書いていれば、名前を変える・外す・戻すができる画面にし、
+  /// 一覧のない（古い）本体では、本体が生成する資料（REFERENCES.md）をそのまま示す。
+  /// URLは押したときだけ外部のブラウザで開く（http・httpsだけ）。
+  void showShelf(HubProject project) {
+    if (repo.referenceIndex == null) {
       showGenerated(project, project.shelf, '資料', 'REFERENCES.md', 'shelf');
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReferenceShelfPage(
+          controller: c,
+          projectId: project.id,
+          title: project.title,
+          onRecord: openRecordFrom,
+          onGenerated: project.shelf == null
+              ? null
+              : () => showGenerated(
+                  project,
+                  project.shelf,
+                  '資料',
+                  'REFERENCES.md',
+                  'shelf',
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// どのプロジェクトにも結び付いていない資料の棚を開く。
+  void showUnassignedShelf() => Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ReferenceShelfPage(
+        controller: c,
+        projectId: null,
+        title: 'プロジェクト未定',
+        onRecord: openRecordFrom,
+      ),
+    ),
+  );
+
+  /// 別の画面（資料棚など）からメモを開く。
+  void openRecordFrom(BuildContext from, HubRecord record) => Navigator.push(
+    from,
+    MaterialPageRoute(
+      builder: (_) => RecordView(controller: c, record: record),
+    ),
+  );
 
   /// プロジェクトごとの生成ビュー（経緯・資料）を開く。
   void showGenerated(
@@ -6152,9 +6219,10 @@ class _HubViewState extends State<HubView> {
             icon: const Icon(Icons.timeline, size: 18),
             label: Text(project.history == null ? '経緯（未生成）' : '経緯'),
           ),
-          // 資料は、参考資料に分類されたメモがあるプロジェクトにだけ本体が作る。
+          // 資料のページは、資料のあるプロジェクトにだけ本体が作る。資料の一覧を書く本体なら、空の資料棚も開ける。
           // 統合済みのプロジェクトの資料は統合先にまとまるので、統合先の資料を開く。
-          if ((mergeTarget ?? project).shelf != null)
+          if ((mergeTarget ?? project).shelf != null ||
+              repo.referenceIndex != null)
             OutlinedButton.icon(
               key: const Key('project-shelf'),
               style: actionStyle,
@@ -6564,6 +6632,125 @@ class RecordView extends StatelessWidget {
 
   /// 整理（AIの読み取り）に失敗したメモの、失敗の理由と「整理をやり直す」。
   /// 本人が頼んだ1件だけを、次の整理でもう一度試す（本体が1回だけ試し、原文は変えない）。
+  /// 資料棚に載っているか、と資料に加える・名前を変える・外す・戻す操作。資料の一覧を書く本体にだけ出す。
+  Widget referencePanel(BuildContext context) {
+    final repo = controller.repository;
+    if (repo == null || repo.referenceIndex == null) {
+      return const SizedBox.shrink();
+    }
+    // 訂正を見ているときも、資料の記録は元の入力に付ける。
+    final root = repo.correctionChainOf(record.id)?.first ?? record;
+    if (root.kind != 'memo' && root.kind != 'work-summary') {
+      return const SizedBox.shrink();
+    }
+    final inputId = root.sourceId;
+    final entry = repo.referenceEntryOf(inputId),
+        removed = entry == null ? repo.removedReferenceOf(inputId) : null,
+        pending = repo.referenceRequestIdFor(inputId) != null,
+        editable = repo.intakeFeatures.references && !controller.saving;
+    final status = entry != null
+        ? '資料棚にあります: ${entry.label}${entry.addedByPerson ? '' : '（AIが参考資料と読み取り）'}'
+        : removed != null
+        ? '資料棚から外しています。'
+        : '資料棚にはありません。';
+    return Padding(
+      key: const Key('reference-panel'),
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            status,
+            key: const Key('reference-status'),
+            style: const TextStyle(fontSize: 12),
+          ),
+          if (pending)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                '資料棚への依頼が反映待ちです。',
+                key: Key('reference-requested'),
+                style: TextStyle(fontSize: 12),
+              ),
+            )
+          else if (repo.intakeFeatures.references)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (entry == null && removed == null)
+                    OutlinedButton.icon(
+                      key: const Key('reference-add'),
+                      style: compactOutlinedStyle(context),
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                      label: const Text('資料に加える'),
+                      onPressed: editable
+                          ? () => renameReference(
+                              context,
+                              controller,
+                              inputId,
+                              adding: true,
+                            )
+                          : null,
+                    ),
+                  if (removed != null)
+                    OutlinedButton.icon(
+                      key: const Key('reference-restore'),
+                      style: compactOutlinedStyle(context),
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                      label: const Text('資料棚に戻す'),
+                      onPressed: editable
+                          ? () => sendReferenceMark(
+                              context,
+                              controller,
+                              inputId,
+                              'add',
+                              title: removed.title,
+                              done: '資料棚に戻す依頼をしました。',
+                            )
+                          : null,
+                    ),
+                  if (entry != null) ...[
+                    OutlinedButton.icon(
+                      key: const Key('reference-rename'),
+                      style: compactOutlinedStyle(context),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('資料の名前を変える'),
+                      onPressed: editable
+                          ? () => renameReference(
+                              context,
+                              controller,
+                              inputId,
+                              current: entry.title,
+                              aiSummary: entry.aiSummary,
+                            )
+                          : null,
+                    ),
+                    OutlinedButton.icon(
+                      key: const Key('reference-remove'),
+                      style: compactOutlinedStyle(context),
+                      icon: const Icon(Icons.bookmark_remove_outlined, size: 18),
+                      label: const Text('資料棚から外す'),
+                      onPressed: editable
+                          ? () => removeReference(
+                              context,
+                              controller,
+                              inputId,
+                              entry.label,
+                            )
+                          : null,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget retryPanel(BuildContext context) {
     final repo = controller.repository;
     if (repo == null) return const SizedBox.shrink();
@@ -6930,6 +7117,15 @@ class RecordView extends StatelessWidget {
               ListenableBuilder(
                 listenable: controller,
                 builder: (context, _) => retryPanel(context),
+              ),
+            if (const [
+              'memo',
+              'work-summary',
+              'correction',
+            ].contains(record.kind))
+              ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => referencePanel(context),
               ),
             sectionTitle(context, '出典・日時', top: 32),
             SelectableText(
@@ -7432,6 +7628,61 @@ class _CaptureDialogState extends State<CaptureDialog> {
   /// 本人が選んだ出来事の日付（YYYY-MM-DD）。今日のことならnull。
   String? happenedOn;
 
+  /// 資料として保存するか（AIの分類に関係なく資料棚に載せる）と、本人が付ける資料の名前。
+  bool reference = false;
+  final referenceTitle = TextEditingController();
+
+  /// 資料として保存できるか。問いへの答えは資料にせず、対応前の本体にも出さない。
+  bool get _canReference =>
+      widget.answer == null &&
+      (widget.controller.repository?.intakeFeatures.references ?? false);
+
+  /// 資料の名前の上限（本体が示す値）。
+  int get _referenceTitleMax =>
+      widget.controller.repository?.intakeFeatures.referenceTitleMax ??
+      referenceTitleChars;
+
+  /// 送る資料の名前（前後の空白を除き、空ならnull）。
+  String? get _referenceTitleValue {
+    final v = referenceTitle.text.trim();
+    return v.isEmpty ? null : v;
+  }
+
+  Widget _referenceChooser(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      CheckboxListTile(
+        key: const Key('capture-reference'),
+        contentPadding: EdgeInsets.zero,
+        controlAffinity: ListTileControlAffinity.leading,
+        value: reference,
+        onChanged: locked
+            ? null
+            : (v) {
+                setState(() => reference = v ?? false);
+                _schedulePersist();
+              },
+        title: const Text('資料として保存'),
+        subtitle: const Text(
+          'AIの分類に関係なく、資料棚に載せます。アイデアや提案としては扱いません。',
+          style: TextStyle(fontSize: 12),
+        ),
+      ),
+      if (reference)
+        TextField(
+          key: const Key('capture-reference-title'),
+          controller: referenceTitle,
+          enabled: !locked,
+          maxLength: _referenceTitleMax,
+          decoration: const InputDecoration(
+            labelText: '資料の名前（任意）',
+            helperText: '空のままなら、AIが読み取った要約を資料の名前にします。後から変えられます。',
+            helperMaxLines: 3,
+          ),
+        ),
+    ],
+  );
+
   /// 出来事の日付を選べるか。下書き・問いへの答えは今日の記録なので出さず、対応前の本体にも出さない。
   bool get _canBackdate =>
       widget.draft == null &&
@@ -7754,6 +8005,7 @@ class _CaptureDialogState extends State<CaptureDialog> {
     );
     text.addListener(_schedulePersist);
     text.addListener(_scheduleRelated);
+    referenceTitle.addListener(_schedulePersist);
     _lifecycle = AppLifecycleListener(
       onInactive: _persistNow,
       onHide: _persistNow,
@@ -7769,6 +8021,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
     // 続きは、プロジェクトを指定しなければ本体が前のメモのプロジェクトを引き継ぐ（統合を戻したときも前のメモと一緒に動く）。
     project = draft?.projectId;
     happenedOn = null;
+    reference = false;
+    referenceTitle.text = '';
   }
 
   /// 続きでプロジェクトを指定しないときに引き継ぐ、前のメモのプロジェクトの名前（統合済みなら統合先）。続きでない・指定がなければnull。
@@ -7819,6 +8073,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
               validHappenedOn(stored.happenedOn, maxDays: _maxBackdateDays)
           ? stored.happenedOn
           : null;
+      reference = _canReference && stored.reference;
+      referenceTitle.text = reference ? stored.referenceTitle ?? '' : '';
       _restoredAt = stored.updatedAt;
       if (op != null && state != null) {
         // 保存を試みた操作は、同じ操作IDで確認だけを行う（再送しない）。
@@ -7861,6 +8117,8 @@ class _CaptureDialogState extends State<CaptureDialog> {
         gitDraftHash: widget.draft?.hash,
         operationId: locked ? operation : null,
         happenedOn: happenedOn,
+        reference: reference,
+        referenceTitle: reference ? _referenceTitleValue : null,
         updatedAt: DateTime.now(),
       ),
     );
@@ -7904,8 +8162,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
     _lifecycle?.dispose();
     text.removeListener(_schedulePersist);
     text.removeListener(_scheduleRelated);
+    referenceTitle.removeListener(_schedulePersist);
     _relatedTimer?.cancel();
     text.dispose();
+    referenceTitle.dispose();
     _textFocus.dispose();
     super.dispose();
   }
@@ -7938,6 +8198,14 @@ class _CaptureDialogState extends State<CaptureDialog> {
         !validHappenedOn(happenedOn, maxDays: _maxBackdateDays)) {
       setState(
         () => error = '「いつのこと」の日付は、昨日から$_maxBackdateDays日前までで選び直してください。',
+      );
+      return;
+    }
+    final title = _canReference && reference ? _referenceTitleValue : null;
+    if (title != null &&
+        !validReferenceTitle(title, max: _referenceTitleMax)) {
+      setState(
+        () => error = '資料の名前は1行・$_referenceTitleMax文字以内で書いてください。',
       );
       return;
     }
@@ -7974,6 +8242,9 @@ class _CaptureDialogState extends State<CaptureDialog> {
           happenedOn: _canBackdate ? happenedOn : null,
           maxBackdateDays: _maxBackdateDays,
           continues: widget.continues?.sourceId,
+          reference: _canReference && reference,
+          referenceTitle: title,
+          referenceTitleMax: _referenceTitleMax,
         ),
       );
       await _settled(r);
@@ -8302,6 +8573,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
                         if (_canBackdate) ...[
                           const SizedBox(height: 16),
                           _happenedChooser(context),
+                        ],
+                        if (_canReference) ...[
+                          const SizedBox(height: 8),
+                          _referenceChooser(context),
                         ],
                         if (widget.draft != null && kind == 'work-summary')
                           const Padding(

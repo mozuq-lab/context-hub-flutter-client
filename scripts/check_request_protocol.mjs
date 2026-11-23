@@ -6,9 +6,9 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemSteps,readOrganizeRetries,readProjectAreaChanges,readProjects,readReceipts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemSteps,readOrganizeRetries,readProjectAreaChanges,readProjects,readReceipts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath,readReferenceMarks,rebuildReferences,readReferenceIndex} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-steps','project-area','organize-retry','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-steps','project-area','organize-retry','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','reference-mark','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -163,6 +163,16 @@ try{
   assert.ok((await readHintDismissals(vault)).some(d=>d.id===ack.result.dismissalId&&d.item_key===packet.item_key&&d.input_id===packet.input_id));
   const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
   assert.equal(item.resolution,null);assert.equal(item.hints,undefined);
+ }else if(packet.operation==='reference-mark'){
+  // 資料の記録は、本人の判断（加える・名前・外す）をそのまま残し、資料棚の一覧に反映される。
+  assert.deepEqual({inputId:ack.result.inputId,action:ack.result.action,deduped:ack.result.deduped},{inputId:packet.input_id,action:packet.action,deduped:false});
+  const record=(await readReferenceMarks(vault)).records.find(r=>r.id===ack.result.markId);
+  assert.deepEqual({input:record.input_id,action:record.action,title:record.title,source:record.source,event:record.source_event_id,decided:record.decided_at},{input:packet.input_id,action:packet.action,title:packet.title??null,source:packet.source,event:packet.request_id,decided:new Date(packet.occurred_at).toISOString()});
+  await rebuildReferences(config);
+  const index=await readReferenceIndex(vault),entry=index.entries.find(e=>e.input_id===packet.input_id);
+  if(packet.action==='add')assert.deepEqual({title:entry?.title,by:entry?.added_by,removed:index.removed.some(e=>e.input_id===packet.input_id)},{title:packet.title??null,by:'person',removed:false});
+  else{assert.equal(entry,undefined);assert.ok(index.removed.some(e=>e.input_id===packet.input_id));}
+  assert.equal(index.marks_through,record.created_at);
  }else if(packet.operation==='git-draft-dismiss'){
   assert.deepEqual({draftId:ack.result.draftId,dismissed:ack.result.dismissed},{draftId:packet.draft_id,dismissed:true});
   assert.equal((await readGitDrafts(config)).find(d=>d.id===packet.draft_id).status,'dismissed');
@@ -190,6 +200,17 @@ try{
   assert.deepEqual({continues:saved.continues_input_id,text:saved.text,kind:saved.kind},{continues:packet.continues,text:packet.text,kind:packet.kind??'memo'});
   assert.equal(saved.project,packet.project??parent.project);
   await organize(config,new MockLlm());
+ }else if(packet.reference!==undefined){
+  // 資料として保存したメモは、保存と同時に資料の記録が付き、AIの分類に関係なく資料棚に載る（アイデアにしない）。
+  const saved=(await readInputs(config)).find(i=>i.id===ack.result.inputId);
+  assert.deepEqual({text:saved.text,kind:saved.kind},{text:packet.text,kind:packet.kind??'memo'});
+  const record=(await readReferenceMarks(vault)).records.find(r=>r.input_id===saved.id);
+  assert.deepEqual({action:record.action,title:record.title,source:record.source},{action:'add',title:packet.reference_title??null,source:packet.source});
+  await organize(config,new MockLlm());
+  assert.equal((await readReceipts(config)).find(r=>r.input_id===saved.id)?.result?.category,'reference');
+  await rebuildReferences(config);
+  const entry=(await readReferenceIndex(vault)).entries.find(e=>e.input_id===saved.id);
+  assert.deepEqual({title:entry.title,by:entry.added_by},{title:packet.reference_title??null,by:'person'});
  }else{
   // 下書きから作った入力は、確認した下書きのhashが一致すれば使用済みになる。
   await organize(config,new MockLlm());

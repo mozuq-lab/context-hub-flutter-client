@@ -13,6 +13,8 @@ class WritingDraft {
     this.gitDraftHash,
     this.operationId,
     this.happenedOn,
+    this.reference = false,
+    this.referenceTitle,
     required this.updatedAt,
   });
   final String text, kind;
@@ -20,6 +22,10 @@ class WritingDraft {
 
   /// 本人が選んだ出来事の日付（YYYY-MM-DD）。今日のことならnull。
   final String? happenedOn;
+
+  /// 資料として保存するか、と本人が付けた資料の名前（空ならnull）。
+  final bool reference;
+  final String? referenceTitle;
 
   /// 作業記録の下書きから書いている場合、書き始めたときの下書きhash。
   final String? gitDraftHash;
@@ -35,6 +41,8 @@ class WritingDraft {
     if (gitDraftHash != null) 'g': gitDraftHash,
     if (operationId != null) 'o': operationId,
     if (happenedOn != null) 'h': happenedOn,
+    if (reference) 'r': true,
+    if (referenceTitle != null) 'rt': referenceTitle,
     'at': updatedAt.toUtc().toIso8601String(),
   };
 
@@ -42,7 +50,7 @@ class WritingDraft {
     if (value is! Map) return null;
     final text = value['t'], kind = value['k'], at = value['at'];
     final project = value['p'], hash = value['g'], op = value['o'];
-    final happened = value['h'];
+    final happened = value['h'], reference = value['r'], title = value['rt'];
     if (text is! String ||
         text.length > DraftStore.maxChars ||
         !['memo', 'work-summary'].contains(kind) ||
@@ -52,7 +60,9 @@ class WritingDraft {
         (hash != null && hash is! String) ||
         (op != null && op is! String) ||
         (happened != null &&
-            (happened is! String || !happenedOnPattern.hasMatch(happened)))) {
+            (happened is! String || !happenedOnPattern.hasMatch(happened))) ||
+        (reference != null && reference != true) ||
+        (title != null && (title is! String || title.length > 1000))) {
       return null;
     }
     return WritingDraft(
@@ -62,6 +72,8 @@ class WritingDraft {
       gitDraftHash: hash as String?,
       operationId: op as String?,
       happenedOn: happened as String?,
+      reference: reference == true,
+      referenceTitle: reference == true ? title as String? : null,
       updatedAt: DateTime.parse(at),
     );
   }

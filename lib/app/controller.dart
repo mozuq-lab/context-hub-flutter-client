@@ -1466,6 +1466,9 @@ class HubController extends ChangeNotifier {
     if (draft.continues != null && !repository!.intakeFeatures.continues) {
       throw StateError('Mac miniの本体が「続き」に対応していません。本体を更新してください。');
     }
+    if (draft.reference && !repository!.intakeFeatures.references) {
+      throw StateError('Mac miniの本体が「資料として保存」に対応していません。本体を更新してください。');
+    }
     final draftId = draft.gitDraftId;
     if (draftId != null) {
       // 保存確認待ちの操作がある間は、同じ下書きから二重に入力を作らない。
@@ -2080,6 +2083,57 @@ class HubController extends ChangeNotifier {
       },
       (service, parsed, operation) =>
           service.saveOrganizeRetry(operation, inputId, attempts),
+    );
+  }
+
+  /// 保存済みのメモを資料棚に載せる・名前を変える・外した資料を戻す（[action]が`add`）か、資料棚から外す（`remove`）依頼。
+  /// [title]は本人が付ける資料の名前（`add`だけ）。nullならAIの要約を資料の名前にする。
+  Future<CaptureResult> requestReferenceMark(
+    String inputId,
+    String action, {
+    String? title,
+  }) {
+    late int max;
+    return _confirmedRequest(
+      (parsed) {
+        final features = parsed.intakeFeatures;
+        if (!features.references) {
+          throw StateError('Mac miniの本体が資料棚の編集に対応していません。本体を更新してください。');
+        }
+        max = features.referenceTitleMax ?? referenceTitleChars;
+        if (!const ['add', 'remove'].contains(action) ||
+            (title != null &&
+                (action != 'add' || !validReferenceTitle(title, max: max)))) {
+          throw StateError('資料の名前は1行・$max文字以内で、前後に空白を付けずに書いてください。');
+        }
+        final input = parsed.inputRecord(inputId);
+        if (input == null) {
+          throw StateError('資料にするメモが見つかりません。同期してから、表示を確認してください。');
+        }
+        if (input.kind != 'memo' && input.kind != 'work-summary') {
+          throw StateError('資料にできるのはメモと作業要約だけです。');
+        }
+        if (parsed.referenceRequestIdFor(inputId) != null) {
+          throw StateError('この資料への依頼が反映待ちです。資料棚に反映されてから、もう一度操作してください。');
+        }
+        final entry = parsed.referenceEntryOf(inputId);
+        if (action == 'remove' && entry == null) {
+          throw StateError('このメモは資料棚にありません。表示を確認してください。');
+        }
+        if (action == 'add' && entry != null && entry.title == title) {
+          throw StateError(
+            title == null ? 'このメモはすでに資料棚にあります。' : '資料の名前は変わっていません。',
+          );
+        }
+        return 'reference-mark/$inputId/$action/${title ?? ''}';
+      },
+      (service, parsed, operation) => service.saveReferenceMark(
+        operation,
+        inputId,
+        action,
+        title: title,
+        titleMax: max,
+      ),
     );
   }
 
