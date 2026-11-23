@@ -106,6 +106,13 @@ class HubRepository {
   /// 本体が書く週次レビューの点検の一覧。一覧がない・読めない本体ではnull。
   WeeklyReview? weeklyReview;
 
+  /// 本体が書く資料の一覧（資料棚に載る資料と、本人が外した資料）。一覧がない・読めない本体ではnull。
+  ReferenceIndex? referenceIndex;
+
+  /// 資料を加える・外す記録の作成時刻（記録IDごと）と、反映を待っている資料の依頼（メモの入力IDごと）。
+  final Map<String, DateTime> _referenceMarkTimes = {};
+  final Map<String, String> _outstandingReferences = {};
+
   /// 週次レビューの「見直した」記録の作成時刻（記録IDごと）と、反映を待っている「見直した」の依頼。
   final Map<String, DateTime> _weeklyReviewTimes = {};
   String? _outstandingWeeklyReview;
@@ -525,6 +532,7 @@ class HubRepository {
     _readSharedPreferences();
     _readSomeday();
     _readWeeklyReview();
+    _readReferences();
     _readIntake();
     _hideTakenOver();
     _readDigest();
@@ -2326,7 +2334,10 @@ class HubRepository {
           path.startsWith('40_people/') ||
           path == unassignedActionsPath ||
           path == '90_system/now-items/$unassignedScope.json' ||
-          path == insightsPath) {
+          path == insightsPath ||
+          // 資料の一覧と資料の記録は資料棚の表示と依頼の確認にだけ使う（別AIへ渡す資料はメモ・処理記録から作る）。
+          path == '90_system/references.json' ||
+          path.startsWith('90_system/reference-marks/')) {
         continue;
       }
       final folder = RegExp(r'^10_projects/([^/]+)/').firstMatch(path)?[1];
@@ -2809,6 +2820,7 @@ class HubRepository {
               'ask',
               'client-preferences',
               'policy-keep',
+              'reference-mark',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
           throw const FormatException();
@@ -2869,6 +2881,20 @@ class HubRepository {
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
                 !m.containsKey('area') ||
                 (m['area'] != null && !validArea(m['area'])))) {
+          throw const FormatException();
+        }
+        final referenceMark = m['operation'] == 'reference-mark',
+            referenceCapture =
+                m['operation'] == 'capture' && m['reference'] == true;
+        if (referenceMark &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['input_id'] is! String ||
+                !inputIdPattern.hasMatch(m['input_id']) ||
+                !const ['add', 'remove'].contains(m['action']) ||
+                (m.containsKey('title') &&
+                    (m['action'] != 'add' ||
+                        !validReferenceTitle(m['title'], max: 1000))))) {
           throw const FormatException();
         }
         final organizeRetry = m['operation'] == 'organize-retry';
@@ -3199,6 +3225,7 @@ class HubRepository {
             stepsId,
             areaChangeId,
             retryId,
+            referenceMarkId,
             waitId,
             somedayId,
             reviewId,
@@ -3340,6 +3367,8 @@ class HubRepository {
               ? '${m['area'] == null ? '領域を外す依頼' : '領域の依頼（${m['area']}）'}: ${projects[m['project_id']]?.title ?? m['project_id']}'
               : organizeRetry
               ? '整理のやり直しの依頼: ${_inputs[m['input_id']]?.title ?? m['input_id']}'
+              : referenceMark
+              ? '${m['action'] == 'remove' ? '資料棚から外す依頼' : m['title'] is String ? '資料の名前の依頼（${m['title']}）' : '資料に加える依頼'}: ${_referenceTitle(m['input_id'] as String)}'
               : itemContexts
               ? '${contextsValueOf == null ? '場所・道具の札を外す依頼' : '場所・道具の札の依頼（${contextsLabel(List<String>.from(contextsValueOf as List))}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemWait
@@ -3369,6 +3398,11 @@ class HubRepository {
               ? '訂正: ${readableTitle(doc.body)}'
               : actionCapture
               ? '次の一手への追加: ${doc.body}（${m['project'] == null ? 'プロジェクト未定' : projects[m['project']]?.title ?? m['project']}）'
+              : m['operation'] == 'capture' && m['reference'] == true
+              ? '資料として保存: ${m['reference_title'] is String ? m['reference_title'] : readableTitle(doc.body)}${switch (m['attachment']) {
+                  {'name': final String name} => '（ファイル: $name）',
+                  _ => '',
+                }}'
               : readableTitle(doc.body),
           at: timestamp(m['occurred_at']),
         );
@@ -3545,6 +3579,19 @@ class HubRepository {
                 throw const FormatException();
               }
               retryId = r['retryId'] as String;
+            }
+            if (referenceMark) {
+              final r = ack['result'] as Map;
+              if (r['inputId'] != m['input_id'] ||
+                  r['action'] != m['action'] ||
+                  r['markId'] is! String ||
+                  !RegExp(
+                    r'^REFM-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['markId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              referenceMarkId = r['markId'] as String;
             }
             if (itemContexts) {
               final r = ack['result'] as Map;
@@ -3759,11 +3806,11 @@ class HubRepository {
                   ? '却下済み'
                   : 'Mac miniが受け取り済み。判断・反映結果を再同期してください。';
             }
-            // やり直しの依頼の受領結果の入力は、やり直すメモ（失敗したまま）なので、依頼の状態には使わない。
-            final input = organizeRetry
+            // やり直し・資料の依頼の受領結果の入力は、対象のメモ（依頼で作った入力ではない）なので、依頼の状態には使わない。
+            final input = organizeRetry || referenceMark
                 ? null
                 : _inputs[(ack['result'] as Map)['inputId']];
-            if (actionCapture) {
+            if (actionCapture || referenceCapture) {
               final id = (ack['result'] as Map)['inputId'];
               if (id is! String || !inputIdPattern.hasMatch(id)) {
                 throw const FormatException();
@@ -3957,6 +4004,8 @@ class HubRepository {
             what: '領域の変更',
           );
         }
+        if (referenceMark) _referenceRequest(item, m, referenceMarkId);
+        if (referenceCapture) _captureReferenceRequest(item, capturedInputId);
         if (organizeRetry) {
           final inputId = m['input_id'] as String;
           if (item.state == 'waiting') {
@@ -4500,6 +4549,13 @@ class HubRepository {
     if (reason is Map && reason['code'] == 'conflict-missing') {
       return '戻す必要のある競合がありませんでした。既に生成版に戻っている可能性があります。';
     }
+    if (reason is Map && reason['code'] == 'reference-refused') {
+      return switch (reason['cause']) {
+        'secret' => referenceTitleSecretMessage,
+        'kind' => '資料にできるのはメモと作業要約だけです（本人が追加した行動と訂正は資料にできません）。',
+        _ => '資料にするメモが見つかりませんでした。同期してから、メモを確かめ直してください。',
+      };
+    }
     return '${error['code'] ?? '受け付けられず'}';
   }
 
@@ -4550,6 +4606,236 @@ class HubRepository {
     }
     if (waiting) _outstandingWeeklyReview = item.id;
   }
+
+  /// 資料を加える・外す記録（90_system/reference-marks/）の作成時刻と、資料の一覧（90_system/references.json）を読む。
+  /// 記録は依頼の反映の確認にだけ使い、資料棚に載るかは本体が書いた一覧に従う（判断の順の規則を本体と二重に持たない）。
+  void _readReferences() {
+    final pattern = RegExp(
+      r'^90_system/reference-marks/(REFM-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (newerSchema(j)) {
+          _noteNewer(e.key);
+          continue;
+        }
+        final at = timestamp(j['created_at']);
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['input_id'] is! String ||
+            !inputIdPattern.hasMatch(j['input_id']) ||
+            !const ['add', 'remove'].contains(j['action']) ||
+            at == null) {
+          throw const FormatException();
+        }
+        _referenceMarkTimes[j['id'] as String] = at;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    const path = '90_system/references.json';
+    final raw = snapshot.files[path];
+    if (raw == null) return;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      if (newerSchema(j)) {
+        _noteNewer(path);
+        return;
+      }
+      final generated = timestamp(j['generated_at']);
+      if (j['schema_version'] != 1 ||
+          generated == null ||
+          j['entries'] is! List ||
+          j['removed'] is! List) {
+        throw const FormatException();
+      }
+      List<String> strings(Object? v) {
+        if (v is! List || !v.every((x) => x is String)) {
+          throw const FormatException();
+        }
+        return List<String>.from(v);
+      }
+
+      String? optional(Object? v) {
+        if (v != null && v is! String) throw const FormatException();
+        return v as String?;
+      }
+
+      final entries = <ReferenceEntry>[
+        for (final e in j['entries'] as List)
+          if (e is Map &&
+              e['input_id'] is String &&
+              inputIdPattern.hasMatch(e['input_id']) &&
+              e['label'] is String &&
+              const ['person', 'ai'].contains(e['added_by']) &&
+              e['unorganized'] is bool &&
+              e['skipped_urls'] is int &&
+              e['corrected'] is bool &&
+              e['pending_correction'] is bool)
+            ReferenceEntry(
+              inputId: e['input_id'] as String,
+              label: e['label'] as String,
+              title: optional(e['title']),
+              aiSummary: optional(e['ai_summary']),
+              addedByPerson: e['added_by'] == 'person',
+              markId: optional(e['mark_id']),
+              unorganized: e['unorganized'] as bool,
+              failed: e['failed'] == true,
+              // URLは本体がhttp・httpsだけを載せる。念のため、それ以外は開かない（載せない）。
+              urls: strings(
+                e['urls'],
+              ).where((u) => RegExp(r'^https?://').hasMatch(u)).toList(),
+              skippedUrls: e['skipped_urls'] as int,
+              // 添えたファイルは、本体が書く05_filesの場所だけを開く（形が違えば示さない）。
+              file: HubFile.fromJson(e['file']),
+              projects: strings(e['projects']),
+              project: optional(e['project']),
+              corrected: e['corrected'] as bool,
+              pendingCorrection: e['pending_correction'] as bool,
+              occurredAt: timestamp(e['occurred_at']),
+            )
+          else
+            throw const FormatException(),
+      ];
+      final removed = <RemovedReference>[
+        for (final e in j['removed'] as List)
+          if (e is Map &&
+              e['input_id'] is String &&
+              inputIdPattern.hasMatch(e['input_id']) &&
+              e['label'] is String)
+            RemovedReference(
+              inputId: e['input_id'] as String,
+              label: e['label'] as String,
+              title: optional(e['title']),
+              markId: optional(e['mark_id']),
+              file: HubFile.fromJson(e['file']),
+              projects: strings(e['projects']),
+              project: optional(e['project']),
+              removedAt: timestamp(e['removed_at']),
+              occurredAt: timestamp(e['occurred_at']),
+            )
+          else
+            throw const FormatException(),
+      ];
+      referenceIndex = ReferenceIndex(
+        generatedAt: generated,
+        marksThrough: timestamp(j['marks_through']),
+        entries: entries,
+        removed: removed,
+      );
+    } catch (_) {
+      _problem(path);
+    }
+  }
+
+  /// 資料の名前に秘密情報らしい文字列があるか。名前は資料棚とHOMEにそのまま載るため、本体も断る。
+  bool secretInReferenceTitle(String title) =>
+      (secretPolicy.usable ? secretPolicy : SecretPolicy.builtin)
+          .find(title)
+          .isNotEmpty;
+
+  /// このメモ（訂正を除いた元の入力のID）が資料棚に載っていれば、その資料。
+  ReferenceEntry? referenceEntryOf(String inputId) => referenceIndex?.entries
+      .where((e) => e.inputId == inputId)
+      .firstOrNull;
+
+  /// このメモを本人が資料棚から外していれば、その記録。
+  RemovedReference? removedReferenceOf(String inputId) => referenceIndex
+      ?.removed
+      .where((e) => e.inputId == inputId)
+      .firstOrNull;
+
+  /// このプロジェクトの資料棚に載る資料（新しい順）。統合元のプロジェクトに結び付いた資料も、統合先の資料として並べる。
+  List<ReferenceEntry> referencesFor(String projectId) {
+    final ids = {projectId, for (final p in mergedSources(projectId)) p.id};
+    return [
+      for (final e in referenceIndex?.entries ?? const <ReferenceEntry>[])
+        if (e.projects.any(ids.contains)) e,
+    ];
+  }
+
+  /// このプロジェクトに結び付いていた、本人が外した資料（外した日時の新しい順）。
+  List<RemovedReference> removedReferencesFor(String projectId) {
+    final ids = {projectId, for (final p in mergedSources(projectId)) p.id};
+    return [
+      for (final e in referenceIndex?.removed ?? const <RemovedReference>[])
+        if (e.projects.any(ids.contains)) e,
+    ];
+  }
+
+  /// どのプロジェクトにも結び付いていない資料（新しい順）。
+  List<ReferenceEntry> get unassignedReferences => [
+    for (final e in referenceIndex?.entries ?? const <ReferenceEntry>[])
+      if (e.projects.isEmpty) e,
+  ];
+
+  /// どのプロジェクトにも結び付いていない、本人が外した資料。
+  List<RemovedReference> get unassignedRemovedReferences => [
+    for (final e in referenceIndex?.removed ?? const <RemovedReference>[])
+      if (e.projects.isEmpty) e,
+  ];
+
+  /// 反映を待っている、このメモの資料の依頼（加える・名前を変える・外す・戻す）。
+  String? referenceRequestIdFor(String inputId) =>
+      _outstandingReferences[inputId];
+
+  /// 資料の依頼の反映状況。本体が記録を一覧に反映し（一覧の[ReferenceIndex.marksThrough]が記録の作成時刻以降）、
+  /// 同期されていれば反映済みとする。一覧で効いている記録が別の記録なら、より新しい判断が優先されたと示す。
+  /// 一覧を読めないときは、反映を確かめられないと示し、ほかの操作を止めない。
+  void _referenceRequest(
+    IntakeStatus item,
+    Map<String, dynamic> m,
+    String? recordId,
+  ) {
+    final inputId = m['input_id'] as String;
+    if (item.state == 'waiting') {
+      _outstandingReferences[inputId] = item.id;
+      return;
+    }
+    if (item.state != 'accepted') return;
+    final index = referenceIndex, at = _referenceMarkTimes[recordId];
+    if (index == null) {
+      item.detail = 'Mac miniが受け取り済み。資料の一覧を読めないため、反映を確かめられません。';
+      return;
+    }
+    final through = index.marksThrough ?? index.generatedAt;
+    if (at == null || through.isBefore(at)) {
+      _outstandingReferences[inputId] = item.id;
+      item.detail = 'Mac miniが受け取り済み。資料棚の同期を待っています。';
+      return;
+    }
+    final current =
+        referenceEntryOf(inputId)?.markId ?? removedReferenceOf(inputId)?.markId;
+    item.detail = current != null && current != recordId
+        ? 'Mac miniが受け取りましたが、より新しい判断が資料棚に効いています。'
+        : '資料棚に反映しました。';
+  }
+
+  /// 資料として保存したメモの反映状況。保存したメモが資料の一覧（資料棚か外した資料）に載るまで、反映待ちとする。
+  void _captureReferenceRequest(IntakeStatus item, String? inputId) {
+    if (inputId == null ||
+        !['accepted', 'organized', 'failed'].contains(item.state)) {
+      return;
+    }
+    final index = referenceIndex;
+    if (index == null) return;
+    if (referenceEntryOf(inputId) == null &&
+        removedReferenceOf(inputId) == null) {
+      _outstandingReferences[inputId] = item.id;
+    }
+  }
+
+  /// 資料の依頼の表示名（資料の名前・要約か、メモの題）。
+  String _referenceTitle(String inputId) => clip(
+    referenceEntryOf(inputId)?.label ??
+        removedReferenceOf(inputId)?.label ??
+        _inputs[inputId]?.title ??
+        inputId,
+    80,
+  );
 
   /// 見直しの依頼の対象の表示名（アイデアの題か、プロジェクトの名前）。
   String _somedayTargetTitle(String target, String id) => target == 'project'
@@ -5153,14 +5439,25 @@ class HubRepository {
     return hits.map((h) => h.record).toList();
   }
 
-  /// 整理でAIが参考資料に分類したメモ・作業要約（訂正を含む）か。検索の種類「資料」に当たる。
+  /// 資料棚に載っているメモ・作業要約（訂正を含む）か。検索の種類「資料」に当たる。
+  /// 資料の一覧を書く本体では一覧に従い（本人が加えた・外した資料を含めて本体と同じ）、古い本体ではAIの分類（reference）で決める。
   bool isReference(HubRecord r) {
     if (!const ['memo', 'work-summary', 'correction'].contains(r.kind)) {
       return false;
     }
-    final result = _unitBySource[r.sourceId]?.receipt?['result'];
+    final unit = _unitBySource[r.sourceId];
+    if (referenceIndex != null) {
+      return _shelfIds.contains(unit?.root.sourceId ?? r.sourceId);
+    }
+    final result = unit?.receipt?['result'];
     return result is Map && result['category'] == 'reference';
   }
+
+  /// 資料棚に載っているメモ（元の入力ID）。
+  late final Set<String> _shelfIds = {
+    for (final e in referenceIndex?.entries ?? const <ReferenceEntry>[])
+      e.inputId,
+  };
 
   /// 検索の種類の区分。NOWはプロジェクトの記録（kind: project）。
   static String searchKindOf(HubRecord r) =>

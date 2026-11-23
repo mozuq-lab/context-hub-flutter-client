@@ -1,14 +1,15 @@
 // Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・場所・道具の札・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、週次レビューの「見直した」、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
-// 手順・領域・整理のやり直しの依頼も含む。
+// 手順・領域・整理のやり直しの依頼、ファイルを添えたメモ（files/<受付ID>に置いたファイル）も含む。
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
+import {copyFile,mkdir,mkdtemp,readFile,rm,stat,utimes,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
-import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemSteps,readOrganizeRetries,readProjectAreaChanges,readProjects,readReceipts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath} from '../vendor/context-hub/packages/core/dist/index.js';
+import {join,basename,dirname} from 'node:path';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemSteps,readOrganizeRetries,readProjectAreaChanges,readProjects,readReceipts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath,readReferenceMarks,rebuildReferences,readReferenceIndex} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-steps','project-area','organize-retry','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-steps','project-area','organize-retry','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','reference-mark','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -19,6 +20,9 @@ try{
   const receiptPath=`90_system/receipts/${packet.input_id}.json`,receipt=JSON.parse(await vault.read(receiptPath));
   await vault.write(receiptPath,JSON.stringify({...receipt,status:'failed',attempts:packet.attempts,result:null,writes:[],error:'検査用の失敗'},null,2)+'\n');
  }
+ // ファイルを添えた依頼は、Dartが依頼の隣（files/<受付ID>）に置いたファイルを、Vaultの受け渡し場所（Input/files/<受付ID>）へ移す。
+ const transport=packet.attachment?await vault.path(`Input/files/${packet.request_id}`):undefined;
+ if(transport){await mkdir(dirname(transport),{recursive:true});await copyFile(join(dirname(file),'files',packet.request_id),transport);await utimes(transport,new Date(0),new Date(0));}
  await vault.create(path,raw);await utimes(await vault.path(path),new Date(0),new Date(0));
  if(mode==='stale'){
   // 古い訂正対象は受け付けず、最新の訂正IDを理由に残す。再受付でも重複して記録しない。
@@ -163,6 +167,16 @@ try{
   assert.ok((await readHintDismissals(vault)).some(d=>d.id===ack.result.dismissalId&&d.item_key===packet.item_key&&d.input_id===packet.input_id));
   const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
   assert.equal(item.resolution,null);assert.equal(item.hints,undefined);
+ }else if(packet.operation==='reference-mark'){
+  // 資料の記録は、本人の判断（加える・名前・外す）をそのまま残し、資料棚の一覧に反映される。
+  assert.deepEqual({inputId:ack.result.inputId,action:ack.result.action,deduped:ack.result.deduped},{inputId:packet.input_id,action:packet.action,deduped:false});
+  const record=(await readReferenceMarks(vault)).records.find(r=>r.id===ack.result.markId);
+  assert.deepEqual({input:record.input_id,action:record.action,title:record.title,source:record.source,event:record.source_event_id,decided:record.decided_at},{input:packet.input_id,action:packet.action,title:packet.title??null,source:packet.source,event:packet.request_id,decided:new Date(packet.occurred_at).toISOString()});
+  await rebuildReferences(config);
+  const index=await readReferenceIndex(vault),entry=index.entries.find(e=>e.input_id===packet.input_id);
+  if(packet.action==='add')assert.deepEqual({title:entry?.title,by:entry?.added_by,mark:entry?.mark_id,removed:index.removed.some(e=>e.input_id===packet.input_id)},{title:packet.title??null,by:'person',mark:record.id,removed:false});
+  else{assert.equal(entry,undefined);assert.equal(index.removed.find(e=>e.input_id===packet.input_id)?.mark_id,record.id);}
+  assert.equal(index.marks_through,record.created_at);
  }else if(packet.operation==='git-draft-dismiss'){
   assert.deepEqual({draftId:ack.result.draftId,dismissed:ack.result.dismissed},{draftId:packet.draft_id,dismissed:true});
   assert.equal((await readGitDrafts(config)).find(d=>d.id===packet.draft_id).status,'dismissed');
@@ -190,6 +204,29 @@ try{
   assert.deepEqual({continues:saved.continues_input_id,text:saved.text,kind:saved.kind},{continues:packet.continues,text:packet.text,kind:packet.kind??'memo'});
   assert.equal(saved.project,packet.project??parent.project);
   await organize(config,new MockLlm());
+ }else if(packet.reference!==undefined){
+  // 資料として保存したメモは、保存と同時に資料の記録が付き、AIの分類に関係なく資料棚に載る（アイデアにしない）。
+  const saved=(await readInputs(config)).find(i=>i.id===ack.result.inputId);
+  assert.deepEqual({text:saved.text,kind:saved.kind},{text:packet.text,kind:packet.kind??'memo'});
+  const record=(await readReferenceMarks(vault)).records.find(r=>r.input_id===saved.id);
+  assert.deepEqual({action:record.action,title:record.title,source:record.source},{action:'add',title:packet.reference_title??null,source:packet.source});
+  await organize(config,new MockLlm());
+  // モックのモデルはURLのあるメモを資料と読む。ファイルだけのメモは資料と読まないが、資料棚には載る（AIの分類に関係しない）。
+  const receipt=(await readReceipts(config)).find(r=>r.input_id===saved.id);
+  assert.equal(receipt?.status,'organized');
+  if(!packet.attachment)assert.equal(receipt.result?.category,'reference');
+  await rebuildReferences(config);
+  const entry=(await readReferenceIndex(vault)).entries.find(e=>e.input_id===saved.id);
+  assert.deepEqual({title:entry.title,by:entry.added_by},{title:packet.reference_title??null,by:'person'});
+  if(packet.attachment){
+   // 添えたファイルはVaultの05_filesに複製され、メモの記録と資料棚の一覧にファイルが載る。受け渡し場所の写しは消える。
+   assert.deepEqual({name:saved.attachment.name,bytes:saved.attachment.bytes,sha256:saved.attachment.sha256},packet.attachment);
+   assert.match(saved.attachment.path,/^05_files\/\d{4}-\d{2}\/[0-9a-f]{24}\//);
+   const copied=await readFile(await vault.path(saved.attachment.path));
+   assert.equal(createHash('sha256').update(copied).digest('hex'),packet.attachment.sha256);
+   await assert.rejects(stat(transport),{code:'ENOENT'});
+   assert.deepEqual(entry.file,{path:saved.attachment.path,name:packet.attachment.name,bytes:packet.attachment.bytes});
+  }
  }else{
   // 下書きから作った入力は、確認した下書きのhashが一致すれば使用済みになる。
   await organize(config,new MockLlm());

@@ -4,6 +4,10 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:unorm_dart/unorm_dart.dart' as unicode;
 
+import 'attachments.dart';
+
+export 'attachments.dart';
+
 String digest(String value) => sha256.convert(utf8.encode(value)).toString();
 String recordId(String path) => 'record-${digest(path).substring(0, 24)}';
 
@@ -69,6 +73,10 @@ class HubRecord {
   String status;
   final List<String> warnings, references;
   final Map<String, Object?> metadata;
+
+  /// メモに添えたファイル（原文のfrontmatterの`attachment`）。メモ以外と、形が違うものはnull。
+  HubFile? get attachment =>
+      kind == 'memo' ? HubFile.fromJson(metadata['attachment']) : null;
   HubRecord({
     required this.sourceId,
     required this.path,
@@ -1648,4 +1656,117 @@ String normalizeProjectOutcome(String text) {
       .where((l) => l.isNotEmpty)
       .join('\n');
   return projectOutcomeLines(value).isEmpty ? '' : value;
+}
+
+/// 資料の名前の文字数の上限（本体の`REFERENCE_TITLE_CHARS`）。本体が`intake-features.json`で示す値を優先する。
+const referenceTitleChars = 100;
+
+/// 資料の名前に秘密情報らしい文字列があるときの案内。
+const referenceTitleSecretMessage =
+    '資料の名前に秘密情報らしい文字列があります。名前は資料棚とホームにそのまま載るので、別の名前にしてください。';
+
+/// 資料の名前として送れるか（1行・前後に空白なし・上限以内）。本体の検証と同じ規則。
+bool validReferenceTitle(Object? value, {int max = referenceTitleChars}) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= max &&
+    value.trim() == value &&
+    !RegExp(
+      r'[\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]',
+      unicode: true,
+    ).hasMatch(value);
+
+/// 本体が書く資料の一覧（90_system/references.json）の、資料棚に載る1件。新しい順に並ぶ。
+/// [label]は資料棚に示す文（本人が付けた名前、なければAIの要約、AIが読み取る前は本文の1行目）。
+class ReferenceEntry {
+  const ReferenceEntry({
+    required this.inputId,
+    required this.label,
+    required this.title,
+    required this.aiSummary,
+    required this.addedByPerson,
+    this.markId,
+    required this.unorganized,
+    this.failed = false,
+    required this.urls,
+    required this.skippedUrls,
+    this.file,
+    required this.projects,
+    required this.project,
+    required this.corrected,
+    required this.pendingCorrection,
+    required this.occurredAt,
+  });
+
+  /// メモに添えたファイル（PDF・画像など）。なければnull。
+  final HubFile? file;
+
+  /// 元のメモ（訂正を除いた最初の入力）のID。
+  final String inputId;
+  final String label;
+
+  /// 本人が付けた資料の名前。付けていなければnull。
+  final String? title;
+
+  /// AIの一行要約（未検証）。AIがまだ読み取っていなければnull。
+  final String? aiSummary;
+
+  /// 本人が資料にした（true）か、AIが参考資料に分類した（false）か。
+  final bool addedByPerson;
+
+  /// いま効いている本人の記録のID。AIの分類だけで載った資料ではnull。
+  final String? markId;
+
+  /// AIがまだ読み取っていない・読み取りに失敗した（本人が資料にしたメモだけがこの状態で載る）。
+  final bool unorganized, failed;
+
+  /// 本文から取り出したURL（http・httpsだけ。取得・確認はしていない）と、載せなかったURLの数。
+  final List<String> urls;
+  final int skippedUrls;
+
+  /// 資料が載るプロジェクト（AIの関連候補を含む）と、本人が指定したプロジェクト。
+  final List<String> projects;
+  final String? project;
+  final bool corrected, pendingCorrection;
+  final DateTime? occurredAt;
+}
+
+/// 本人が資料棚から外した資料（外した日時の新しい順）。[title]は外す前に付けていた名前で、戻すときに使う。
+class RemovedReference {
+  const RemovedReference({
+    required this.inputId,
+    required this.label,
+    required this.title,
+    this.markId,
+    this.file,
+    required this.projects,
+    required this.project,
+    required this.removedAt,
+    required this.occurredAt,
+  });
+  final String inputId, label;
+
+  /// メモに添えたファイル。資料棚から外してもファイルとメモは残る。
+  final HubFile? file;
+  final String? title, project;
+
+  /// 外した記録のID。
+  final String? markId;
+  final List<String> projects;
+  final DateTime? removedAt, occurredAt;
+}
+
+/// 資料の一覧。[generatedAt]は本体が一覧を作った時刻、[marksThrough]は一覧に反映した記録の最新の作成時刻
+/// （依頼が一覧に反映されたかの判断に使う。古い本体ではnullで、[generatedAt]で判断する）。
+class ReferenceIndex {
+  const ReferenceIndex({
+    required this.generatedAt,
+    this.marksThrough,
+    required this.entries,
+    required this.removed,
+  });
+  final DateTime generatedAt;
+  final DateTime? marksThrough;
+  final List<ReferenceEntry> entries;
+  final List<RemovedReference> removed;
 }

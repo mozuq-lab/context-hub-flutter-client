@@ -1,5 +1,7 @@
 import Cocoa
 import FlutterMacOS
+import CryptoKit
+import UniformTypeIdentifiers
 import Darwin
 import Security
 
@@ -21,7 +23,11 @@ final class VaultBridge {
   private let maxTotal = 64 * 1_048_576
   /// 更新時刻の粒度（HFS+は1秒、FAT32は2秒）を見込んで、これより新しいファイルは差分読取で再利用しない。
   private let racyInterval: TimeInterval = 3
-  private enum Failure: Error { case invalid, io }
+  /// attachmentは、ファイルを添える・開く操作の理由（Dartが本人向けの説明にする。Vaultの選び直しを促さない）。
+  private enum Failure: Error { case invalid, io, attachment(String) }
+  /// 本人がファイル選択画面で選んだ、メモに添えるファイル（参照の名前→場所）。選択画面で選んだファイルは
+  /// アプリを閉じるまで読めるため、場所だけを覚える。queueの上でだけ読み書きする。
+  private var picked: [String: URL] = [:]
 
   init(_ messenger: FlutterBinaryMessenger) {
     channel = FlutterMethodChannel(name: "com.mozuqlab.contexthub/vault", binaryMessenger: messenger)
@@ -39,6 +45,25 @@ final class VaultBridge {
             result(["handle": "bookmark:" + data.base64EncodedString(), "name": url.lastPathComponent,
                     "identity": try self.identity(url)])
           } catch { result(self.error()) }
+        }
+        return
+      }
+      if call.method == "pickAttachment" {
+        // メモに添えるファイルを選ぶ。Vaultには触れず、名前・大きさと参照だけを返す。
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false; panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false; panel.message = "メモに添えるファイル（PDF・画像など）を選んでください。"
+        panel.begin { response in
+          guard response == .OK, let url = panel.url else { result(nil); return }
+          do {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize else { throw Failure.attachment("attachment_not_file") }
+            let token = UUID().uuidString
+            // 写す操作（queueの上で順に進む）より先に覚える。mainからqueueを待たない（開く操作がmainを待つため）。
+            self.queue.async { self.picked[token] = url }
+            // Macのファイル名は分解した形（NFD）のことがあるため、合成済みの形にそろえて返す。
+            result(["token": token, "name": url.lastPathComponent.precomposedStringWithCanonicalMapping, "bytes": size])
+          } catch { result(self.error(error)) }
         }
         return
       }
@@ -69,9 +94,14 @@ final class VaultBridge {
         do {
           let value = try self.invoke(call.method, args)
           DispatchQueue.main.async { result(value) }
-        } catch { DispatchQueue.main.async { result(self.error()) } }
+        } catch { DispatchQueue.main.async { result(self.error(error)) } }
       }
     }
+  }
+  /// ファイルを添える・開く操作の理由はそのコードで返し、ほかはVaultへのアクセスの失敗にする。
+  private func error(_ failure: Error) -> FlutterError {
+    if case Failure.attachment(let code) = failure { return FlutterError(code: code, message: nil, details: nil) }
+    return error()
   }
   private func error() -> FlutterError {
     FlutterError(code: "vault_access", message: "Vaultへアクセスできません。権限・保存先・確認情報を確認し、必要ならフォルダーを再選択してください。", details: nil)
@@ -141,6 +171,79 @@ final class VaultBridge {
     }
     guard let text = String(data: data, encoding: .utf8) else { throw Failure.invalid }
     return text
+  }
+  /// ファイルを読みながら写し、大きさとSHA-256（16進の小文字）を返す。outputが-1なら読むだけ。上限を超えれば失敗。
+  private func copyDigest(_ input: Int32, to output: Int32, limit: Int) throws -> (Int, String) {
+    var hasher = SHA256(); var total = 0
+    var buffer = [UInt8](repeating: 0, count: 1 << 20)
+    while true {
+      let size = Darwin.read(input, &buffer, buffer.count)
+      guard size >= 0 else { throw Failure.io }
+      if size == 0 { break }
+      total += size
+      guard total <= limit else { throw Failure.attachment("attachment_too_large") }
+      hasher.update(data: Data(buffer[0..<size]))
+      if output >= 0 {
+        var offset = 0
+        while offset < size {
+          let written = buffer.withUnsafeBytes { Darwin.write(output, $0.baseAddress!.advanced(by: offset), size - offset) }
+          guard written > 0 else { throw Failure.io }; offset += written
+        }
+      }
+    }
+    return (total, hasher.finalize().map { String(format: "%02x", $0) }.joined())
+  }
+  private func openRegular(_ path: String, limit: Int) throws -> Int32 {
+    let fd = open(path, O_RDONLY | O_NOFOLLOW)
+    guard fd >= 0 else { throw Failure.attachment("attachment_unreadable") }
+    var st = stat()
+    guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { close(fd); throw Failure.attachment("attachment_not_file") }
+    guard st.st_size <= limit else { close(fd); throw Failure.attachment("attachment_too_large") }
+    return fd
+  }
+  /// 選んだファイルをInput/files/<受付ID>へ写す。一時ファイルへ書いてfsyncし、まだない名前へ公開する。
+  /// 同じ受付IDのファイルが既にあれば（保存の途中で止まった後の再試行）、内容が同じときだけ使う。
+  private func stage(_ root: URL, id: String, source: URL, limit: Int) throws -> [String: Any] {
+    let input = try directory(root.appendingPathComponent("Input"), create: true)
+    let dir = try directory(input.appendingPathComponent("files"), create: true)
+    let target = dir.appendingPathComponent(id)
+    let src = try openRegular(source.path, limit: limit)
+    defer { close(src) }
+    let temp = dir.appendingPathComponent(".ctx-\(UUID().uuidString).tmp")
+    let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+    guard fd >= 0 else { throw Failure.io }
+    var openFd = true
+    defer { if openFd { close(fd) }; unlink(temp.path) }
+    let (size, digest) = try copyDigest(src, to: fd, limit: limit)
+    guard fsync(fd) == 0, close(fd) == 0 else { throw Failure.io }; openFd = false
+    if link(temp.path, target.path) != 0 {
+      guard errno == EEXIST else { throw Failure.io }
+      guard let existing = try? openRegular(target.path, limit: limit) else { throw Failure.attachment("attachment_conflict") }
+      defer { close(existing) }
+      // 同じ受付IDに別の内容が既にある（前に写しかけた別のファイル）。Dartは別の操作IDで保存し直す。
+      guard let old = try? copyDigest(existing, to: -1, limit: limit), old.0 == size, old.1 == digest else {
+        throw Failure.attachment("attachment_conflict")
+      }
+    }
+    try syncDirectory(dir)
+    return ["bytes": size, "sha256": digest]
+  }
+  /// Vault内のメモに添えたファイル（05_files/<年-月>/<キー>/<名前>）の場所。symlinkを経由しない。
+  private func vaultFile(_ root: URL, _ path: String) throws -> URL {
+    let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+    guard parts.count == 4, parts[0] == "05_files",
+          parts[1].range(of: "^[0-9]{4}-(0[1-9]|1[0-2])$", options: .regularExpression) != nil,
+          parts[2].range(of: "^[0-9a-f]{24}$", options: .regularExpression) != nil,
+          !parts[3].isEmpty, !parts[3].hasPrefix("."), !path.contains("\\") else { throw Failure.invalid }
+    var current = root
+    for (index, part) in parts.enumerated() {
+      current = current.appendingPathComponent(part)
+      var st = stat()
+      guard lstat(current.path, &st) == 0 else { throw errno == ENOENT ? Failure.attachment("file_missing") : Failure.io }
+      let type = st.st_mode & S_IFMT
+      guard index < parts.count - 1 ? type == S_IFDIR : type == S_IFREG else { throw Failure.invalid }
+    }
+    return current
   }
   private func syncDirectory(_ url: URL) throws {
     let fd = open(url.path, O_RDONLY | O_NOFOLLOW)
@@ -326,6 +429,26 @@ final class VaultBridge {
           let skip = Set((args["skip"] as? [String]) ?? [])
           let known = (args["known"] as? [String: String]) ?? [:]
           return try snapshot(root, skip: skip, known: known)
+        }
+        if method == "stageAttachment" {
+          guard let id = args["requestId"] as? String, id.range(of: "^REQ-[a-f0-9]{32}$", options: .regularExpression) != nil,
+                let token = args["token"] as? String,
+                let limit = args["maxBytes"] as? Int, limit > 0, handle != "sample" else { throw Failure.invalid }
+          guard let source = picked[token] else { throw Failure.attachment("attachment_lost") }
+          return try stage(root, id: id, source: source, limit: limit)
+        }
+        if method == "openVaultFile" {
+          // 端末の既定のアプリで開く。Vaultを読める間（security scopeの中）に開いて渡す。
+          guard let path = args["path"] as? String, handle != "sample" else { throw Failure.invalid }
+          let file = try vaultFile(root, path)
+          // 開くとプログラムとして動く種類（実行ファイル・スクリプト・アプリ・場所へのリンク）は開かない（Dartでも名前で断る）。
+          if let type = UTType(filenameExtension: file.pathExtension),
+             [UTType.executable, .script, .shellScript, .applicationBundle, .application].contains(where: { type.conforms(to: $0) }) {
+            throw Failure.attachment("file_launchable")
+          }
+          let opened = DispatchQueue.main.sync { NSWorkspace.shared.open(file) }
+          guard opened else { throw Failure.attachment("file_no_app") }
+          return nil
         }
         guard ["readRequest", "writeRequest"].contains(method), let id = args["requestId"] as? String,
               id.range(of: "^REQ-[a-f0-9]{32}$", options: .regularExpression) != nil else { throw Failure.invalid }
