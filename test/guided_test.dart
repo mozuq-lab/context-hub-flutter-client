@@ -768,6 +768,45 @@ void main() {
         guidedModel,
       );
     });
+    test('応答にモデル名がないときは、選んだモデルの利用として数える', () async {
+      final transport = FakeTransport(
+        HttpReply(
+          200,
+          jsonEncode({
+            'stop_reason': 'end_turn',
+            'content': [
+              {'type': 'text', 'text': '{}'},
+            ],
+            'usage': {'input_tokens': 7, 'output_tokens': 3},
+          }),
+        ),
+      );
+      final reply = await ClaudeClient(transport: transport).send(
+        guidedQuestionPrompt(session(), model: 'claude-sonnet-5-5'),
+        apiKey: 'sk-ant-test-key-0000000000',
+      );
+      expect(reply.model, 'claude-sonnet-5-5');
+      expect(reply.usage, {
+        'claude-sonnet-5-5': const TokenUsage(input: 7, output: 3),
+      });
+    });
+    test('Haikuで応答を控えられたときは、OpusかSonnetを選ぶよう案内する', () async {
+      Future<String> refused(String model) => ClaudeClient(
+        transport: FakeTransport(
+          HttpReply(200, jsonEncode({'stop_reason': 'refusal', 'content': []})),
+        ),
+      )
+          .send(
+            guidedQuestionPrompt(session(), model: model),
+            apiKey: 'sk-ant-test-key-0000000000',
+          )
+          .then<String>(
+            (_) => '',
+            onError: (Object e) => (e as ModelException).message,
+          );
+      expect(await refused('claude-haiku-5-5'), contains('OpusかSonnetを選んで'));
+      expect(await refused('claude-opus-5-5'), isNot(contains('OpusかSonnet')));
+    });
     test('モデルが見つからないときは、依頼したモデルの名前を示す', () async {
       final transport = FakeTransport(
         const HttpReply(
@@ -780,7 +819,10 @@ void main() {
             guidedQuestionPrompt(session(), model: 'claude-haiku-5-5'),
             apiKey: 'sk-ant-test-key-0000000000',
           )
-          .then<ModelException?>((_) => null, onError: (Object e) => e as ModelException);
+          .then<ModelException?>(
+            (_) => null,
+            onError: (Object e) => e as ModelException,
+          );
       expect(error!.message, contains('claude-haiku-5-5'));
       expect(error.message, contains('別のモデルを選ぶ'));
     });
@@ -1683,6 +1725,13 @@ void main() {
       // 選べないモデルは既定に戻す。
       await g.setModel('claude-unknown-9');
       expect(g.state!.model, guidedModel);
+      // 端末に残せなくても、開いている間は選んだモデルを使う。残せなかったことは返す。
+      access.failGuided = true;
+      expect(await g.setModel('claude-haiku-5-5'), isFalse);
+      expect(await g.setEffort('high', summary: true), isFalse);
+      expect(g.state!.model, 'claude-haiku-5-5');
+      expect(g.state!.summaryEffort, 'high');
+      access.failGuided = false;
     });
 
     test('AIの設定で選んだEffortで問いとまとめを依頼し、深いほど上限を広げる', () async {

@@ -1007,7 +1007,7 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
     await _run(
       () async => await widget.controller.setModel(id)
           ? null
-          : '端末に設定を残せませんでした。この画面を閉じるまでは$labelを使います。',
+          : '端末に設定を残せませんでした。「質問に答えてまとめる」の画面を開いている間は$labelを使いますが、次に開いたときは前の設定に戻ることがあります。',
       'モデルを$labelにしました。',
     );
   }
@@ -1038,7 +1038,7 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
               () async =>
                   await widget.controller.setEffort(v, summary: summary)
                   ? null
-                  : '端末に設定を残せませんでした。この画面を閉じるまでは$vを使います。',
+                  : '端末に設定を残せませんでした。「質問に答えてまとめる」の画面を開いている間は$vを使いますが、次に開いたときは前の設定に戻ることがあります。',
               '${summary ? 'まとめ' : '問い'}のEffortを$vにしました。',
             );
           },
@@ -1120,20 +1120,24 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
               const Divider(height: 32),
               Text('モデル', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
-              SegmentedButton<String>(
+              DropdownButtonFormField<String>(
                 key: const Key('guided-model'),
-                showSelectedIcon: false,
-                segments: [
+                style: fieldTextStyle(context),
+                initialValue: model.id,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '問いとまとめを作るモデル'),
+                items: [
                   for (final m in guidedModels)
-                    ButtonSegment(
+                    DropdownMenuItem(
                       value: m.id,
-                      label: Text(m.label, key: Key('guided-model-${m.id}')),
+                      child: Text(m.label, key: Key('guided-model-${m.id}')),
                     ),
                 ],
-                selected: {model.id},
-                onSelectionChanged: busy || g.state == null
+                onChanged: busy || g.state == null
                     ? null
-                    : (picked) => _setModel(picked.first),
+                    : (picked) {
+                        if (picked != null) _setModel(picked);
+                      },
               ),
               const SizedBox(height: 6),
               Text(
@@ -1144,7 +1148,10 @@ class _GuidedSettingsDialogState extends State<GuidedSettingsDialog> {
                 style: _small,
               ),
               const SizedBox(height: 16),
-              Text('Effort（考える深さ）', style: Theme.of(context).textTheme.titleSmall),
+              Text(
+                'Effort（考える深さ）',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
               const SizedBox(height: 8),
               _effortField(
                 name: 'guided-question-effort',

@@ -389,7 +389,7 @@ class ClaudeClient implements ModelClient {
   /// 応答は少しずつ受け取り（stream）、途中で途切れても使ったトークンを数えられるようにする。
   /// Haikuにはサーバー側の代替がないため、`fallbacks`もベータの指定も付けない。
   static Map<String, Object?> body(GuidedPrompt p) => {
-    'model': p.model,
+    'model': guidedModelChoice(p.model).id,
     'max_tokens': p.maxTokens,
     'stream': true,
     'system': p.system,
@@ -413,7 +413,10 @@ class ClaudeClient implements ModelClient {
     if (guidedModelChoice(p.model).fallback) 'fallbacks': 'default',
   };
 
-  static Map<String, String> headers(String apiKey, {String model = guidedModel}) => {
+  static Map<String, String> headers(
+    String apiKey, {
+    required String model,
+  }) => {
     'content-type': 'application/json',
     'x-api-key': apiKey,
     'anthropic-version': apiVersion,
@@ -481,8 +484,11 @@ class ClaudeClient implements ModelClient {
           retryable: true,
         )._with(used);
       }
-      throw const ModelException(
-        'Claudeがこの内容への応答を控えました。きっかけや回答の言い方を変えて試してください。',
+      // Haikuには代わりに答えるモデルがない。Opus・Sonnetなら代わりのモデルが答えることがある。
+      throw ModelException(
+        guidedModelChoice(prompt.model).fallback
+            ? 'Claudeがこの内容への応答を控えました。きっかけや回答の言い方を変えて試してください。'
+            : 'Claudeがこの内容への応答を控えました。きっかけや回答の言い方を変えるか、AIの設定でOpusかSonnetを選んで試してください（代わりのモデルが答えることがあります）。',
       )._with(used);
     }
     if (stop == 'max_tokens') {

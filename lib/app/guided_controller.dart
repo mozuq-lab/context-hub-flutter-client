@@ -691,7 +691,7 @@ class GuidedController extends ChangeNotifier {
   }
 
   /// 問いとまとめを作るモデルを選ぶ。途中の深掘りでは、次の呼び出しから使う。
-  /// 端末に残せたかどうかを返す（残せなくても、この画面を閉じるまでは選んだモデルを使う）。
+  /// 端末に残せたかどうかを返す（残せなくても、このコントローラーを使う画面を閉じるまでは選んだモデルを使う）。
   Future<bool> setModel(String model) async {
     final st = state;
     if (st == null) return false;
@@ -702,7 +702,7 @@ class GuidedController extends ChangeNotifier {
   }
 
   /// 問いを作るとき（[summary]がfalse）・まとめを書くときのEffortを選ぶ。
-  /// 端末に残せたかどうかを返す（残せなくても、この画面を閉じるまでは選んだEffortを使う）。
+  /// 端末に残せたかどうかを返す（残せなくても、このコントローラーを使う画面を閉じるまでは選んだEffortを使う）。
   Future<bool> setEffort(String effort, {required bool summary}) async {
     final st = state;
     if (st == null) return false;
