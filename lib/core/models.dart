@@ -143,6 +143,7 @@ class NowItemRef {
     this.fromKey,
     this.effort,
     this.contexts = const [],
+    this.steps,
     this.waitingId,
     this.waitingSince,
     this.waitingWho,
@@ -171,6 +172,9 @@ class NowItemRef {
 
   /// 本人が付けた場所・道具の札（本体のitem-contexts、付けた順）。札のない項目や、札を知らない本体では空。
   final List<String> contexts;
+
+  /// 本人が付けた手順と、終えた手順の数（本体のitem-steps）。手順のない項目や、手順を知らない本体ではnull。
+  final ItemSteps? steps;
 
   /// 本人が直接追加した行動（本体の入力の種類action）。AIの読み取りではない。
   final bool action;
@@ -224,7 +228,122 @@ String itemRecordLabel(NowItemRef item) => [
   if (item.reviewAfter != null) '見直す日 ${item.reviewAfter}',
   if (itemEffortLabels[item.effort] case final effort?) '手間 $effort',
   if (item.contexts.isNotEmpty) contextsLabel(item.contexts),
+  if (item.steps case final steps?) steps.label,
 ].join('・');
+
+/// 本体と同じ、手順の数の下限・上限（1つの手順の文面は行動と同じ[actionTextChars]文字まで）。
+const itemStepsMin = 2, itemStepsMax = 10;
+
+/// 次の一手に本人が付けた手順（2〜10個）と、終えた手順の数（0〜手順の数）。AIは手順を作らない。
+class ItemSteps {
+  const ItemSteps(this.items, this.done);
+  final List<String> items;
+  final int done;
+
+  /// すべての手順を終えた（元の項目の完了は本人が別に報告する）。
+  bool get finished => done >= items.length;
+
+  /// 今の手順（すべて終えていればnull）。
+  String? get current => finished ? null : items[done];
+
+  /// 本体のNOW・HOMEと同じ表示（「手順 2/4: …」、すべて終えたら完了を促す）。
+  String get label => finished
+      ? '手順 ${items.length}/${items.length} 済み・項目の完了を確かめる'
+      : '手順 ${done + 1}/${items.length}: ${items[done]}';
+
+  /// 本体の受付・項目一覧と同じ形。
+  Map<String, dynamic> toJson() => {'items': items, 'done': done};
+
+  /// 本体と同じ規則（2〜10個、1つは1行・200文字以内で前後に空白なし、終えた数は0〜手順の数）。合わなければnull。
+  static ItemSteps? tryParse(Object? value) {
+    if (value is! Map ||
+        value.length != 2 ||
+        value['items'] is! List ||
+        value['done'] is! int) {
+      return null;
+    }
+    final items = value['items'] as List, done = value['done'] as int;
+    if (!validStepItems(items) || done < 0 || done > items.length) return null;
+    return ItemSteps(List<String>.from(items), done);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is ItemSteps &&
+      other.done == done &&
+      other.items.length == items.length &&
+      other.items.indexed.every((e) => items[e.$1] == e.$2);
+
+  @override
+  int get hashCode => Object.hash(done, Object.hashAll(items));
+}
+
+/// 手順の一覧として送れるか（本体のitemStepsSchemaと同じ）。
+bool validStepItems(List items) =>
+    items.length >= itemStepsMin &&
+    items.length <= itemStepsMax &&
+    items.every(validActionText);
+
+/// 本体と同じ、領域の文字数と、アプリの好みに置く領域の語彙の上限。
+const areaChars = 20, areaVocabularyMax = 12;
+
+/// 領域を付けていないプロジェクトをまとめる見出し（本体のNO_AREA_LABEL。領域の名前には使えない）。
+const noAreaLabel = '領域なし';
+
+/// 領域として送れる文字列か（本体のareaSchemaと同じ規則: 1〜20文字、1行で制御文字なし、前後に空白なし、「領域なし」でない）。
+/// 文字は正規化（NFC）したものだけ。
+bool validArea(Object? value) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= areaChars &&
+    !RegExp(r'[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]', unicode: true).hasMatch(value) &&
+    value.trim() == value &&
+    value != noAreaLabel &&
+    unicode.nfc(value) == value;
+
+/// 入力した領域を送る形に整える（前後の空白を除き、NFCにする）。
+String normalizeArea(String value) => unicode.nfc(value.trim());
+
+/// 領域の語彙として送れるか（12個まで、重ねない）。
+bool validAreaVocabulary(List<String> items) =>
+    items.length <= areaVocabularyMax &&
+    items.toSet().length == items.length &&
+    items.every(validArea);
+
+/// 本体のorderAreasと同じ並び（語彙の順 → 語彙にない領域を名前順 → 領域なしを最後）。
+List<String?> orderAreas(Iterable<String?> areas, List<String> vocabulary) {
+  final present = areas.toSet();
+  final rest =
+      present.whereType<String>().where((a) => !vocabulary.contains(a)).toList()
+        ..sort();
+  return [
+    for (final a in vocabulary)
+      if (present.contains(a)) a,
+    ...rest,
+    if (present.contains(null)) null,
+  ];
+}
+
+/// 週次レビューで見渡す、領域ごとのプロジェクトの数と最後の根拠。[area]がnullは領域なし。
+class AreaOverview {
+  const AreaOverview({
+    required this.area,
+    required this.active,
+    required this.paused,
+    required this.done,
+    required this.lastEvidenceAt,
+    required this.quiet,
+  });
+  final String? area;
+  final int active, paused, done;
+  final DateTime? lastEvidenceAt;
+
+  /// 進行中のプロジェクトがあるのに、長く動いていない。
+  final bool quiet;
+
+  /// 進行中のプロジェクトがない（責任の範囲が手薄になっている）。
+  bool get noActive => active == 0;
+}
 
 /// 本体と同じ、場所・道具の札の上限（1つの札の文字数・1項目の札の数・語彙の数）。
 const contextTagChars = 20, contextTagsMax = 8, contextVocabularyMax = 30;
@@ -559,7 +678,11 @@ class HubProject {
     this.definitionHash,
     this.mergedInto,
     this.outcome,
+    this.area,
   });
+
+  /// 本人が付けた領域（project.mdの`area`）。付けていない・規則に合わない値ならnull（本体と同じ）。
+  final String? area;
 
   /// 本人が書いた望む結果（project.mdの`outcome`）。書いていなければnull。
   final String? outcome;
@@ -935,6 +1058,9 @@ class NewProjectRequest {
 
   /// 本体が示した望む結果の上限。望む結果に対応していない本体ではnull。
   final ({int maxChars, int maxLines})? outcomeLimits;
+
+  /// 作成と一緒に付ける領域（付けなければnull。領域に対応した本体にだけ送る）。
+  final String? area;
   NewProjectRequest({
     required this.operationId,
     required this.projectId,
@@ -944,6 +1070,7 @@ class NewProjectRequest {
     this.firstMemo = '',
     String outcome = '',
     this.outcomeLimits,
+    this.area,
   }) : outcome = normalizeProjectOutcome(outcome),
        _rawOutcome = outcome;
   final String _rawOutcome;
@@ -985,6 +1112,9 @@ class NewProjectRequest {
         return '望む結果は${limits.maxChars}文字・${limits.maxLines}行までにしてください。';
       }
     }
+    if (area != null && !validArea(area)) {
+      return '領域は1〜$areaChars文字の1行で、前後に空白を付けずに入力してください（「$noAreaLabel」は使えません）。';
+    }
     if (firstMemo.length > 8000 || utf8.encode(firstMemo).length > 32000) {
       return '最初のメモは8000文字までで入力してください。';
     }
@@ -1011,6 +1141,7 @@ class NewProjectRequest {
     'aliases': aliases,
     'keywords': keywords,
     if (outcome.isNotEmpty) 'outcome': outcome,
+    'area': ?area,
     'confirmed': true,
   };
 

@@ -1,18 +1,24 @@
 // Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・場所・道具の札・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、週次レビューの「見直した」、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
+// 手順・領域・整理のやり直しの依頼も含む。
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,basename} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemSteps,readOrganizeRetries,readProjectAreaChanges,readProjects,readReceipts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-steps','project-area','organize-retry','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
  const files=JSON.parse(await readFile(fixture,'utf8'));for(const[p,value]of Object.entries(files.files??files))await vault.write(p,value);
  const resolutionsBefore=(await readItemResolutions(vault)).length;
+ // 整理のやり直しは、整理に失敗したメモにだけ頼める。fixtureの整理済みのメモを、Dartが見た試行回数で失敗したことにする。
+ if(packet.operation==='organize-retry'){
+  const receiptPath=`90_system/receipts/${packet.input_id}.json`,receipt=JSON.parse(await vault.read(receiptPath));
+  await vault.write(receiptPath,JSON.stringify({...receipt,status:'failed',attempts:packet.attempts,result:null,writes:[],error:'検査用の失敗'},null,2)+'\n');
+ }
  await vault.create(path,raw);await utimes(await vault.path(path),new Date(0),new Date(0));
  if(mode==='stale'){
   // 古い訂正対象は受け付けず、最新の訂正IDを理由に残す。再受付でも重複して記録しない。
@@ -74,6 +80,28 @@ try{
   const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
   assert.deepEqual(item.contexts??null,packet.contexts);
   if(packet.contexts&&packet.project_id!=='_unassigned')assert.ok((await vault.read(`10_projects/${packet.project_id}/NOW.md`)).includes(packet.contexts.map(t=>`@${t}`).join(' ')));
+ }else if(packet.operation==='item-steps'){
+  // 変更後の手順の全体がそのまま記録され、項目一覧とNOWの行末（今の手順）に反映される。nullなら外す。
+  assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});
+  const record=(await readItemSteps(vault)).records.find(r=>r.id===ack.result.stepsId);
+  assert.deepEqual({steps:record.steps,source:record.source,event:record.source_event_id},{steps:packet.steps,source:packet.source,event:packet.request_id});
+  const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
+  assert.deepEqual(item.steps?{items:item.steps.items,done:item.steps.done}:null,packet.steps);
+  if(packet.steps&&packet.project_id!=='_unassigned'&&packet.steps.done<packet.steps.items.length)assert.ok((await vault.read(`10_projects/${packet.project_id}/NOW.md`)).includes(`手順 ${packet.steps.done+1}/${packet.steps.items.length}: `));
+ }else if(packet.operation==='project-area'){
+  // 確認したproject.mdのhashに結び付けて、領域だけが書き換わる（nullなら外す）。登録簿の欄は変わらない。
+  assert.deepEqual({projectId:ack.result.projectId,area:ack.result.area,deduped:ack.result.deduped},{projectId:packet.project_id,area:packet.area,deduped:false});
+  const change=(await readProjectAreaChanges(vault)).records.find(r=>r.id===ack.result.areaChangeId);
+  assert.deepEqual({to:change.to,before:change.before_hash,source:change.source,event:change.source_event_id},{to:packet.area,before:packet.project_hash,source:packet.source,event:packet.request_id});
+  assert.equal((await readProjects(config)).find(p=>p.id===packet.project_id).area??null,packet.area);
+ }else if(packet.operation==='organize-retry'){
+  // やり直しの記録ができ、次の整理でそのメモだけをもう一度試して整理済みになる。
+  assert.deepEqual({inputId:ack.result.inputId,deduped:ack.result.deduped},{inputId:packet.input_id,deduped:false});
+  const record=(await readOrganizeRetries(vault)).records.find(r=>r.id===ack.result.retryId);
+  assert.deepEqual({input:record.input_id,attempts:record.attempts,event:record.source_event_id},{input:packet.input_id,attempts:packet.attempts,event:packet.request_id});
+  const tried=await organize(config,new MockLlm());
+  assert.deepEqual(tried.inputIds,[packet.input_id]);
+  assert.deepEqual(((await readReceipts(config)).find(r=>r.input_id===packet.input_id)),{...(await readReceipts(config)).find(r=>r.input_id===packet.input_id),status:'organized',attempts:packet.attempts+1});
  }else if(packet.operation==='item-wait'){
   // 変更後の印（相手と頼んだ日）がそのまま記録され、項目一覧に反映される。nullなら外す。NOW.mdには相手の名前を載せない。
   assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});

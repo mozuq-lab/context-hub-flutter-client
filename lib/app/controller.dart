@@ -1760,8 +1760,9 @@ class HubController extends ChangeNotifier {
       if (parsed.projectStatusRequestIdFor(projectId) != null) {
         throw StateError('このプロジェクトの状態変更は依頼済みです。保存と反映を確認してください。');
       }
-      if (parsed.projectDefinitionRequestIdFor(projectId) != null) {
-        throw StateError('呼び名とキーワードの変更が反映されるまで待ってから依頼してください。');
+      if (parsed.projectDefinitionRequestIdFor(projectId) != null ||
+          parsed.projectAreaRequestIdFor(projectId) != null) {
+        throw StateError('呼び名とキーワード・領域の変更が反映されるまで待ってから依頼してください。');
       }
       _refuseMerged(parsed, project);
       if (pending.isNotEmpty) {
@@ -1824,7 +1825,8 @@ class HubController extends ChangeNotifier {
         for (final p in [a, b]) {
           if (parsed.projectMergeRequestIdFor(p.id) != null ||
               parsed.projectDefinitionRequestIdFor(p.id) != null ||
-              parsed.projectStatusRequestIdFor(p.id) != null) {
+              parsed.projectStatusRequestIdFor(p.id) != null ||
+              parsed.projectAreaRequestIdFor(p.id) != null) {
             throw StateError('「${p.title}」への依頼が反映待ちです。保存と反映を確認してください。');
           }
         }
@@ -1870,7 +1872,8 @@ class HubController extends ChangeNotifier {
           throw StateError('プロジェクト定義が変更されています。表示を確認してから操作してください。');
         }
         if (parsed.projectDefinitionRequestIdFor(projectId) != null ||
-            parsed.projectStatusRequestIdFor(projectId) != null) {
+            parsed.projectStatusRequestIdFor(projectId) != null ||
+            parsed.projectAreaRequestIdFor(projectId) != null) {
           throw StateError('このプロジェクトへの依頼が反映待ちです。保存と反映を確認してください。');
         }
         _refuseMerged(parsed, found);
@@ -1890,6 +1893,101 @@ class HubController extends ChangeNotifier {
       },
       (service, parsed, operation) =>
           service.saveProjectDefinition(operation, project, next),
+    );
+  }
+
+  /// プロジェクトに領域を付ける・変える・外す（[area]がnull）依頼。表示中の定義hash（[expectedHash]）に結び付ける。
+  /// 領域は本人が選び、AIは付けない。本体はメモの関連付けをやり直さない（登録簿のhashに含めない）。
+  Future<CaptureResult> requestProjectArea(
+    String projectId,
+    String expectedHash,
+    String? area,
+  ) {
+    if (area != null && !validArea(area)) {
+      throw StateError('領域は1〜$areaChars文字の1行で、前後に空白を付けずに入力してください（「$noAreaLabel」は使えません）。');
+    }
+    late HubProject project;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.areas) {
+          throw StateError('Mac miniの本体が領域に対応していません。本体を更新してください。');
+        }
+        final found = parsed.projects[projectId];
+        if (found == null || found.definitionHash != expectedHash) {
+          throw StateError('プロジェクト定義が変更されています。表示を確認してから操作してください。');
+        }
+        if (parsed.projectDefinitionRequestIdFor(projectId) != null ||
+            parsed.projectStatusRequestIdFor(projectId) != null ||
+            parsed.projectAreaRequestIdFor(projectId) != null) {
+          throw StateError('このプロジェクトへの依頼が反映待ちです。保存と反映を確認してください。');
+        }
+        _refuseMerged(parsed, found);
+        if (found.area == area) {
+          throw StateError(area == null ? '外す領域はありません。' : '既に領域「$area」です。');
+        }
+        project = found;
+        // 変更後の領域と最新の変更記録を含め、同じ領域へ戻す依頼が過去の操作と混ざらないようにする。
+        return 'project-area/$projectId/$expectedHash/${digest(jsonEncode([area]))}/${parsed.latestAreaChangeId(projectId) ?? '-'}';
+      },
+      (service, parsed, operation) =>
+          service.saveProjectArea(operation, project, area),
+    );
+  }
+
+  /// 領域の語彙（領域を選ぶときの一覧、並びも含む）を変える依頼。Vaultの好みに置き、すべての端末で同じ一覧と並びを使う。
+  /// 好みをそろえる設定とは関係なく送る。語彙から外した領域は、付いているプロジェクトに残る。
+  Future<CaptureResult> requestAreaVocabulary(List<String> items) {
+    if (!validAreaVocabulary(items)) {
+      throw StateError('領域は$areaVocabularyMax個まで、同じ領域を重ねずに入力してください。');
+    }
+    late String payload;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.areas) {
+          throw StateError('Mac miniの本体が領域に対応していません。本体を更新してください。');
+        }
+        if (listEquals(parsed.areaVocabulary, items)) {
+          throw StateError('領域の一覧は変わっていません。');
+        }
+        // 変えた日時は、知っている版（Vaultの版・反映待ちの版）より必ず後にする（遅れて届いた古い変更で巻き戻さないため）。
+        final known = parsed.vocabularyAt('areas');
+        final now = DateTime.now().toUtc(),
+            after = known?.add(const Duration(milliseconds: 1));
+        payload = encodePreferencesPayload(_deviceName, {
+          'areas': (
+            at: after != null && after.isAfter(now) ? after : now,
+            value: {'items': items},
+          ),
+        });
+        return 'areas-vocabulary/${digest(jsonEncode([parsed.sharedPreferences['areas']?.requestId, known?.toIso8601String(), items]))}';
+      },
+      (service, parsed, operation) =>
+          service.savePreferences(operation, payload),
+    );
+  }
+
+  /// 整理（AIの読み取り）に失敗したメモ1件を、次の整理でもう一度試すよう頼む。
+  /// 本人が見た失敗の試行回数に結び付け、同じ失敗へは重ねて頼まない（本体も1回だけ試す）。
+  Future<CaptureResult> requestOrganizeRetry(String inputId) {
+    late int attempts;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.organizeRetry) {
+          throw StateError('Mac miniの本体が整理のやり直しに対応していません。本体を更新してください。');
+        }
+        final found = parsed.failedAttemptsFor(inputId);
+        if (found == null) {
+          throw StateError('このメモは整理に失敗していません。表示を確認してください。');
+        }
+        if (parsed.organizeRetryRequestIdFor(inputId) != null ||
+            parsed.organizeRetryQueued(inputId)) {
+          throw StateError('このメモのやり直しは依頼済みです。次の整理を待ってください。');
+        }
+        attempts = found;
+        return 'organize-retry/$inputId/$attempts';
+      },
+      (service, parsed, operation) =>
+          service.saveOrganizeRetry(operation, inputId, attempts),
     );
   }
 
@@ -2194,6 +2292,7 @@ class HubController extends ChangeNotifier {
             parsed.scheduleRequestIdFor(itemKey) != null ||
             parsed.effortRequestIdFor(itemKey) != null ||
             parsed.contextsRequestIdFor(itemKey) != null ||
+            parsed.stepsRequestIdFor(itemKey) != null ||
             parsed.waitRequestIdFor(itemKey) != null ||
             parsed.somedayRequestIdFor(itemKey) != null ||
             parsed.correctionRequestIdForInput(found.inputId) != null) {
@@ -2332,6 +2431,48 @@ class HubController extends ChangeNotifier {
       },
       (service, parsed, operation) =>
           service.saveItemEffort(operation, projectId, item, effort),
+    );
+  }
+
+  /// 次の一手の手順を、[steps]の全体（手順と終えた数）に置き換える依頼。nullなら外す。手順は本人が書き、AIは作らない。
+  /// 進める・戻すも全体を送る（[ItemSteps.done]を1つ増やす・減らす）。
+  Future<CaptureResult> requestItemSteps(
+    String projectId,
+    String itemKey,
+    ItemSteps? steps,
+  ) {
+    if (steps != null && ItemSteps.tryParse(steps.toJson()) == null) {
+      throw StateError('手順は$itemStepsMin〜$itemStepsMax個、それぞれ1行・$actionTextChars文字以内で入力してください。');
+    }
+    late NowItemRef item;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.steps) {
+          throw StateError('Mac miniの本体が手順に対応していません。本体を更新してください。');
+        }
+        final found = _recordTarget(parsed, projectId, itemKey);
+        if (found == null || found.resolved) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (found.section != 'next') {
+          throw StateError('手順は「次の一手」の項目だけに付けられます。');
+        }
+        if (found.steps == steps) {
+          throw StateError(steps == null ? '外す手順はありません。' : '手順は変わっていません。');
+        }
+        if (parsed.stepsRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の手順は依頼済みです。保存と反映を確認してください。');
+        }
+        // 完了・解決の報告が先に反映されると、本体は手順の依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        // 外した記録も含む最新の記録IDと変更前後を含め、同じ内容の再試行だけを同じ操作にする。
+        return 'steps/$projectId/$itemKey/${parsed.latestStepsIdFor(itemKey) ?? '-'}/${digest(jsonEncode([found.steps?.toJson(), steps?.toJson()]))}';
+      },
+      (service, parsed, operation) =>
+          service.saveItemSteps(operation, projectId, item, steps),
     );
   }
 
@@ -2751,6 +2892,9 @@ class HubController extends ChangeNotifier {
       if (request.outcome.isNotEmpty &&
           parsed.intakeFeatures.projectOutcome == null) {
         throw StateError('Mac miniの本体が望む結果に対応していません。望む結果を空にするか、本体を更新してください。');
+      }
+      if (request.area != null && !parsed.intakeFeatures.areas) {
+        throw StateError('Mac miniの本体が領域に対応していません。領域を空にするか、本体を更新してください。');
       }
       // 保存結果が不明だった同じ依頼の確認では、自分自身を作成依頼中として重なりに数えない。
       if (!pending.any((p) => p.operationId == request.operationId)) {

@@ -32,6 +32,8 @@ class IntakeFeatures {
     this.projectOutcome,
     this.actionFields = const {},
     this.contextLimits,
+    this.areaLimits,
+    this.stepLimits,
   });
   static const none = IntakeFeatures._({}, {});
   final Set<String> operations, captureFields;
@@ -80,6 +82,25 @@ class IntakeFeatures {
 
   /// 場所・道具の札の上限（`item_contexts`）。1項目の札の数・札の文字数・語彙の数。対応前の本体はnull。
   final ({int maxTags, int maxChars, int vocabularyMax})? contextLimits;
+
+  /// プロジェクトの領域の上限（`project_areas`）。領域の文字数と、好みに置く語彙の数。対応前の本体はnull。
+  final ({int maxChars, int vocabularyMax})? areaLimits;
+
+  /// 次の一手の手順の数の下限・上限と、1つの文字数（`item_steps`）。対応前の本体はnull。
+  final ({int min, int max, int maxChars})? stepLimits;
+
+  /// プロジェクトに領域を付け外しでき（project-area）、作成と一緒に付けられ、領域の語彙を好みとしてVaultに置ける。
+  bool get areas =>
+      operations.contains('project-area') &&
+      areaLimits != null &&
+      operations.contains('client-preferences');
+
+  /// 次の一手を手順に分け、終えた手順を進める・戻すことを依頼できる（item-steps）。
+  /// プロジェクト未定の行動に付けられるかは[unassignedRecords]で決まる。
+  bool get steps => operations.contains('item-steps') && stepLimits != null;
+
+  /// 整理（AIの読み取り）に失敗したメモ1件のやり直しを頼める（organize-retry）。
+  bool get organizeRetry => operations.contains('organize-retry');
 
   /// 次の一手・未解決に場所・道具の札を付け外しでき、札の語彙を好みとしてVaultに置ける（item-contexts）。
   bool get contexts =>
@@ -247,6 +268,22 @@ class IntakeFeatures {
               }
               when tags >= 1 && chars >= 1 && vocabulary >= 1 =>
             (maxTags: tags, maxChars: chars, vocabularyMax: vocabulary),
+          _ => null,
+        },
+        areaLimits: switch (m['project_areas']) {
+          {'max_chars': final int chars, 'vocabulary_max': final int vocabulary}
+              when chars >= 1 && vocabulary >= 1 =>
+            (maxChars: chars, vocabularyMax: vocabulary),
+          _ => null,
+        },
+        stepLimits: switch (m['item_steps']) {
+          {
+                'min': final int min,
+                'max': final int max,
+                'max_chars': final int chars,
+              }
+              when min >= 1 && max >= min && chars >= 1 =>
+            (min: min, max: max, maxChars: chars),
           _ => null,
         },
         {
