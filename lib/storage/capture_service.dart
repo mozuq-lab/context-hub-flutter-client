@@ -622,6 +622,51 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// プロジェクトの領域を付ける・変える（[area]）・外す（null）依頼。表示中の定義hashに結び付けて送る。
+  Future<CaptureResult> saveProjectArea(
+    String operationId,
+    HubProject project,
+    String? area,
+  ) => _serial(() async {
+    final hash = project.definitionHash;
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(project.id) ||
+        hash == null ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(hash) ||
+        (area != null && !validArea(area)) ||
+        area == project.area) {
+      throw const FormatException('プロジェクトと領域を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'project-area',
+      'project_id': project.id,
+      'project_hash': hash,
+      'area': area,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 整理（AIの読み取り）に失敗したメモ1件のやり直しの依頼。[attempts]は本人が確かめた時点の試行回数。
+  Future<CaptureResult> saveOrganizeRetry(
+    String operationId,
+    String inputId,
+    int attempts,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        !inputIdPattern.hasMatch(inputId) ||
+        attempts < 1) {
+      throw const FormatException('やり直すメモを確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'organize-retry',
+      'input_id': inputId,
+      'attempts': attempts,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// 名前・別名・キーワード（と望む結果）の変更依頼。変更後の全体を、表示中の定義hashに結び付けて送る。
   Future<CaptureResult> saveProjectDefinition(
     String operationId,
@@ -836,6 +881,37 @@ class CaptureService {
       'project_id': projectId,
       'item_key': item.key,
       'effort': effort,
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// 次の一手の手順を、[steps]の全体（手順と終えた数）に置き換える依頼。nullで外す。
+  /// 進める・戻すも全体を送るので、同じ依頼が重なっても本体の結果は同じになる。
+  Future<CaptureResult> saveItemSteps(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    ItemSteps? steps,
+  ) => _serial(() async {
+    if (!_uuid.hasMatch(operationId) ||
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        item.section != 'next' ||
+        (steps != null && ItemSteps.tryParse(steps.toJson()) == null) ||
+        (steps == null && item.steps == null) ||
+        steps == item.steps) {
+      throw const FormatException('項目と手順を確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-steps',
+      'project_id': projectId,
+      'item_key': item.key,
+      'steps': steps?.toJson(),
+      // 本人が見ていた手順。別の端末で先に進めていれば本体が断り、古い表示から進み具合を巻き戻さない。
+      'expected': item.steps?.toJson(),
       'confirmed': true,
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');

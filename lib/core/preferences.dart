@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'models.dart' show contextVocabularyMax, validContextTag;
+import 'models.dart'
+    show contextVocabularyMax, validAreaVocabulary, validContextTag;
 import 'parser.dart' show projectIdPattern, timestamp;
 import 'templates.dart';
 
@@ -12,8 +13,8 @@ const clientPreferencesPath = '90_system/client-preferences.json';
 const preferenceGroups = ['pins', 'templates', 'basket'];
 
 /// Vaultに置く、端末の間で共有するまとまり。好みをそろえる設定に関係なく、対応した本体ならいつも送り、読む。
-/// contextsは場所・道具の札の語彙（札を選ぶときの一覧）。
-const vaultPreferenceGroups = ['contexts'];
+/// contextsは場所・道具の札の語彙（札を選ぶときの一覧）、areasはプロジェクトの領域の語彙（並びも本人が決める）。
+const vaultPreferenceGroups = ['contexts', 'areas'];
 
 /// 本体の記録と受付ファイルで扱うまとまり。
 const sharedPreferenceGroups = [...preferenceGroups, ...vaultPreferenceGroups];
@@ -22,6 +23,7 @@ const preferenceGroupLabels = {
   'templates': 'メモのひな形',
   'basket': '文脈かごの上限',
   'contexts': '場所・道具の札の一覧',
+  'areas': '領域の一覧',
 };
 
 /// 受付ファイルの本文の上限（本体のPREFERENCES_MAX_BYTESと同じ）。
@@ -112,6 +114,18 @@ List<String>? contextsValue(Map<String, dynamic> value) {
   return List<String>.from(items);
 }
 
+/// プロジェクトの領域の語彙（本人が決めた並び）。形式が合わなければnull。
+List<String>? areasValue(Map<String, dynamic> value) {
+  final items = value['items'];
+  if (value.length != 1 ||
+      items is! List ||
+      !items.every((v) => v is String) ||
+      !validAreaVocabulary(List<String>.from(items))) {
+    return null;
+  }
+  return List<String>.from(items);
+}
+
 bool _validValue(String group, Object? value) =>
     value is Map<String, dynamic> &&
     switch (group) {
@@ -119,6 +133,7 @@ bool _validValue(String group, Object? value) =>
       'templates' => templatesValue(value) != null,
       'basket' => basketValue(value) != null,
       'contexts' => contextsValue(value) != null,
+      'areas' => areasValue(value) != null,
       _ => false,
     };
 

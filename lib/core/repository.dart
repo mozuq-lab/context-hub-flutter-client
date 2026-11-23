@@ -34,6 +34,15 @@ class HubRepository {
   final Map<String, Map<String, dynamic>> _statusChanges = {};
   final Map<String, String> _outstandingStatus = {};
   final Map<String, Map<String, dynamic>> _definitionChanges = {};
+
+  /// 本体が記録した領域の変更（PAREA-）と、反映を待っている領域の依頼（プロジェクトごと）。
+  final Map<String, Map<String, dynamic>> _areaChanges = {};
+  final Map<String, String> _outstandingArea = {};
+
+  /// 本人が頼んだ整理のやり直しの記録（ORT-。入力IDと、頼んだ時点の試行回数）と、反映を待っている依頼（入力IDごと）。
+  final List<({String id, String inputId, int attempts})> _organizeRetries =
+      [];
+  final Map<String, String> _outstandingRetries = {};
   final Map<String, String> _outstandingDefinition = {};
   final Map<String, Map<String, dynamic>> _mergeChanges = {};
   final Map<String, String> _outstandingMerge = {}, _outstandingMergeInto = {};
@@ -64,9 +73,15 @@ class HubRepository {
   final Map<String, String> _outstandingContexts = {};
   final Map<String, String> _latestContexts = {};
 
+  /// 手順の記録の作成時刻（記録IDごと）と、反映を待っている手順の依頼・最新の記録（項目キーごと）。
+  final Map<String, DateTime> _stepTimes = {};
+  final Map<String, String> _outstandingSteps = {};
+  final Map<String, String> _latestSteps = {};
+
   /// 反映を待っている札の語彙の変更（受付ファイルの値）。なければnull。
-  List<String>? _pendingVocabulary;
-  DateTime? _pendingVocabularyAt;
+  /// 反映を待っている語彙の変更（好みのまとまりごと: 札のcontexts・領域のareas）。
+  final Map<String, ({List<String> items, DateTime at})> _pendingVocabularies =
+      {};
 
   /// 連絡待ちの記録の作成時刻（記録IDごと）と、反映を待っている印の依頼・最新の記録（項目キーごと）。
   final Map<String, DateTime> _waitTimes = {};
@@ -442,6 +457,8 @@ class HubRepository {
             definitionHash: digest(entry.value),
             mergedInto: m['merged_into'] as String?,
             outcome: projectOutcomeLines(outcome).isEmpty ? null : outcome,
+            // 領域は任意。規則に合わない手書きの値は、本体と同じく付いていないものとして読む（定義全体は捨てない）。
+            area: validArea(m['area']) ? m['area'] as String : null,
           );
           projects[id] = project;
           _readNow(project);
@@ -491,6 +508,8 @@ class HubRepository {
     _readResolutions();
     _corrections();
     _readStatusChanges();
+    _readAreaChanges();
+    _readOrganizeRetries();
     _readDefinitionChanges();
     people = readPeople(snapshot.files, _problem);
     _readPersonChanges();
@@ -675,6 +694,20 @@ class HubRepository {
             ]))) {
       throw const FormatException();
     }
+    // 本人が付けた手順（効いている記録のIDと、手順・終えた数）。旧版の一覧と手順のない項目にはない。
+    final rawSteps = i['steps'];
+    final steps = rawSteps is Map
+        ? ItemSteps.tryParse({'items': rawSteps['items'], 'done': rawSteps['done']})
+        : null;
+    if (rawSteps != null &&
+        (steps == null ||
+            rawSteps.length != 3 ||
+            rawSteps['id'] is! String ||
+            !RegExp(
+              r'^STP-[0-9A-HJKMNP-TV-Z]{26}$',
+            ).hasMatch(rawSteps['id']))) {
+      throw const FormatException();
+    }
     // 本人が付けた連絡待ちの印。旧版の一覧と印のない項目にはない。
     final wait = i['waiting'];
     // 本人が「いつかやる」へ移した記録。旧版の一覧と移していない項目にはない。
@@ -756,6 +789,7 @@ class HubRepository {
       fromKey: from is Map ? from['key'] as String? : null,
       effort: effort,
       contexts: rawContexts is List ? List<String>.from(rawContexts) : const [],
+      steps: steps,
       waitingId: wait is Map ? wait['id'] as String : null,
       waitingSince: wait is Map ? wait['since'] as String : null,
       waitingWho: wait is Map ? wait['who'] as String? : null,
@@ -846,6 +880,32 @@ class HubRepository {
         _contextTimes[id] = at;
         final last = _latestContexts[key];
         if (last == null || id.compareTo(last) > 0) _latestContexts[key] = id;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    // 手順の記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（有効な手順は項目一覧のstepsを使う）。
+    final stepsRecord = RegExp(
+      r'^90_system/item-steps/(STP-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = stepsRecord.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']), v = j['steps'];
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['item_key'] is! String ||
+            !j.containsKey('steps') ||
+            (v != null && ItemSteps.tryParse(v) == null) ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _stepTimes[id] = at;
+        final last = _latestSteps[key];
+        if (last == null || id.compareTo(last) > 0) _latestSteps[key] = id;
       } catch (_) {
         _problem(e.key);
       }
@@ -1557,6 +1617,12 @@ class HubRepository {
   /// 反映を待っている、この項目への手間の目安の依頼。
   String? effortRequestIdFor(String itemKey) => _outstandingEfforts[itemKey];
 
+  /// 反映を待っている、この項目への手順の依頼。
+  String? stepsRequestIdFor(String itemKey) => _outstandingSteps[itemKey];
+
+  /// この項目の最新の手順の記録のID（外した記録を含む）。記録がなければnull。
+  String? latestStepsIdFor(String itemKey) => _latestSteps[itemKey];
+
   /// 反映を待っている、この項目への場所・道具の札の依頼。
   String? contextsRequestIdFor(String itemKey) =>
       _outstandingContexts[itemKey];
@@ -1567,23 +1633,88 @@ class HubRepository {
   /// 札を選ぶときの語彙（本人が決めた並び）。反映を待っている変更があればそれを、なければVaultの好み、
   /// どちらもなければ既定の例を使う。
   List<String> get contextVocabulary {
-    if (_pendingVocabulary case final pending?) return pending;
+    if (_pendingVocabularies['contexts'] case final pending?) {
+      return pending.items;
+    }
     final shared = sharedPreferences['contexts'];
     final items = shared == null ? null : contextsValue(shared.value);
     return items ?? defaultContextVocabulary;
   }
 
   /// 札の語彙の変更が、まだ本体に反映されていない。
-  bool get contextVocabularyPending => _pendingVocabulary != null;
+  bool get contextVocabularyPending =>
+      _pendingVocabularies.containsKey('contexts');
 
   /// 札の語彙の、知っている最も新しい版の日時（Vaultの記録と反映待ちの変更のうち新しい方）。次の変更はこれより後にする。
-  DateTime? get contextVocabularyAt {
-    final shared = sharedPreferences['contexts']?.updatedAt,
-        pending = _pendingVocabularyAt;
+  DateTime? get contextVocabularyAt => vocabularyAt('contexts');
+
+  /// 語彙（好みのまとまり[group]）の、知っている最も新しい版の日時。次の変更はこれより後にする。
+  DateTime? vocabularyAt(String group) {
+    final shared = sharedPreferences[group]?.updatedAt,
+        pending = _pendingVocabularies[group]?.at;
     if (shared == null) return pending;
     if (pending == null) return shared;
     return pending.isAfter(shared) ? pending : shared;
   }
+
+  /// 領域を選ぶときの語彙（本人が決めた並び）。反映を待っている変更があればそれを、なければVaultの好みを使う。
+  /// 既定の例は置かない（領域は人によって違うため）。
+  List<String> get areaVocabulary {
+    if (_pendingVocabularies['areas'] case final pending?) return pending.items;
+    final shared = sharedPreferences['areas'];
+    return (shared == null ? null : areasValue(shared.value)) ?? const [];
+  }
+
+  /// 領域の語彙の変更が、まだ本体に反映されていない。
+  bool get areaVocabularyPending => _pendingVocabularies.containsKey('areas');
+
+  /// 語彙と、今のプロジェクト（統合済みを除く）に付いている領域。領域を選ぶ画面と一覧の並びに使う。
+  List<String> get areasInUse {
+    final out = [...areaVocabulary];
+    for (final p in projects.values) {
+      if (p.merged) continue;
+      if (p.area case final area? when !out.contains(area)) out.add(area);
+    }
+    return out;
+  }
+
+  /// 週次レビューで領域を見渡す行（本体の週次レビューの「領域を見渡す」と同じ数え方）。領域ごとの進行中・休止・完了の数と、
+  /// 最後の根拠。進行中のプロジェクトがない・[quietDays]日以上動いていない領域が分かる。統合済みは数えない。
+  List<AreaOverview> areaOverview(DateTime now, {int quietDays = 30}) {
+    final listed = projects.values.where((p) => !p.merged).toList();
+    return [
+      for (final area in orderAreas(listed.map((p) => p.area), areaVocabulary))
+        () {
+          final group = listed.where((p) => p.area == area).toList();
+          DateTime? last, activeLast;
+          for (final p in group) {
+            final at = p.lastEvidenceAt;
+            // 最後の根拠は、本体と同じく完了したプロジェクトを除いて数える。
+            if (at == null || p.lifecycle == 'done') continue;
+            if (last == null || at.isAfter(last)) last = at;
+            if (p.lifecycle == 'active' &&
+                (activeLast == null || at.isAfter(activeLast))) {
+              activeLast = at;
+            }
+          }
+          final active = group.where((p) => p.lifecycle == 'active').length;
+          return AreaOverview(
+            area: area,
+            active: active,
+            paused: group.where((p) => p.lifecycle == 'paused').length,
+            done: group.where((p) => p.lifecycle == 'done').length,
+            lastEvidenceAt: last,
+            quiet:
+                active > 0 &&
+                (activeLast == null ||
+                    now.difference(activeLast).inDays >= quietDays),
+          );
+        }(),
+    ];
+  }
+
+  /// 領域を1つでも付けている（一覧を領域ごとにまとめる）。本体のusesAreasと同じく、統合済みは数えない。
+  bool get usesAreas => projects.values.any((p) => !p.merged && p.area != null);
 
   /// 語彙と、今の項目に付いている札（語彙から外した札を含む）。絞り込みと札を選ぶ画面で使う。
   List<String> get contextTagsInUse {
@@ -1866,6 +1997,63 @@ class HubRepository {
     return ids.lastOrNull;
   }
 
+  /// まだ反映されていない、このプロジェクトの領域の依頼。
+  String? projectAreaRequestIdFor(String projectId) =>
+      _outstandingArea[projectId];
+
+  /// 本体が記録した、このプロジェクトの最新の領域の変更ID。
+  String? latestAreaChangeId(String projectId) {
+    final ids =
+        _areaChanges.values
+            .where((c) => c['project_id'] == projectId)
+            .map((c) => c['id'] as String)
+            .toList()
+          ..sort();
+    return ids.lastOrNull;
+  }
+
+  /// 整理（AIの読み取り）に失敗したメモの、本体のreceiptの試行回数。失敗していない・receiptがなければnull。
+  int? failedAttemptsFor(String inputId) {
+    final receipt = _receipts[inputId];
+    if (receipt == null || receipt['status'] != 'failed') return null;
+    final attempts = receipt['attempts'];
+    return attempts is int && attempts >= 1 ? attempts : null;
+  }
+
+  /// 失敗したメモのreceiptに本体が書いた理由（モデルの応答の誤りなど）。なければnull。
+  String? organizeErrorFor(String inputId) {
+    final receipt = _receipts[inputId];
+    if (receipt == null || receipt['status'] != 'failed') return null;
+    return receipt['error'] as String?;
+  }
+
+  /// やり直しを本体が記録し、次の整理で試すのを待っている（今の失敗と同じ試行回数の依頼がある）。
+  bool organizeRetryQueued(String inputId) {
+    final attempts = failedAttemptsFor(inputId);
+    return attempts != null &&
+        _organizeRetries.any(
+          (r) => r.inputId == inputId && r.attempts == attempts,
+        );
+  }
+
+  /// やり直しを頼める失敗か（本体が断らないもの）。訂正が届いた・訂正を依頼中のメモは、訂正した後のメモが整理されるので頼まない。
+  bool organizeRetryable(String inputId) {
+    final record = _inputs[inputId];
+    if (record == null ||
+        record.kind == 'action' ||
+        failedAttemptsFor(inputId) == null) {
+      return false;
+    }
+    final chain = correctionChainOf(record.id);
+    return chain != null &&
+        chain.last.sourceId == inputId &&
+        correctionRequestIdFor(record.id) == null;
+  }
+
+  /// 反映を待っている（本体がまだ記録していない）、このメモのやり直しの依頼。
+  String? organizeRetryRequestIdFor(String inputId) =>
+      _outstandingRetries[inputId];
+
   /// まだ反映されていない、このプロジェクトが統合元か統合先になっている統合・取り消しの依頼。
   String? projectMergeRequestIdFor(String projectId) =>
       _outstandingMerge[projectId] ?? _outstandingMergeInto[projectId];
@@ -1962,6 +2150,60 @@ class HubRepository {
           throw const FormatException();
         }
         _personChanges[j['id'] as String] = j;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+  }
+
+  void _readAreaChanges() {
+    final pattern = RegExp(
+      r'^90_system/project-areas/(PAREA-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['project_id'] is! String ||
+            (j['to'] != null && !validArea(j['to'])) ||
+            j['before_hash'] is! String ||
+            j['after_hash'] is! String) {
+          throw const FormatException();
+        }
+        _areaChanges[j['id'] as String] = j;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+  }
+
+  /// 整理のやり直しの記録。今のreceiptが失敗のままで試行回数が同じ間は、次の整理で試すのを待っている。
+  void _readOrganizeRetries() {
+    final pattern = RegExp(
+      r'^90_system/organize-retries/(ORT-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final attempts = j['attempts'];
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['input_id'] is! String ||
+            !inputIdPattern.hasMatch(j['input_id']) ||
+            attempts is! int ||
+            attempts < 1) {
+          throw const FormatException();
+        }
+        _organizeRetries.add((
+          id: j['id'] as String,
+          inputId: j['input_id'] as String,
+          attempts: attempts,
+        ));
       } catch (_) {
         _problem(e.key);
       }
@@ -2518,8 +2760,11 @@ class HubRepository {
     final ideaLinkItems = <(IntakeStatus, Map, String?)>[];
     // 札の語彙を変える依頼（好みのcontexts）。最後の依頼が反映されるまで、その値を語彙として使う。
     // 2番目は依頼の変えた日時（受け付けた後は本体が記録した日時: 受け付けた時刻より先なら受け付けた時刻）と値。
-    final vocabularyItems =
-        <(IntakeStatus, ({DateTime at, Map<String, dynamic> value}))>[];
+    // 領域の語彙（好みのareas）も同じ扱いで、まとまりごとに分ける。
+    final vocabularyItems = {
+      for (final g in vaultPreferenceGroups)
+        g: <(IntakeStatus, ({DateTime at, Map<String, dynamic> value}))>[],
+    };
     final reactionItems = <(IntakeStatus, Map, String?)>[];
     for (final e in _files.entries.where(
       (e) => e.key.startsWith('Input/') && e.key.endsWith('.md'),
@@ -2540,6 +2785,9 @@ class HubRepository {
               'knowledge-retire',
               'project-status',
               'project-definition',
+              'project-area',
+              'organize-retry',
+              'item-steps',
               'item-resolution',
               'item-schedule',
               'item-occurrence',
@@ -2609,6 +2857,46 @@ class HubRepository {
                 !terms(m['aliases']) ||
                 !terms(m['keywords']) ||
                 (m.containsKey('outcome') && m['outcome'] is! String))) {
+          throw const FormatException();
+        }
+        final areaChange = m['operation'] == 'project-area';
+        if (areaChange &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['project_hash'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['project_hash']) ||
+                !m.containsKey('area') ||
+                (m['area'] != null && !validArea(m['area'])))) {
+          throw const FormatException();
+        }
+        final organizeRetry = m['operation'] == 'organize-retry';
+        if (organizeRetry &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['input_id'] is! String ||
+                !inputIdPattern.hasMatch(m['input_id']) ||
+                m['attempts'] is! int ||
+                (m['attempts'] as int) < 1)) {
+          throw const FormatException();
+        }
+        final itemStepsChange = m['operation'] == 'item-steps';
+        final stepsValueOf = m['steps'];
+        if (itemStepsChange &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('steps') ||
+                (stepsValueOf != null &&
+                    ItemSteps.tryParse(stepsValueOf) == null) ||
+                !m.containsKey('expected') ||
+                (m['expected'] != null &&
+                    ItemSteps.tryParse(m['expected']) == null))) {
           throw const FormatException();
         }
         final personChange = m['operation'] == 'person-definition';
@@ -2908,6 +3196,9 @@ class HubRepository {
             scheduleId,
             effortId,
             contextId,
+            stepsId,
+            areaChangeId,
+            retryId,
             waitId,
             somedayId,
             reviewId,
@@ -2917,7 +3208,7 @@ class HubRepository {
             askId;
         DateTime? occurrenceAt, askReceived;
         // 好みの依頼の受領記録: 札の語彙（contexts）を記録したかと、受け付けた時刻。
-        ({bool vocabulary, DateTime? received})? preferenceAck;
+        ({List applied, DateTime? received})? preferenceAck;
         final decision = [
           'project-approve',
           'project-reject',
@@ -3040,6 +3331,15 @@ class HubRepository {
               ? '${m['due'] == null && m['review_after'] == null ? '日付を外す依頼' : '日付の依頼（${[if (m['due'] != null) '期日 ${m['due']}${m['repeat'] is Map ? '・${_repeatLabelOf(m['repeat'])}' : ''}', if (m['review_after'] != null) '見直す日 ${m['review_after']}'].join('・')}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemEffort
               ? '${m['effort'] == null ? '手間の目安を外す依頼' : '手間の目安の依頼（${itemEffortLabels[m['effort']]}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemStepsChange
+              ? '${switch (ItemSteps.tryParse(stepsValueOf)) {
+                  null => '手順を外す依頼',
+                  final next => '手順の依頼（${next.items.length}つのうち${next.done}つ済み）',
+                }}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : areaChange
+              ? '${m['area'] == null ? '領域を外す依頼' : '領域の依頼（${m['area']}）'}: ${projects[m['project_id']]?.title ?? m['project_id']}'
+              : organizeRetry
+              ? '整理のやり直しの依頼: ${_inputs[m['input_id']]?.title ?? m['input_id']}'
               : itemContexts
               ? '${contextsValueOf == null ? '場所・道具の札を外す依頼' : '場所・道具の札の依頼（${contextsLabel(List<String>.from(contextsValueOf as List))}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemWait
@@ -3208,6 +3508,44 @@ class HubRepository {
               }
               effortId = r['effortId'] as String;
             }
+            if (itemStepsChange) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['stepsId'] is! String ||
+                  !RegExp(
+                    r'^STP-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['stepsId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              stepsId = r['stepsId'] as String;
+            }
+            if (areaChange) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['area'] != m['area'] ||
+                  r['areaChangeId'] is! String ||
+                  !RegExp(
+                    r'^PAREA-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['areaChangeId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              areaChangeId = r['areaChangeId'] as String;
+            }
+            if (organizeRetry) {
+              final r = ack['result'] as Map;
+              if (r['inputId'] != m['input_id'] ||
+                  r['retryId'] is! String ||
+                  !RegExp(
+                    r'^ORT-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['retryId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              retryId = r['retryId'] as String;
+            }
             if (itemContexts) {
               final r = ack['result'] as Map;
               if (r['projectId'] != m['project_id'] ||
@@ -3308,7 +3646,7 @@ class HubRepository {
                 throw const FormatException();
               }
               preferenceAck = (
-                vocabulary: applied.contains('contexts'),
+                applied: applied,
                 received: timestamp(ack['received_at']),
               );
               item.detail = applied.isEmpty
@@ -3421,7 +3759,10 @@ class HubRepository {
                   ? '却下済み'
                   : 'Mac miniが受け取り済み。判断・反映結果を再同期してください。';
             }
-            final input = _inputs[(ack['result'] as Map)['inputId']];
+            // やり直しの依頼の受領結果の入力は、やり直すメモ（失敗したまま）なので、依頼の状態には使わない。
+            final input = organizeRetry
+                ? null
+                : _inputs[(ack['result'] as Map)['inputId']];
             if (actionCapture) {
               final id = (ack['result'] as Map)['inputId'];
               if (id is! String || !inputIdPattern.hasMatch(id)) {
@@ -3553,12 +3894,16 @@ class HubRepository {
         if (actionCapture) _actionRequest(item, m, doc.body, capturedInputId);
         if (ideaLink) ideaLinkItems.add((item, m, ideaLinkId));
         if (preferring) {
-          if (preferenceEntryOf(doc.body, 'contexts') case final entry?) {
+          for (final group in vaultPreferenceGroups) {
+            final entry = preferenceEntryOf(doc.body, group);
+            if (entry == null) continue;
             final ack = preferenceAck, received = ack?.received;
             // 受け付けたが語彙を記録しなかった依頼（ほかの端末の変更の方が新しい）は、反映待ちにしない。
             if (item.state == 'waiting' ||
-                (item.state == 'accepted' && ack != null && ack.vocabulary)) {
-              vocabularyItems.add((
+                (item.state == 'accepted' &&
+                    ack != null &&
+                    ack.applied.contains(group))) {
+              vocabularyItems[group]!.add((
                 item,
                 (
                   at: received != null && entry.at.isAfter(received)
@@ -3590,6 +3935,46 @@ class HubRepository {
             outstanding: _outstandingEfforts,
             what: '手間の目安',
           );
+        }
+        if (itemStepsChange) {
+          _itemRequest(
+            item,
+            m,
+            stepsId,
+            times: _stepTimes,
+            outstanding: _outstandingSteps,
+            what: '手順',
+          );
+        }
+        if (areaChange) {
+          _projectRequest(
+            item,
+            m,
+            areaChangeId,
+            records: _areaChanges,
+            latest: latestAreaChangeId,
+            outstanding: _outstandingArea,
+            what: '領域の変更',
+          );
+        }
+        if (organizeRetry) {
+          final inputId = m['input_id'] as String;
+          if (item.state == 'waiting') {
+            _outstandingRetries[inputId] = item.id;
+          } else if (item.state == 'accepted') {
+            final recorded = _organizeRetries.any((r) => r.id == retryId);
+            final status = _inputs[inputId]?.status;
+            if (!recorded) {
+              _outstandingRetries[inputId] = item.id;
+              item.detail = 'Mac miniが受け取り済み。やり直しの記録の同期を待っています。';
+            } else if (status == 'organized') {
+              item.detail = 'やり直した整理が終わりました。';
+            } else if (organizeRetryQueued(inputId)) {
+              item.detail = 'Mac miniがやり直しを記録しました。次の整理でもう一度試します。';
+            } else {
+              item.detail = 'やり直した整理も失敗しました。理由を確かめてください。';
+            }
+          }
         }
         if (itemContexts) {
           _itemRequest(
@@ -3646,21 +4031,27 @@ class HubRepository {
     intake.sort((a, b) => b.at?.compareTo(a.at ?? DateTime(0)) ?? 0);
     // 札の語彙は、記録より新しい最後の変更が受け付け前か、受け付けたが記録に載る前なら、その値を使う。
     // 断られた変更と、ほかの端末のより新しい変更に負けた変更は使わない。
-    final shared = sharedPreferences['contexts'];
-    (IntakeStatus, ({DateTime at, Map<String, dynamic> value}))? newest;
-    for (final v in vocabularyItems) {
-      // 同じ日時なら、本体と同じく先に届いた方（受付IDの小さい方）を残す。
-      if (newest == null ||
-          v.$2.at.isAfter(newest.$2.at) ||
-          (v.$2.at == newest.$2.at && v.$1.id.compareTo(newest.$1.id) < 0)) {
-        newest = v;
+    for (final MapEntry(key: group, value: items) in vocabularyItems.entries) {
+      final shared = sharedPreferences[group];
+      (IntakeStatus, ({DateTime at, Map<String, dynamic> value}))? newest;
+      for (final v in items) {
+        // 同じ日時なら、本体と同じく先に届いた方（受付IDの小さい方）を残す。
+        if (newest == null ||
+            v.$2.at.isAfter(newest.$2.at) ||
+            (v.$2.at == newest.$2.at && v.$1.id.compareTo(newest.$1.id) < 0)) {
+          newest = v;
+        }
       }
-    }
-    if (newest case (final item, final entry)?
-        when shared?.requestId != item.id &&
-            (shared == null || entry.at.isAfter(shared.updatedAt))) {
-      _pendingVocabulary = contextsValue(entry.value);
-      _pendingVocabularyAt = entry.at;
+      if (newest case (final item, final entry)?
+          when shared?.requestId != item.id &&
+              (shared == null || entry.at.isAfter(shared.updatedAt))) {
+        final value = group == 'areas'
+            ? areasValue(entry.value)
+            : contextsValue(entry.value);
+        if (value != null) {
+          _pendingVocabularies[group] = (items: value, at: entry.at);
+        }
+      }
     }
     // 同じ組への判断は最後の依頼だけが有効。古い依頼が索引と食い違っても反映待ちにしない。
     final latest = <String, IntakeStatus>{};

@@ -975,12 +975,65 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
-      children.add(
-        tileGrid([
-          for (final project in repo.orderedProjects.where((p) => !p.merged))
-            projectCard(project, now),
-        ], columns: (width) => width >= 640 ? 2 : 1),
-      );
+      final listed = repo.orderedProjects.where((p) => !p.merged).toList();
+      if (repo.usesAreas) {
+        // 領域を付けていれば、本人の語彙の順に領域ごとにまとめ、領域なしは最後にする（本体のHOMEと同じ並び）。
+        final areas = orderAreas(listed.map((p) => p.area), repo.areaVocabulary);
+        final filter = areas.contains(areaFilter) ||
+                (areaFilter == noAreaLabel && areas.contains(null))
+            ? areaFilter
+            : null;
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                ChoiceChip(
+                  key: const Key('area-filter-all'),
+                  label: const Text('すべての領域'),
+                  selected: filter == null,
+                  onSelected: (_) => setState(() => areaFilter = null),
+                ),
+                for (final a in areas)
+                  ChoiceChip(
+                    key: Key('area-filter-${a ?? noAreaLabel}'),
+                    label: Text(a ?? noAreaLabel),
+                    selected: filter == (a ?? noAreaLabel),
+                    onSelected: (_) =>
+                        setState(() => areaFilter = a ?? noAreaLabel),
+                  ),
+              ],
+            ),
+          ),
+        );
+        for (final a in areas) {
+          if (filter != null && filter != (a ?? noAreaLabel)) continue;
+          children.add(
+            Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 4),
+              child: Text(
+                a ?? noAreaLabel,
+                key: Key('area-heading-${a ?? noAreaLabel}'),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+          );
+          children.add(
+            tileGrid([
+              for (final project in listed.where((p) => p.area == a))
+                projectCard(project, now),
+            ], columns: (width) => width >= 640 ? 2 : 1),
+          );
+        }
+      } else {
+        children.add(
+          tileGrid([
+            for (final project in listed) projectCard(project, now),
+          ], columns: (width) => width >= 640 ? 2 : 1),
+        );
+      }
       if (mergedProjects.isNotEmpty) {
         // 統合済みのプロジェクトは入力を統合先のものとして読むため、小さくまとめて統合先を示す。
         children.add(const SizedBox(height: 12));
@@ -2048,6 +2101,119 @@ class _HubViewState extends State<HubView> {
           context,
           result.saved
               ? '札の一覧を依頼しました。Mac miniで処理されると、ほかの端末にも同じ一覧が出ます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+      return result.saved;
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+      return false;
+    }
+  }
+
+  /// ホームのプロジェクト一覧の領域での絞り込み（この端末の表示だけ）。nullはすべて、[noAreaLabel]は領域なし。
+  String? areaFilter;
+
+  /// 次の一手を手順に分ける・直す・外す依頼。手順は本人が書き、AIは作らない。
+  Future<void> stepsItem(String projectId, NowItemRef item) async {
+    final choice = await showDialog<({ItemSteps? steps})>(
+      context: context,
+      builder: (_) => StepsDialog(item: item),
+    );
+    if (choice == null || !mounted) return;
+    await sendSteps(
+      projectId,
+      item,
+      choice.steps,
+      choice.steps == null ? '手順を外す依頼をしました' : '手順を依頼しました',
+    );
+  }
+
+  /// 今の手順を終えた（[delta]が1）・1つ戻す（-1）依頼。手順の全体を送る。
+  Future<void> moveStep(String projectId, NowItemRef item, int delta) async {
+    final steps = item.steps;
+    if (steps == null) return;
+    final done = steps.done + delta;
+    if (done < 0 || done > steps.items.length) return;
+    await sendSteps(
+      projectId,
+      item,
+      ItemSteps(steps.items, done),
+      delta > 0 ? '手順を進める依頼をしました' : '手順を1つ戻す依頼をしました',
+    );
+  }
+
+  Future<void> sendSteps(
+    String projectId,
+    NowItemRef item,
+    ItemSteps? steps,
+    String done,
+  ) async {
+    try {
+      final result = await c.requestItemSteps(
+        projectId,
+        item.key,
+        steps,
+        seen: item.steps,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '$done。Mac miniで処理されると現状と一覧に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// プロジェクトの領域を選んで依頼する。語彙の一覧もここから変えられる。
+  Future<void> changeArea(HubProject project) async {
+    final hash = project.definitionHash;
+    if (hash == null) return;
+    final choice = await showDialog<({String? area})>(
+      context: context,
+      builder: (_) => AreaDialog(
+        current: project.area,
+        choices: () => repo.areasInUse,
+        editVocabulary: editAreaVocabulary,
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      final result = await c.requestProjectArea(project.id, hash, choice.area);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '領域を依頼しました。Mac miniで処理されるとプロジェクト一覧に反映されます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 領域の一覧（語彙と並び）を編集して、Vaultの好みとして依頼する。依頼したらtrue。
+  Future<bool> editAreaVocabulary() async {
+    final next = await showDialog<List<String>>(
+      context: context,
+      builder: (_) => AreaVocabularyDialog(
+        current: repo.areaVocabulary,
+        pending: repo.areaVocabularyPending,
+      ),
+    );
+    if (next == null || !mounted) return false;
+    try {
+      final result = await c.requestAreaVocabulary(next);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? '領域の一覧を依頼しました。Mac miniで処理されると、ほかの端末にも同じ一覧と並びが出ます。'
               : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
         );
       }
@@ -3291,6 +3457,39 @@ class _HubViewState extends State<HubView> {
     }
   }
 
+  /// 手順の「…」の操作（分ける・直す・1つ戻す・外す）。[enabled]でなければ出さない。
+  List<PopupMenuEntry<VoidCallback>> stepsMenu(
+    String projectId,
+    NowItemRef item,
+    String tag,
+    bool enabled,
+  ) => [
+    if (enabled)
+      PopupMenuItem(
+        key: Key('steps-$tag'),
+        value: () => stepsItem(projectId, item),
+        child: Text(item.steps == null ? '手順に分ける' : '手順を直す・外す'),
+      ),
+    if (enabled && (item.steps?.done ?? 0) > 0)
+      PopupMenuItem(
+        key: Key('steps-back-$tag'),
+        value: () => moveStep(projectId, item, -1),
+        child: const Text('手順を1つ戻す'),
+      ),
+  ];
+
+  /// 今の手順を終えたと報告するボタン。手順がない・すべて終えていればnull（元の項目の完了は本人が別に報告する）。
+  Widget? stepButton(String projectId, NowItemRef item, String tag) {
+    final steps = item.steps;
+    if (steps == null || steps.finished) return null;
+    return TextButton.icon(
+      key: Key('steps-next-$tag'),
+      onPressed: busy ? null : () => moveStep(projectId, item, 1),
+      icon: const Icon(Icons.skip_next_outlined, size: 15),
+      label: Text('手順${steps.done + 1}を終えた'),
+    );
+  }
+
   /// 項目の操作。よく使う「完了」（定例は「今回を完了」）と「今日やる」だけを並べ、残りは「…」にまとめる。
   List<Widget> itemButtons(
     HubProject project,
@@ -3316,6 +3515,13 @@ class _HubViewState extends State<HubView> {
         // 場所・道具の札。依頼が反映待ちの間は出さない。
         contextsPending = repo.contextsRequestIdFor(key) != null,
         contexts = repo.intakeFeatures.contexts && !project.merged,
+        // 手順（次の一手だけ）。依頼が反映待ちの間は出さない。
+        stepsPending = repo.stepsRequestIdFor(key) != null,
+        steps =
+            repo.intakeFeatures.steps &&
+            !project.merged &&
+            section == 'next' &&
+            !item.resolved,
         // 連絡待ちの印。依頼が反映待ちの間は出さない。
         waitPending = repo.waitRequestIdFor(key) != null,
         wait = repo.intakeFeatures.wait && !project.merged,
@@ -3344,6 +3550,7 @@ class _HubViewState extends State<HubView> {
             !scheduling &&
             !effortPending &&
             !contextsPending &&
+            !stepsPending &&
             !waitPending &&
             !somedayPending,
         calendar =
@@ -3351,6 +3558,7 @@ class _HubViewState extends State<HubView> {
             validScheduleDate(item.due) &&
             !item.resolved;
     final more = <PopupMenuEntry<VoidCallback>>[
+      ...stepsMenu(project.id, item, tag, steps && !stepsPending),
       if (!scheduling)
         PopupMenuItem(
           key: Key('schedule-$tag'),
@@ -3460,6 +3668,12 @@ class _HubViewState extends State<HubView> {
           padding: EdgeInsets.symmetric(vertical: 10),
           child: Text('札を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
         ),
+      if (stepsPending)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Text('手順を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+        ),
+      if (steps && !stepsPending) ?stepButton(project.id, item, tag),
       if (waitPending)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 10),
@@ -4433,6 +4647,31 @@ class _HubViewState extends State<HubView> {
             style: const TextStyle(fontSize: 12),
           ),
         );
+        // 領域を付けていれば、先に領域ごとの数を見渡す（進行中のない領域・長く動いていない領域を示す）。
+        if (repo.usesAreas) {
+          body.add(const SizedBox(height: 12));
+          body.add(
+            Column(
+              key: const Key('weekly-areas'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('領域を見渡す', style: Theme.of(context).textTheme.titleSmall),
+                for (final a in repo.areaOverview(now))
+                  Text(
+                    '${a.area ?? noAreaLabel}: 進行中 ${a.active}件・休止 ${a.paused}件・完了 ${a.done}件${a.noActive ? '（進行中なし）' : a.quiet ? '（30日以上動いていない）' : ''}',
+                    key: Key('weekly-area-${a.area ?? noAreaLabel}'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.7,
+                      color: a.noActive || a.quiet
+                          ? Theme.of(context).colorScheme.error
+                          : null,
+                    ),
+                  ),
+              ],
+            ),
+          );
+        }
         if (empty.isEmpty && lingering.isEmpty && hinted.isEmpty) {
           body.add(const SizedBox(height: 12));
           body.add(
@@ -5362,6 +5601,12 @@ class _HubViewState extends State<HubView> {
         effort = records && repo.intakeFeatures.effort,
         contextsPending = repo.contextsRequestIdFor(item.key) != null,
         contexts = records && repo.intakeFeatures.contexts,
+        stepsPending = repo.stepsRequestIdFor(item.key) != null,
+        steps =
+            records &&
+            repo.intakeFeatures.steps &&
+            item.section == 'next' &&
+            !item.resolved,
         waitPending = repo.waitRequestIdFor(item.key) != null,
         wait = records && repo.intakeFeatures.wait,
         somedayPending = repo.somedayRequestIdFor(item.key) != null,
@@ -5386,9 +5631,11 @@ class _HubViewState extends State<HubView> {
             !scheduling &&
             !effortPending &&
             !contextsPending &&
+            !stepsPending &&
             !waitPending &&
             !somedayPending;
     final more = <PopupMenuEntry<VoidCallback>>[
+      ...stepsMenu(unassignedScope, item, 'unassigned-$tag', steps && !stepsPending),
       if (movable)
         PopupMenuItem(
           key: Key('unassigned-move-$tag'),
@@ -5480,6 +5727,10 @@ class _HubViewState extends State<HubView> {
             const Text('目安を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
           if (contextsPending && records)
             const Text('札を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+          if (stepsPending && records)
+            const Text('手順を依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
+          if (steps && !stepsPending)
+            ?stepButton(unassignedScope, item, 'unassigned-$tag'),
           if (waitPending && records)
             const Text('連絡待ちを依頼済み（反映待ち）', style: TextStyle(fontSize: 12)),
           if (somedayPending && records)
@@ -5687,10 +5938,40 @@ class _HubViewState extends State<HubView> {
     );
   }
 
+  /// プロジェクトの領域（本人が付けた責任の範囲）と、付ける・変える操作。領域に対応していない本体では、付いていても示すだけ。
+  Widget projectArea(HubProject project, bool editable) {
+    final supported = repo.intakeFeatures.areas;
+    if (project.area == null && !supported) return const SizedBox.shrink();
+    return Padding(
+      key: const Key('project-area'),
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 4,
+        children: [
+          Text(
+            '領域: ${project.area ?? '未設定'}',
+            key: const Key('project-area-label'),
+            style: const TextStyle(fontSize: 12),
+          ),
+          if (supported)
+            TextButton.icon(
+              key: const Key('project-area-edit'),
+              onPressed: editable ? () => changeArea(project) : null,
+              icon: const Icon(Icons.folder_outlined, size: 16),
+              label: Text(project.area == null ? '領域を付ける' : '領域を変える'),
+            ),
+        ],
+      ),
+    );
+  }
+
   List<Widget> projectView(HubProject project) {
     final now = DateTime.now(),
         requested = repo.projectStatusRequestIdFor(project.id) != null,
-        defining = repo.projectDefinitionRequestIdFor(project.id) != null,
+        defining =
+            repo.projectDefinitionRequestIdFor(project.id) != null ||
+            repo.projectAreaRequestIdFor(project.id) != null,
         merging = repo.projectMergeRequestIdFor(project.id) != null,
         mergeTarget = repo.projects[project.mergeTarget],
         sources = repo.mergedSources(project.id),
@@ -5729,6 +6010,7 @@ class _HubViewState extends State<HubView> {
         '${projectStatusLine(project, now)}\n最新の根拠: ${timeLabel(project.lastEvidenceAt)} · 要約の生成: ${timeLabel(project.generatedAt)}',
       ),
       projectOutcome(project, editable),
+      projectArea(project, editable),
       if (project.stale(now))
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -5801,7 +6083,7 @@ class _HubViewState extends State<HubView> {
         const Padding(
           padding: EdgeInsets.only(bottom: 10),
           child: NoticeBox(
-            '呼び名とキーワード（または望む結果）の変更を依頼済みです。Mac miniで処理されると反映されます。',
+            '呼び名とキーワード（または望む結果・領域）の変更を依頼済みです。Mac miniで処理されると反映されます。',
             key: Key('project-definition-requested'),
           ),
         ),
@@ -6270,6 +6552,89 @@ class RecordView extends StatelessWidget {
     );
   }
 
+  /// 整理（AIの読み取り）に失敗したメモの、失敗の理由と「整理をやり直す」。
+  /// 本人が頼んだ1件だけを、次の整理でもう一度試す（本体が1回だけ試し、原文は変えない）。
+  Widget retryPanel(BuildContext context) {
+    final repo = controller.repository;
+    if (repo == null) return const SizedBox.shrink();
+    final attempts = repo.failedAttemptsFor(record.sourceId);
+    if (attempts == null) return const SizedBox.shrink();
+    final retryable = repo.organizeRetryable(record.sourceId);
+    final requested = repo.organizeRetryRequestIdFor(record.sourceId) != null,
+        queued = repo.organizeRetryQueued(record.sourceId),
+        supported = repo.intakeFeatures.organizeRetry,
+        error = repo.organizeErrorFor(record.sourceId);
+    return Padding(
+      key: const Key('organize-retry-panel'),
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'AIの読み取り（整理）に失敗しています（$attempts回試しました）。原文は残っています。',
+            style: const TextStyle(fontSize: 12),
+          ),
+          if (error != null && error.isNotEmpty)
+            Text(
+              '理由: ${clip(error.replaceAll(RegExp(r'\s+'), ' '), 160)}',
+              key: const Key('organize-error'),
+              style: const TextStyle(fontSize: 12),
+            ),
+          if (requested || queued)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                queued
+                    ? 'やり直しを頼みました。次の整理でもう一度試します。'
+                    : 'やり直しを依頼済みです（反映待ち）。',
+                key: const Key('organize-retry-requested'),
+                style: const TextStyle(fontSize: 12),
+              ),
+            )
+          else if (supported && !retryable)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                '訂正が届いている（または依頼中の）メモは、訂正した後のメモが整理されます。',
+                key: Key('organize-retry-superseded'),
+                style: TextStyle(fontSize: 12),
+              ),
+            )
+          else if (supported)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                key: const Key('organize-retry'),
+                icon: const Icon(Icons.refresh),
+                label: const Text('整理をやり直す'),
+                onPressed: controller.saving
+                    ? null
+                    : () async {
+                        try {
+                          final result = await controller.requestOrganizeRetry(
+                            record.sourceId,
+                          );
+                          if (context.mounted) {
+                            notice(
+                              context,
+                              result.saved
+                                  ? 'やり直しを依頼しました。次の整理でもう一度試します。'
+                                  : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            notice(context, HubController.message(e));
+                          }
+                        }
+                      },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// 続き。前のメモとこのメモの続きをたどり、このメモの続きを書ける（訂正とは別に、前のメモを残したまま追記する）。
   Widget continuationPanel(BuildContext context) {
     final repo = controller.repository;
@@ -6546,6 +6911,15 @@ class RecordView extends StatelessWidget {
               ListenableBuilder(
                 listenable: controller,
                 builder: (context, _) => continuationPanel(context),
+              ),
+            if (const [
+              'memo',
+              'work-summary',
+              'correction',
+            ].contains(record.kind))
+              ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => retryPanel(context),
               ),
             sectionTitle(context, '出典・日時', top: 32),
             SelectableText(
@@ -9535,8 +9909,15 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
       aliases = TextEditingController(),
       keywords = TextEditingController(),
       outcome = TextEditingController(),
+      area = TextEditingController(),
       memo = TextEditingController();
   final operation = const Uuid().v4(), projectId = newProjectId();
+
+  /// 本体が領域に対応していれば、選べる領域（語彙と、今のプロジェクトに付いている領域）。対応前の本体ではnull（欄を出さない）。
+  List<String>? get areaChoices {
+    final repo = widget.controller.repository;
+    return repo != null && repo.intakeFeatures.areas ? repo.areasInUse : null;
+  }
 
   /// 本体が望む結果に対応していれば、その上限。対応前の本体ではnull（欄を出さない）。
   ({int maxChars, int maxLines})? get outcomeLimits =>
@@ -9547,7 +9928,7 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
 
   @override
   void dispose() {
-    for (final c in [title, aliases, keywords, outcome, memo]) {
+    for (final c in [title, aliases, keywords, outcome, area, memo]) {
       c.dispose();
     }
     super.dispose();
@@ -9562,6 +9943,9 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
     firstMemo: memo.text.trim().isEmpty ? '' : memo.text,
     outcome: outcomeLimits == null ? '' : outcome.text,
     outcomeLimits: outcomeLimits,
+    area: areaChoices == null || area.text.trim().isEmpty
+        ? null
+        : normalizeArea(area.text),
   );
 
   Future<void> submit() async {
@@ -9677,6 +10061,33 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
                       'どうなればこのプロジェクトを完了にできるか（${limits.maxChars}文字・${limits.maxLines}行まで）',
                   lines: 2,
                 ),
+              if (areaChoices case final choices?) ...[
+                field(
+                  'project-create-area',
+                  area,
+                  '領域（任意）',
+                  hint: '仕事・家・健康のような、責任を持つ範囲（$areaChars文字まで）',
+                  max: areaChars,
+                ),
+                if (choices.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final a in choices)
+                          ActionChip(
+                            key: Key('project-create-area-$a'),
+                            label: Text(a),
+                            onPressed: locked
+                                ? null
+                                : () => setState(() => area.text = a),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
               field(
                 'project-create-memo',
                 memo,
@@ -9753,5 +10164,357 @@ class _ProjectCreateDialogState extends State<ProjectCreateDialog> {
           ),
       ],
     ),
+  );
+}
+
+/// 次の一手を手順に分ける・直す・外す。1行に1つの手順を書く（2〜10個）。AIは手順を作らない。
+/// 直すときは、先頭から変えていない手順の分だけ、終えた数を保つ。
+class StepsDialog extends StatefulWidget {
+  const StepsDialog({super.key, required this.item});
+  final NowItemRef item;
+  @override
+  State<StepsDialog> createState() => _StepsDialogState();
+}
+
+class _StepsDialogState extends State<StepsDialog> {
+  late final text = TextEditingController(
+    text: widget.item.steps?.items.join('\n') ?? '',
+  );
+
+  @override
+  void dispose() {
+    text.dispose();
+    super.dispose();
+  }
+
+  List<String> get lines => [
+    for (final l in text.text.split('\n'))
+      if (l.trim().isNotEmpty) l.trim(),
+  ];
+
+  /// 送る手順の全体。規則に合わなければnull。
+  ItemSteps? get next {
+    final items = lines, old = widget.item.steps;
+    if (!validStepItems(items)) return null;
+    var kept = 0;
+    while (old != null &&
+        kept < old.done &&
+        kept < items.length &&
+        kept < old.items.length &&
+        old.items[kept] == items[kept]) {
+      kept++;
+    }
+    return ItemSteps(items, kept);
+  }
+
+  String? get problem {
+    final items = lines;
+    if (items.isEmpty) return null;
+    if (items.length < itemStepsMin) return '手順は$itemStepsMinつ以上にしてください。';
+    if (items.length > itemStepsMax) return '手順は$itemStepsMax個までです。';
+    if (!items.every(validActionText)) {
+      return '手順は1つ$actionTextChars文字以内にしてください。';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = next, old = widget.item.steps;
+    return AlertDialog(
+      key: const Key('steps-dialog'),
+      title: Text(old == null ? '手順に分ける' : '手順を直す'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.item.display, style: const TextStyle(fontSize: 13)),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('steps-input'),
+                controller: text,
+                minLines: 4,
+                maxLines: 12,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: '手順（1行に1つ、$itemStepsMin〜$itemStepsMax個）',
+                  hintText: '医療費の領収書を集める\nふるさと納税の受領証を探す\ne-Taxで下書きする\n提出する',
+                  alignLabelWithHint: true,
+                  errorText: problem,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                steps == null
+                    ? '次の一手の一覧には、今の1歩だけが出ます。'
+                    : '次の一手の一覧には「${steps.label}」と出ます。${old != null && steps.done > 0 ? '（変えていない先頭の${steps.done}つは終えたままにします）' : ''}',
+                style: const TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (old != null)
+          TextButton(
+            key: const Key('steps-clear'),
+            onPressed: () => Navigator.pop(context, (steps: null)),
+            child: const Text('手順を外す'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('steps-submit'),
+          onPressed: steps == null || steps == old
+              ? null
+              : () => Navigator.pop(context, (steps: steps)),
+          child: const Text('依頼する'),
+        ),
+      ],
+    );
+  }
+}
+
+/// プロジェクトの領域を選ぶ（語彙から選ぶか、新しく書く）。外すこともできる。語彙の一覧はここから編集できる。
+class AreaDialog extends StatefulWidget {
+  const AreaDialog({
+    super.key,
+    required this.current,
+    required this.choices,
+    required this.editVocabulary,
+  });
+  final String? current;
+
+  /// 選べる領域（語彙と、今のプロジェクトに付いている領域）。語彙を編集した後に読み直す。
+  final List<String> Function() choices;
+  final Future<bool> Function() editVocabulary;
+  @override
+  State<AreaDialog> createState() => _AreaDialogState();
+}
+
+class _AreaDialogState extends State<AreaDialog> {
+  late final input = TextEditingController(text: widget.current ?? '');
+
+  @override
+  void dispose() {
+    input.dispose();
+    super.dispose();
+  }
+
+  String get value => normalizeArea(input.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final v = value,
+        valid = validArea(v),
+        choices = widget.choices();
+    return AlertDialog(
+      key: const Key('area-dialog'),
+      title: const Text('領域'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (choices.isNotEmpty)
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final a in choices)
+                      ChoiceChip(
+                        key: Key('area-choice-$a'),
+                        label: Text(a),
+                        selected: v == a,
+                        onSelected: (_) => setState(() => input.text = a),
+                      ),
+                  ],
+                ),
+              TextField(
+                key: const Key('area-input'),
+                controller: input,
+                maxLength: areaChars,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: '領域（例: 仕事・家・健康・お金）',
+                  errorText: v.isEmpty || valid
+                      ? null
+                      : '1行・$areaChars文字までで、「$noAreaLabel」は使えません。',
+                ),
+              ),
+              TextButton(
+                key: const Key('area-vocabulary-edit'),
+                onPressed: () async {
+                  if (await widget.editVocabulary() && mounted) setState(() {});
+                },
+                child: const Text('領域の一覧と並びを編集'),
+              ),
+              const Text(
+                '領域は、プロジェクトをまとめる責任の範囲です。ホームと週次レビューで領域ごとにまとまります。AIは領域を付けません。',
+                style: TextStyle(fontSize: 12, height: 1.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (widget.current != null)
+          TextButton(
+            key: const Key('area-clear'),
+            onPressed: () => Navigator.pop(context, (area: null)),
+            child: const Text('領域を外す'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('area-submit'),
+          onPressed: !valid || v == widget.current
+              ? null
+              : () => Navigator.pop(context, (area: v)),
+          child: const Text('依頼する'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 領域の一覧（語彙）と並びを編集する。並びはホームと週次レビューの領域の順になる。
+class AreaVocabularyDialog extends StatefulWidget {
+  const AreaVocabularyDialog({
+    super.key,
+    required this.current,
+    this.pending = false,
+  });
+  final List<String> current;
+  final bool pending;
+  @override
+  State<AreaVocabularyDialog> createState() => _AreaVocabularyDialogState();
+}
+
+class _AreaVocabularyDialogState extends State<AreaVocabularyDialog> {
+  late final List<String> items = [...widget.current];
+  final input = TextEditingController();
+  String? error;
+
+  @override
+  void dispose() {
+    input.dispose();
+    super.dispose();
+  }
+
+  void add() {
+    final a = normalizeArea(input.text);
+    setState(() {
+      if (a.isEmpty) {
+        error = null;
+      } else if (!validArea(a)) {
+        error = '領域は1行・$areaChars文字までで、「$noAreaLabel」は使えません。';
+      } else if (items.contains(a)) {
+        error = '同じ領域が一覧にあります。';
+      } else if (items.length >= areaVocabularyMax) {
+        error = '領域の一覧は$areaVocabularyMax個までです。';
+      } else {
+        items.add(a);
+        input.clear();
+        error = null;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('area-vocabulary-dialog'),
+    title: const Text('領域の一覧'),
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 480),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.pending)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '前の変更がまだMac miniで処理されていません（その一覧を表示しています）。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            for (final (i, a) in items.indexed)
+              Row(
+                key: Key('area-vocabulary-row-$a'),
+                children: [
+                  Expanded(child: Text(a)),
+                  IconButton(
+                    key: Key('area-vocabulary-up-$a'),
+                    tooltip: '上へ',
+                    onPressed: i == 0
+                        ? null
+                        : () => setState(() {
+                            items.removeAt(i);
+                            items.insert(i - 1, a);
+                          }),
+                    icon: const Icon(Icons.arrow_upward, size: 18),
+                  ),
+                  IconButton(
+                    key: Key('area-vocabulary-remove-$a'),
+                    tooltip: '一覧から外す',
+                    onPressed: () => setState(() => items.removeAt(i)),
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
+              ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('area-vocabulary-input'),
+                    controller: input,
+                    maxLength: areaChars,
+                    decoration: InputDecoration(
+                      labelText: '新しい領域（例: 仕事・家・健康・お金）',
+                      errorText: error,
+                    ),
+                    onSubmitted: (_) => add(),
+                  ),
+                ),
+                IconButton(
+                  key: const Key('area-vocabulary-add'),
+                  tooltip: '足す',
+                  onPressed: add,
+                  icon: const Icon(Icons.add),
+                ),
+              ],
+            ),
+            const Text(
+              'この一覧と並びは同じVaultを使うすべての端末で共有し、ホームと週次レビューの領域の順になります。一覧から外しても、その領域が付いているプロジェクトからは消えません。',
+              style: TextStyle(fontSize: 12, height: 1.6),
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('やめる'),
+      ),
+      FilledButton(
+        key: const Key('area-vocabulary-submit'),
+        onPressed: listEquals(items, widget.current)
+            ? null
+            : () => Navigator.pop(context, [...items]),
+        child: const Text('依頼する'),
+      ),
+    ],
   );
 }
