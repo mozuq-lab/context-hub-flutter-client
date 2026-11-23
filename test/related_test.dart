@@ -118,6 +118,7 @@ void main() {
     await tester.pumpAndSettle();
     final id = recordId(questionPath);
     expect(find.byKey(const Key('related-records')), findsOneWidget);
+    expect(find.byKey(const Key('related-none')), findsNothing);
     expect(find.byKey(Key('related-$id')), findsOneWidget);
     await tester.tap(find.byKey(Key('related-project-$id')));
     await tester.pumpAndSettle();
@@ -140,6 +141,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('related-records')), findsNothing);
     expect(await DraftStore(access).relatedEnabled(), isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('探す長さの本文で見つからなければ、見つからなかったことと比べた件数を一言出す', (
+    tester,
+  ) async {
+    final access = MemoryUIAccess();
+    final c = await openSample(tester, access);
+    await openForm(tester);
+    Future<void> type(String text) async {
+      await tester.enterText(find.byKey(const Key('memo-text')), text);
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pumpAndSettle();
+    }
+
+    // 書き始めの短い本文では、探していないので何も出さない。
+    await type('晩ごはんにカレー');
+    expect(find.byKey(const Key('related-none')), findsNothing);
+    expect(find.byKey(const Key('related-records')), findsNothing);
+
+    await type('今日は晩ごはんにカレーを作って、明日の朝の分も残しておいた。');
+    final count = c.repository!.relatedCandidates.length;
+    expect(count, greaterThan(0));
+    expect(find.byKey(const Key('related-records')), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('related-none'))).data,
+      contains('$count件'),
+    );
+
+    // 見つかれば一覧に替わり、短くすれば消える。
+    await type(draftText);
+    expect(find.byKey(const Key('related-records')), findsOneWidget);
+    expect(find.byKey(const Key('related-none')), findsNothing);
+    await type('晩ごはん');
+    expect(find.byKey(const Key('related-none')), findsNothing);
+    expect(find.byKey(const Key('related-records')), findsNothing);
+
+    // 設定で止めれば、見つからなかったことも出さない。
+    await type('今日は晩ごはんにカレーを作って、明日の朝の分も残しておいた。');
+    expect(find.byKey(const Key('related-none')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('show-related')));
+    await tester.tap(find.byKey(const Key('show-related')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('related-none')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

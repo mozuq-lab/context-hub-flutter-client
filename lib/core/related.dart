@@ -38,6 +38,10 @@ class RelatedRecord {
 /// 書き始めの短い本文では出さない（本文の文字数。空白を除く）。
 const relatedMinChars = 20;
 
+/// 本文が、関係ありそうな記録を探す長さに届いているか（空白を除いた文字数）。
+bool relatedDraftLongEnough(String draft) =>
+    draft.replaceAll(RegExp(r'\s'), '').runes.length >= relatedMinChars;
+
 /// 1回に比べる記録の上限（新しい順）。超えた古い記録は比べない。
 const relatedMaxScan = 3000;
 
@@ -149,9 +153,7 @@ List<RelatedRecord> relatedRecords(
   int minShared = 3,
   int maxScan = relatedMaxScan,
 }) {
-  if (draft.replaceAll(RegExp(r'\s'), '').runes.length < relatedMinChars) {
-    return const [];
-  }
+  if (!relatedDraftLongEnough(draft)) return const [];
   final mine = relatedFeatures(draft);
   if (mine.length < minShared) return const [];
   index ??= _buildIndex(_texts(repo, maxScan));

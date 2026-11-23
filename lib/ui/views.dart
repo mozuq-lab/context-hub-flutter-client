@@ -8001,6 +8001,10 @@ class _CaptureDialogState extends State<CaptureDialog> {
   // ---- 書いている途中の関係ありそうな記録（端末内の記録だけで探す） ----
   bool _showRelated = true;
   List<RelatedRecord> _related = const [];
+
+  /// 探す長さの本文で探し終え、1件も見つからなかったときの、比べた記録の数。それ以外はnull。
+  /// 何も出ないと、探していないのか見つからなかったのかが分からないため、見つからなかったことを一言出す。
+  int? _relatedNone;
   Timer? _relatedTimer;
 
   /// 入力が止まってから探す。比べるのは端末に読み込んだ記録だけで、ネットワークにもAIにも送らない。
@@ -8013,7 +8017,12 @@ class _CaptureDialogState extends State<CaptureDialog> {
     if (!mounted) return;
     final repo = widget.controller.repository;
     if (!_showRelated || locked || widget.answer != null || repo == null) {
-      if (_related.isNotEmpty) setState(() => _related = const []);
+      if (_related.isNotEmpty || _relatedNone != null) {
+        setState(() {
+          _related = const [];
+          _relatedNone = null;
+        });
+      }
       return;
     }
     // 記録の特徴は読み込みごとに1回だけ作る（記録が多ければ別のisolateで作り、入力を止めない）。
@@ -8033,16 +8042,25 @@ class _CaptureDialogState extends State<CaptureDialog> {
       index: index,
       project: project,
     );
+    final none = next.isEmpty && relatedDraftLongEnough(text.text)
+        ? index.features.length
+        : null;
     // 読み直しで点や本文が変わることがあるので、毎回置き換える。
-    if (next.isNotEmpty || _related.isNotEmpty) {
-      setState(() => _related = next);
+    if (next.isNotEmpty || _related.isNotEmpty || none != _relatedNone) {
+      setState(() {
+        _related = next;
+        _relatedNone = none;
+      });
     }
   }
 
   Future<void> _setShowRelated(bool value) async {
     setState(() {
       _showRelated = value;
-      if (!value) _related = const [];
+      if (!value) {
+        _related = const [];
+        _relatedNone = null;
+      }
     });
     if (value) _findRelated();
     try {
@@ -8783,7 +8801,17 @@ class _CaptureDialogState extends State<CaptureDialog> {
                           ),
                         ),
                         if (_related.isNotEmpty && _showRelated && !locked)
-                          _relatedBox(),
+                          _relatedBox()
+                        else if (_relatedNone case final count?
+                            when _showRelated && !locked)
+                          fieldNote(
+                            context,
+                            count == 0
+                                ? '比べられる前の記録が、まだこの端末にありません。'
+                                : '関係ありそうな前の記録は見つかりませんでした（この端末の$count件と、文字の重なりで比べました）。',
+                            key: const Key('related-none'),
+                            top: 4,
+                          ),
                         fieldGap,
                         DropdownButtonFormField<String>(
                           key: ValueKey('memo-project-$_formGeneration'),
