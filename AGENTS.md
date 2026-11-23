@@ -26,7 +26,7 @@
 - `lib/app/` / `lib/ui/`: 共通画面、Vault切替の応答管理、安全なMarkdownリンク。`lib/app/attention_check.dart`は、Androidでアプリを閉じている間に動く確認待ちの確認（`lib/main.dart`の`attentionCheck`から呼ぶ。読むだけで書かない）。
 - `macos/Runner/VaultBridge.swift` / `android/app/src/main/kotlin/.../VaultBridge.kt`: 限定されたネイティブアクセス（MethodChannel）。`HomeScreen.kt`はAndroidのホーム画面ウィジェットとアイコン長押しのショートカット。`AttentionCheck.kt`はAndroidの確認待ちの通知（数時間おきの確認の登録と、通知の表示）。
 - `vendor/context-hub`: 本体の公開commitをsubmoduleで固定。protocol検査とfixture生成に使う。
-- `scripts/`: 検証（`verify.sh`）、release生成（`build.sh`）、protocol検査とfixture生成のNodeスクリプト、MacのSwift snapshot検査（`test_macos_snapshot.py`）。
+- `scripts/`: 検証（`verify.sh`）、release生成（`build.sh`）、protocol検査とfixture生成のNodeスクリプト、MacのSwift snapshot検査（`test_macos_snapshot.py`）、両OSのアプリアイコンの書き出し（`generate_icons.mjs`。PNGの描画にPlaywrightのChromiumを使う）。
 
 データ処理と保存の設計は[構成と制限](docs/architecture.md)、権限とデータ保全は[SECURITY.md](SECURITY.md)を参照してください。
 

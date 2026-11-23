@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- scripts/generate_icons.mjs が書き出す。直接編集しない。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.067"
+        android:scaleY="0.067"
+        android:translateX="20.52"
+        android:translateY="20.52">
+        <path
+            android:pathData="M190,290 C430,290 470,500 640,500"
+            android:strokeColor="#FFFFFF"
+            android:strokeAlpha="0.55"
+            android:strokeWidth="64"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M190,710 C430,710 470,500 640,500"
+            android:strokeColor="#FFFFFF"
+            android:strokeAlpha="0.55"
+            android:strokeWidth="64"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M190,500 L640,500"
+            android:strokeColor="#FFFFFF"
+            android:strokeAlpha="1"
+            android:strokeWidth="64"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M628,500a92,92 0,1 1,184,0a92,92 0,1 1,-184,0"
+            android:fillColor="#FFFFFF"
+            android:fillAlpha="1" />
+    </group>
+</vector>
