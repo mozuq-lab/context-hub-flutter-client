@@ -52,11 +52,43 @@ class SafeMarkdown extends StatelessWidget {
         }
       }
     },
-    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-      p: const TextStyle(fontSize: 15, height: 1.8),
-      h1: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
-      h2: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
-    ),
+    styleSheet: _styleSheet(Theme.of(context)),
   );
+
+  /// 本文の文字の大きさと見出しの段差。見出しは画面の見出しより小さくし、本文の中で目立ちすぎないようにする。
+  static MarkdownStyleSheet _styleSheet(ThemeData theme) {
+    final scheme = theme.colorScheme;
+    const body = TextStyle(fontSize: 15, height: 1.8);
+    return MarkdownStyleSheet.fromTheme(theme).copyWith(
+      p: body,
+      listBullet: body,
+      h1: const TextStyle(fontSize: 21, fontWeight: FontWeight.w700, height: 1.5),
+      h2: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, height: 1.5),
+      h3: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, height: 1.5),
+      h4: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, height: 1.5),
+      h1Padding: const EdgeInsets.only(top: 8, bottom: 4),
+      h2Padding: const EdgeInsets.only(top: 12, bottom: 2),
+      h3Padding: const EdgeInsets.only(top: 8),
+      blockSpacing: 10,
+      code: TextStyle(
+        fontSize: 13.5,
+        color: scheme.onSurface,
+        backgroundColor: scheme.surfaceContainerHigh,
+      ),
+      codeblockDecoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      blockquoteDecoration: BoxDecoration(
+        border: Border(left: BorderSide(color: scheme.outlineVariant, width: 3)),
+      ),
+      blockquotePadding: const EdgeInsets.only(left: 14, top: 2, bottom: 2),
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: scheme.outlineVariant)),
+      ),
+      a: TextStyle(color: scheme.primary, fontWeight: FontWeight.w500),
+    );
+  }
   void _message(BuildContext context, String text) => notice(context, text);
 }

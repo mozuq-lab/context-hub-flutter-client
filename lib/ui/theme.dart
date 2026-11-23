@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 
 /// 操作と強調に使う色（落ち着いた藍色）。面の色には使わない。
@@ -241,12 +242,38 @@ ThemeData hubTheme(Brightness brightness) {
         ),
       ),
     ),
+    // 文字だけのボタンは、藍の文字の控えめな操作。項目の行に並べる操作は、rowActions（parts.dart）で文字を本文の色にする。
     textButtonTheme: TextButtonThemeData(
       style: ButtonStyle(
         shape: buttonShape,
-        textStyle: buttonText,
+        textStyle: WidgetStatePropertyAll(
+          text.labelLarge?.copyWith(fontSize: 13.5, fontWeight: FontWeight.w500),
+        ),
         padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        ),
+        // 見た目の高さは40。指で押すAndroidでは押せる範囲を48に広げ、マウスで押すMacでは見た目にそろえて行の間を詰める。
+        minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+        tapTargetSize: defaultTargetPlatform == TargetPlatform.android
+            ? MaterialTapTargetSize.padded
+            : MaterialTapTargetSize.shrinkWrap,
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? s.onSurface.withValues(alpha: .38)
+              : scheme.primary,
+        ),
+        iconColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? s.onSurface.withValues(alpha: .38)
+              : scheme.primary,
+        ),
+        overlayColor: WidgetStateProperty.resolveWith(
+          (states) =>
+              states.contains(WidgetState.pressed) ||
+                  states.contains(WidgetState.hovered) ||
+                  states.contains(WidgetState.focused)
+              ? scheme.primary.withValues(alpha: dark ? .14 : .08)
+              : null,
         ),
       ),
     ),
@@ -272,11 +299,23 @@ ThemeData hubTheme(Brightness brightness) {
     chipTheme: ChipThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       side: BorderSide(color: s.highest),
-      labelStyle: text.bodyMedium?.copyWith(fontSize: 13),
+      // 選んだ札は、地の色に加えて文字も藍にする（印を付けない分、選んだことが分かるように）。
+      labelStyle: text.bodyMedium?.copyWith(
+        fontSize: 13,
+        color: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? s.onSurface.withValues(alpha: .38)
+              : states.contains(WidgetState.selected)
+              ? scheme.primary
+              : s.onSurface,
+        ),
+      ),
       backgroundColor: s.card,
       selectedColor: scheme.primary.withValues(alpha: dark ? .22 : .12),
       checkmarkColor: scheme.primary,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      showCheckmark: false,
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 6),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: s.low,
