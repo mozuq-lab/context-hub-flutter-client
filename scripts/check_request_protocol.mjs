@@ -1,5 +1,5 @@
 // Dartが保存したNOW項目の完了・解決報告と、本人が追加する次の一手（行動）と「誤りとして外す」報告、期日・見直す日（と繰り返し）・手間の目安・場所・道具の札・連絡待ち・「いつかやる」の依頼、「いつかやる」の見直し、週次レビューの「見直した」、定例の回の完了・見送り、記録に聞くの問い、端末間でそろえる好み、「片付いたかも」の見送り、作業記録の下書きの見送り、下書きから作った入力、メモの続き、メモの訂正のREQを、
-// 手順・領域・整理のやり直しの依頼、ファイルを添えたメモ（files/<受付ID>に置いたファイル）も含む。
+// 手順・領域・整理のやり直しの依頼、先に済ませること・1日の締め（明日へのひとことを消すを含む）の依頼、ファイルを添えたメモ（files/<受付ID>に置いたファイル）も含む。
 // 固定参照の本体が受理して反映するかを検査する。fixtureには前回の出力（ファイルの対応表）も渡せる。
 // 4番目の引数に stale を渡すと、古い訂正対象への訂正として本体が受付を断り、理由を記録することを確認する。
 import assert from 'node:assert/strict';
@@ -7,9 +7,9 @@ import {copyFile,mkdir,mkdtemp,readFile,rm,stat,utimes,writeFile} from 'node:fs/
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join,basename,dirname} from 'node:path';
-import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemSteps,readOrganizeRetries,readProjectAreaChanges,readProjects,readReceipts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath,readReferenceMarks,rebuildReferences,readReferenceIndex} from '../vendor/context-hub/packages/core/dist/index.js';
+import {parseIntake,defaultConfig,Vault,ingest,organize,MockLlm,readItemResolutions,readItemSchedules,activeSchedules,readNowItems,readHintDismissals,readGitDrafts,readRereads,rebuildDashboard,readInputs,readItemOccurrences,readAskRecords,answerPending,readClientPreferences,readItemEfforts,readItemContexts,readItemSteps,readOrganizeRetries,readProjectAreaChanges,readProjects,readReceipts,readItemWaits,readItemSomedays,readSomedayReviews,somedayListPath,readWeeklyReviews,weeklyReviewPath,readReferenceMarks,rebuildReferences,readReferenceIndex,readItemBlocks,readDayCloses,currentDayNote} from '../vendor/context-hub/packages/core/dist/index.js';
 const [file,fixture,out,mode]=process.argv.slice(2),raw=await readFile(file,'utf8'),path=`Input/${basename(file)}`,packet=parseIntake(path,raw,8000);
-assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-steps','project-area','organize-retry','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','reference-mark','capture','correct'].includes(packet.operation));
+assert.ok(['item-resolution','item-hint-dismiss','item-schedule','item-effort','item-contexts','item-steps','project-area','organize-retry','item-wait','item-someday','someday-review','weekly-review','item-occurrence','ask','client-preferences','git-draft-dismiss','reference-mark','item-blocks','day-close','capture','correct'].includes(packet.operation));
 const root=await mkdtemp(join(tmpdir(),'ctx-request-protocol-'));
 try{
  const config=defaultConfig(join(root,'vault'),join(root,'state')),vault=new Vault(config);await vault.init();
@@ -92,6 +92,27 @@ try{
   const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
   assert.deepEqual(item.steps?{items:item.steps.items,done:item.steps.done}:null,packet.steps);
   if(packet.steps&&packet.project_id!=='_unassigned'&&packet.steps.done<packet.steps.items.length)assert.ok((await vault.read(`10_projects/${packet.project_id}/NOW.md`)).includes(`手順 ${packet.steps.done+1}/${packet.steps.items.length}: `));
+ }else if(packet.operation==='item-blocks'){
+  // 変更後の先の項目の全体が、付けた時の欄・本文と一緒に記録され、項目一覧のafterとNOWの行末（件数）に反映される。nullなら外す。
+  assert.deepEqual({projectId:ack.result.projectId,itemKey:ack.result.itemKey,deduped:ack.result.deduped},{projectId:packet.project_id,itemKey:packet.item_key,deduped:false});
+  const record=(await readItemBlocks(vault)).records.find(r=>r.id===ack.result.blocksId);
+  assert.deepEqual({after:record.after?.map(a=>({project_id:a.project_id,item_key:a.item_key}))??null,source:record.source,event:record.source_event_id},{after:packet.after,source:packet.source,event:packet.request_id});
+  const item=(await readNowItems(vault,packet.project_id)).items.find(i=>i.key===packet.item_key);
+  assert.deepEqual(item.after?item.after.items.map(a=>({project_id:a.project_id,item_key:a.item_key})):null,packet.after);
+  if(packet.after)assert.ok((await vault.read(`10_projects/${packet.project_id}/NOW.md`)).includes(`先に済ませること ${packet.after.length}件`));
+ }else if(packet.operation==='day-close'){
+  // 締めは日とひとこと（本文。空ならなし）を記録し、ひとことはHOMEの先頭に出る。消す依頼は表示中のひとことを外す。
+  assert.deepEqual({action:ack.result.action,deduped:ack.result.deduped},{action:packet.action,deduped:false});
+  const {records}=await readDayCloses(vault),record=records.find(r=>r.id===ack.result.dayCloseId);
+  assert.equal(record.source_event_id,packet.request_id);
+  if(packet.action==='close'){
+   assert.deepEqual({on:record.on,note:record.note},{on:packet.on,note:packet.text.trim()?packet.text.replace(/\s+$/,''):null});
+   await rebuildDashboard(config);
+   if(record.note)assert.ok((await vault.read('HOME.md')).includes(`> ${record.note.split('\n')[0]}`));
+  }else{
+   assert.equal(record.close_id,packet.close_id);
+   assert.equal(currentDayNote(records),undefined);
+  }
  }else if(packet.operation==='project-area'){
   // 確認したproject.mdのhashに結び付けて、領域だけが書き換わる（nullなら外す）。登録簿の欄は変わらない。
   assert.deepEqual({projectId:ack.result.projectId,area:ack.result.area,deduped:ack.result.deduped},{projectId:packet.project_id,area:packet.area,deduped:false});

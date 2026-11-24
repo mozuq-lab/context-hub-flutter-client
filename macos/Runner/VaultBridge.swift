@@ -13,7 +13,7 @@ final class VaultBridge {
   /// Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
   private let rootFiles = ["POLICY.md", "REVIEW.md"]
   /// 操作journal以外の状態ファイル。保存先の設定、端末に残す書きかけのメモ、選んで深掘りの途中の状態。
-  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json", "guided.json", "basket.json", "templates.json"]
+  private let nonJournalStates: Set<String> = ["settings.json", "drafts.json", "guided.json", "basket.json", "templates.json", "withdrawn.json"]
   /// キーチェーンに置く秘密の名前。選んで深掘りで使うClaudeのAPIキーだけ。
   private let secretNames: Set<String> = ["anthropic-api-key"]
   private let maxFile = 1_048_576
@@ -227,6 +227,52 @@ final class VaultBridge {
     }
     try syncDirectory(dir)
     return ["bytes": size, "sha256": digest]
+  }
+  /// この端末が書いた依頼（Input/<受付ID>.md）を取り下げる。内容のSHA-256が書いたときのまま（expected）のときだけ、
+  /// 依頼を消してから、添えたファイル（Input/files/<受付ID>）も消す（先に添付を消すと、受付が添付なしとして断るため）。
+  /// 消したらwithdrawn、依頼がなければmissing、内容が違えば何も消さずにchangedを返す。
+  private func withdraw(_ root: URL, id: String, expected: String) throws -> String {
+    let input = root.appendingPathComponent("Input")
+    var ist = stat()
+    if lstat(input.path, &ist) != 0 {
+      guard errno == ENOENT else { throw Failure.io }
+      return "missing"
+    }
+    let dir = try directory(input)
+    let file = dir.appendingPathComponent(id + ".md")
+    var st = stat()
+    if lstat(file.path, &st) != 0 {
+      guard errno == ENOENT else { throw Failure.io }
+      return "missing"
+    }
+    guard (st.st_mode & S_IFMT) == S_IFREG else { throw Failure.invalid }
+    let fd = open(file.path, O_RDONLY | O_NOFOLLOW)
+    guard fd >= 0 else { throw Failure.io }
+    let digest: String
+    do {
+      defer { close(fd) }
+      digest = try copyDigest(fd, to: -1, limit: 1_048_576).1
+    }
+    guard digest == expected else { return "changed" }
+    // 本体が受付を始めた依頼（停止回復の記録がある）は、ファイルを消しても記録の写しから受け付けるので消さない。
+    var pst = stat()
+    let pending = root.appendingPathComponent("90_system/intake/pending/" + id + ".json")
+    if lstat(pending.path, &pst) == 0 { return "started" }
+    guard errno == ENOENT || errno == ENOTDIR else { throw Failure.io }
+    guard unlink(file.path) == 0 || errno == ENOENT else { throw Failure.io }
+    // 依頼を消した後の失敗（同期・添付の削除）は取り下げを止めない。残った添付は本体のdoctorが示す。
+    try? syncDirectory(dir)
+    let files = dir.appendingPathComponent("files")
+    var fst = stat()
+    if lstat(files.path, &fst) == 0, (fst.st_mode & S_IFMT) == S_IFDIR {
+      let attachment = files.appendingPathComponent(id)
+      var ast = stat()
+      if lstat(attachment.path, &ast) == 0, (ast.st_mode & S_IFMT) == S_IFREG,
+        unlink(attachment.path) == 0 {
+        try? syncDirectory(files)
+      }
+    }
+    return "withdrawn"
   }
   /// Vault内のメモに添えたファイル（05_files/<年-月>/<キー>/<名前>）の場所。symlinkを経由しない。
   private func vaultFile(_ root: URL, _ path: String) throws -> URL {
@@ -449,6 +495,12 @@ final class VaultBridge {
           let opened = DispatchQueue.main.sync { NSWorkspace.shared.open(file) }
           guard opened else { throw Failure.attachment("file_no_app") }
           return nil
+        }
+        if method == "withdrawRequest" {
+          guard let id = args["requestId"] as? String, id.range(of: "^REQ-[a-f0-9]{32}$", options: .regularExpression) != nil,
+                let expected = args["sha256"] as? String,
+                expected.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw Failure.invalid }
+          return try withdraw(root, id: id, expected: expected)
         }
         guard ["readRequest", "writeRequest"].contains(method), let id = args["requestId"] as? String,
               id.range(of: "^REQ-[a-f0-9]{32}$", options: .regularExpression) != nil else { throw Failure.invalid }

@@ -70,6 +70,19 @@ abstract class VaultAccess {
   );
   Future<String?> readState(String name);
   Future<void> writeState(String name, String raw, {bool exclusive = false});
+
+  /// この端末が書いた依頼を取り下げられる端末か。
+  bool get withdrawSupported => false;
+
+  /// `Input/<requestId>.md`の内容のSHA-256が[expectedSha256]と同じときだけ、そのファイルと添えたファイル
+  /// （`Input/files/<requestId>`）を消す。消したら`withdrawn`、依頼のファイルがなければ`missing`、
+  /// 内容が違えば何も消さずに`changed`、本体が受付を始めていれば（停止回復の記録`90_system/intake/pending/<requestId>.json`がある）
+  /// 何も消さずに`started`を返す。依頼を消した後の失敗（同期・添付の削除）は`withdrawn`として返す。
+  Future<String> withdrawRequest(
+    VaultLocation location,
+    String requestId,
+    String expectedSha256,
+  ) => throw UnsupportedError('この端末では依頼を取り下げられません。');
   Future<List<String>> listJournals();
   Future<void> openExternal(String url);
 
@@ -233,6 +246,30 @@ class NativeVaultAccess implements VaultAccess {
     'requestId': requestId,
     'raw': raw,
   });
+  @override
+  bool get withdrawSupported => true;
+
+  @override
+  Future<String> withdrawRequest(
+    VaultLocation location,
+    String requestId,
+    String expectedSha256,
+  ) async {
+    if (!RegExp(r'^REQ-[a-f0-9]{32}$').hasMatch(requestId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(expectedSha256)) {
+      throw const FormatException('取り下げる依頼を確かめられません。');
+    }
+    final result = await channel.invokeMethod<String>('withdrawRequest', {
+      'handle': location.handle,
+      'requestId': requestId,
+      'sha256': expectedSha256,
+    });
+    if (!const ['withdrawn', 'missing', 'changed', 'started'].contains(result)) {
+      throw const FormatException('取り下げの結果を確かめられません。');
+    }
+    return result!;
+  }
+
   @override
   Future<String?> readState(String name) =>
       channel.invokeMethod<String>('readState', {'name': name});

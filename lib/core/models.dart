@@ -158,8 +158,13 @@ class NowItemRef {
     this.somedayId,
     this.somedaySince,
     this.somedayReviewed,
+    this.after,
   });
   final String key, section, label, text, inputId;
+
+  /// 本人が付けた「先に済ませること」（本体のitem-blocks）。先の項目の置き場・キーと、付けた時の欄・本文。
+  /// 付けていない項目や、先に済ませることを知らない本体ではnull。先の項目の今の状態は[HubRepository.prerequisiteState]で決める。
+  final ItemAfter? after;
 
   /// 本人が「いつかやる」へ移した記録（本体のitem-somedays）。効いている記録のID・移した日・最後に見直した日（YYYY-MM-DD）。
   /// 移していない項目や、「いつかやる」を知らない本体ではnull。
@@ -238,6 +243,99 @@ String itemRecordLabel(NowItemRef item) => [
   if (item.contexts.isNotEmpty) contextsLabel(item.contexts),
   if (item.steps case final steps?) steps.label,
 ].join('・');
+
+/// 本体と同じ、先に済ませることにできる項目の数の上限（ITEM_BLOCKS_MAX）。
+const itemBlocksMax = 3;
+
+/// 先に済ませる項目の1件。置き場（プロジェクトIDかプロジェクト未定）と項目キー、付けた時の欄と本文。
+class ItemAfterRef {
+  const ItemAfterRef(
+    this.projectId,
+    this.itemKey,
+    this.section,
+    this.text, [
+    this.inputId,
+  ]);
+  final String projectId, itemKey, section, text;
+
+  /// 先の項目の根拠の入力（統合したプロジェクトの項目を、統合先の項目として探すのに使う）。旧版の一覧にはない。
+  final String? inputId;
+
+  /// 依頼で送る形（置き場とキーだけ）。
+  Map<String, String> toRequest() => {
+    'project_id': projectId,
+    'item_key': itemKey,
+  };
+}
+
+/// 項目に付けた「先に済ませること」（効いている記録のIDと、先の項目1〜3件。先に済ませる順）。
+class ItemAfter {
+  const ItemAfter(this.id, this.items);
+  final String id;
+  final List<ItemAfterRef> items;
+
+  /// 本体のNOWの行末と同じ表示（先の項目の本文は載せない）。
+  String get label => '先に済ませること ${items.length}件';
+}
+
+/// 先の項目の今の状態（本体のPrerequisiteStateと同じ）。open: まだ残っている / done: 完了・解決した /
+/// dropped: 誤りとして外した / missing: 一覧に見当たらない（待たずに、付け直しを促す）。
+enum PrerequisiteState { open, done, dropped, missing }
+
+const prerequisiteStateLabels = {
+  PrerequisiteState.open: '残っている',
+  PrerequisiteState.done: '済み',
+  PrerequisiteState.dropped: '外した',
+  PrerequisiteState.missing: '見当たらない',
+};
+
+/// 先の項目がすべて片付いた（残っているものがない）か。見当たらないものは待たない。
+bool blockSettled(Iterable<PrerequisiteState> states) =>
+    states.every((s) => s != PrerequisiteState.open);
+
+/// 本体と同じ、明日へのひとことの上限（DAY_NOTE_CHARS・DAY_NOTE_LINES）と、さかのぼって締められる日数。
+const dayNoteChars = 300, dayNoteLines = 3, dayCloseBackDays = 7;
+
+/// ひとことを本体と同じく整える（改行をそろえ、行末の空白と前後の空行を除く）。空ならnull。
+String? normalizeDayNote(String text) {
+  // 空白はJavaScriptのtrimと同じ範囲にする（DartのtrimはU+0085も消すため、本体と結果が変わる）。
+  final space =
+      '[\t\n\u000B\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]';
+  final tail = RegExp('$space+\$'), blank = RegExp('^$space*\$');
+  final lines = text
+      .replaceAll(RegExp(r'\r\n?'), '\n')
+      .split('\n')
+      .map((l) => l.replaceFirst(tail, ''))
+      .toList();
+  while (lines.isNotEmpty && blank.hasMatch(lines.first)) {
+    lines.removeAt(0);
+  }
+  while (lines.isNotEmpty && blank.hasMatch(lines.last)) {
+    lines.removeLast();
+  }
+  return lines.isEmpty ? null : lines.join('\n');
+}
+
+/// 整えたひとことが本体の検査（300文字・3行まで、改行以外の制御文字なし）を通るか。
+/// 文字数は本体（JavaScriptの文字列の長さ）と同じく、UTF-16の長さで数える。
+bool validDayNote(Object? value) =>
+    value is String &&
+    value.isNotEmpty &&
+    value.length <= dayNoteChars &&
+    value.split('\n').length <= dayNoteLines &&
+    value
+        .split('\n')
+        .every(
+          (l) => !RegExp(r'[\p{Cc}\u2028\u2029]', unicode: true).hasMatch(l),
+        );
+
+/// 1日の締めの記録（本体のday-closesのclose）。[note]は明日へのひとこと（なければnull）。
+class DayClose {
+  const DayClose(this.id, this.on, this.note, this.at);
+  final String id, on;
+  final String? note;
+  final DateTime at;
+}
 
 /// 本体と同じ、手順の数の下限・上限（1つの手順の文面は行動と同じ[actionTextChars]文字まで）。
 const itemStepsMin = 2, itemStepsMax = 10;

@@ -41,6 +41,35 @@ class TempAccess extends VaultAccess {
   }
 
   @override
+  bool get withdrawSupported => true;
+
+  /// 端末と同じく、内容のSHA-256が保存したときのままのときだけ、依頼と添えたファイルを消す。
+  @override
+  Future<String> withdrawRequest(
+    VaultLocation l,
+    String id,
+    String expectedSha256,
+  ) async {
+    final f = request(l, id);
+    if (withdrawFailure == 'before') throw StateError('取り下げ前の失敗');
+    if (!await f.exists()) return 'missing';
+    if (digest(await f.readAsString()) != expectedSha256) return 'changed';
+    if (await File(
+      '${f.parent.parent.path}/90_system/intake/pending/$id.json',
+    ).exists()) {
+      return 'started';
+    }
+    await f.delete();
+    if (withdrawFailure == 'after') throw StateError('応答消失');
+    final attachment = File('${f.parent.path}/files/$id');
+    if (await attachment.exists()) await attachment.delete();
+    return 'withdrawn';
+  }
+
+  /// 取り下げで失敗させる時点（before: 消す前 / after: 消した後に応答が届かない）。
+  String? withdrawFailure;
+
+  @override
   Future<String?> readState(String name) async =>
       await state(name).exists() ? state(name).readAsString() : null;
   @override

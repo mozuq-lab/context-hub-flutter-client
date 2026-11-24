@@ -157,6 +157,62 @@ class CaptureResult {
   bool get saved => state == 'saved';
 }
 
+/// この端末が取り下げた（Inputから消した）依頼。受付の記録が後から同期されてきたら「間に合わなかった」と示すために、
+/// しばらく端末のアプリ専用領域（`withdrawn.json`）に残す。Vaultには書かない。
+class WithdrawnRequest {
+  const WithdrawnRequest({
+    required this.requestId,
+    required this.operationId,
+    required this.rootHash,
+    required this.title,
+    required this.at,
+  });
+  final String requestId, operationId, rootHash, title;
+
+  /// 取り下げた日時。
+  final DateTime at;
+
+  /// 残す題名は200字まで（サロゲートペアを分けない）。
+  static String clip(String title) => title.runes.length > 200
+      ? String.fromCharCodes(title.runes.take(200))
+      : title;
+
+  Map<String, Object> toJson() => {
+    'requestId': requestId,
+    'operationId': operationId,
+    'rootHash': rootHash,
+    'title': title,
+    'at': at.toUtc().toIso8601String(),
+  };
+
+  static WithdrawnRequest? fromJson(Object? value) {
+    if (value
+        case {
+          'requestId': final String requestId,
+          'operationId': final String operationId,
+          'rootHash': final String rootHash,
+          'title': final String title,
+          'at': final String at,
+        }
+        when RegExp(r'^REQ-[a-f0-9]{32}$').hasMatch(requestId) &&
+            requestId == 'REQ-${operationId.replaceAll('-', '')}' &&
+            RegExp(r'^[a-f0-9]{64}$').hasMatch(rootHash) &&
+            DateTime.tryParse(at) != null) {
+      return WithdrawnRequest(
+        requestId: requestId,
+        operationId: operationId,
+        rootHash: rootHash,
+        title: clip(title),
+        at: DateTime.parse(at),
+      );
+    }
+    return null;
+  }
+}
+
+/// 取り下げた依頼を残す件数と日数。受付の記録が同期されてくるまでの間だけ使う。
+const withdrawnKeep = 50, withdrawnKeepDays = 30;
+
 class _CaptureQueue {
   Future<void> tail = Future.value();
 }
@@ -242,6 +298,7 @@ class CaptureService {
     'guided.json',
     'basket.json',
     'templates.json',
+    'withdrawn.json',
   };
   Future<List<String>> _journalNames() async => [
     for (final name in await access.listJournals())
@@ -1290,6 +1347,228 @@ class CaptureService {
     };
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
+
+  /// 次の一手・未解決の「先に済ませること」を、[after]の全体（先の項目。先に済ませる順）に置き換える依頼。nullで外す。
+  /// 付けられるのはプロジェクトの項目だけ。先の項目は本体が置き場とキーで探し、見当たらなければ断る。
+  Future<CaptureResult> saveItemBlocks(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    List<ItemAfterRef>? after,
+  ) => _serial(() async {
+    final keys = [for (final a in after ?? const <ItemAfterRef>[]) a.itemKey];
+    if (!_uuid.hasMatch(operationId) ||
+        !projectIdPattern.hasMatch(projectId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        (after != null &&
+            (after.isEmpty ||
+                after.length > itemBlocksMax ||
+                keys.toSet().length != keys.length ||
+                keys.contains(item.key) ||
+                !after.every(
+                  (a) =>
+                      (a.projectId == unassignedScope ||
+                          projectIdPattern.hasMatch(a.projectId)) &&
+                      RegExp(r'^[a-f0-9]{64}$').hasMatch(a.itemKey),
+                ))) ||
+        (after == null && item.after == null)) {
+      throw const FormatException('項目と先に済ませることを確認してください。');
+    }
+    final fields = <String, dynamic>{
+      'operation': 'item-blocks',
+      'project_id': projectId,
+      'item_key': item.key,
+      'after': after == null ? null : [for (final a in after) a.toRequest()],
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
+  /// [on]の日を締める依頼。[note]は明日へのひとこと（なければnull）で、依頼の本文にする。
+  Future<CaptureResult> saveDayClose(
+    String operationId,
+    String on,
+    String? note,
+  ) => _serial(() async {
+    final text = note == null ? null : normalizeDayNote(note);
+    if (!_uuid.hasMatch(operationId) ||
+        !validScheduleDate(on) ||
+        (text != null && !validDayNote(text))) {
+      throw const FormatException(
+        '明日へのひとことは$dayNoteLines行・$dayNoteChars文字以内で入力してください。',
+      );
+    }
+    final fields = <String, dynamic>{
+      'operation': 'day-close',
+      'action': 'close',
+      'on': on,
+      'confirmed': true,
+    };
+    return _saveRequest(
+      operationId,
+      digest(jsonEncode(['day-close', on, text])),
+      fields,
+      text ?? '',
+    );
+  });
+
+  /// 表示中の明日へのひとこと（[closeId]の締め）を消す依頼。締めの記録は残る。
+  Future<CaptureResult> saveDayDismiss(String operationId, String closeId) =>
+      _serial(() async {
+        if (!_uuid.hasMatch(operationId) ||
+            !RegExp(r'^DAY-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(closeId)) {
+          throw const FormatException('消すひとことを確認してください。');
+        }
+        final fields = <String, dynamic>{
+          'operation': 'day-close',
+          'action': 'dismiss',
+          'close_id': closeId,
+          'confirmed': true,
+        };
+        return _saveRequest(
+          operationId,
+          digest(jsonEncode(fields)),
+          fields,
+          '',
+        );
+      });
+
+  /// この端末のjournalがある依頼（受付IDから操作IDへ）。名前だけから作り、journalの中身は読まない
+  /// （別のVaultの依頼が混ざることがある。取り下げるときにjournalで確かめる）。
+  /// 取り下げられる依頼（このVaultへ保存を確かめた依頼）の受付ID→操作ID。
+  Future<Map<String, String>> journalRequests() => _serial(() async {
+    final out = <String, String>{}, root = digest(location.identity);
+    for (final name in await _journalNames()) {
+      final id = name.replaceFirst(RegExp(r'\.json$'), '');
+      if (!name.endsWith('.json') || !_uuid.hasMatch(id)) continue;
+      final j = await _readJournal(name);
+      if (j != null && j['state'] == 'saved' && j['rootHash'] == root) {
+        out[_requestOf(name)] = id;
+      }
+    }
+    return out;
+  });
+
+  Future<List<WithdrawnRequest>> _readWithdrawn() async {
+    final raw = await access.readState('withdrawn.json');
+    if (raw == null) return [];
+    try {
+      final j = jsonDecode(raw);
+      if (j is! Map || j['version'] != 1 || j['items'] is! List) return [];
+      return [
+        for (final v in j['items'] as List) ?WithdrawnRequest.fromJson(v),
+      ];
+    } catch (_) {
+      // 読めなければ空として扱う（取り下げた依頼の「間に合わなかった」の判定ができないだけ）。
+      return [];
+    }
+  }
+
+  Future<void> _writeWithdrawn(List<WithdrawnRequest> items) async {
+    final since = DateTime.now().subtract(
+      const Duration(days: withdrawnKeepDays),
+    );
+    final kept = items.where((i) => i.at.isAfter(since)).toList();
+    final tail = kept.length > withdrawnKeep
+        ? kept.sublist(kept.length - withdrawnKeep)
+        : kept;
+    await access.writeState(
+      'withdrawn.json',
+      jsonEncode({
+        'version': 1,
+        'items': [for (final i in tail) i.toJson()],
+      }),
+    );
+  }
+
+  /// このVaultでこの端末が取り下げた依頼（古い順）。
+  Future<List<WithdrawnRequest>> withdrawn() => _serial(() async {
+    final root = digest(location.identity),
+        since = DateTime.now().subtract(
+          const Duration(days: withdrawnKeepDays),
+        );
+    return [
+      for (final i in await _readWithdrawn())
+        if (i.rootHash == root && i.at.isAfter(since)) i,
+    ];
+  });
+
+  /// この端末が保存した、まだ受け付けられていない依頼を取り下げる（Inputの依頼と、添えたファイルを消す）。
+  /// 保存を確かめた依頼（journalがsaved）で、ファイルが保存したときのままのときだけ消す。
+  /// 受け付けの記録がないことは呼び出し側が読み直して確かめる。同期の行き違いでMac miniが先に受け付けることはあり得る。
+  /// 戻り値は`withdrawn`（消した）か`missing`（既にファイルがなかった）。
+  Future<String> withdraw(String operationId, String title) =>
+      _serial(() async {
+        if (!_uuid.hasMatch(operationId)) {
+          throw const FormatException('操作IDが不正です。');
+        }
+        final j = await _journal('$operationId.json');
+        if (j['rootHash'] != digest(location.identity)) {
+          throw StateError('この依頼は別のVaultに属しています。');
+        }
+        if (j['state'] != 'saved') {
+          throw StateError('保存を確かめていない依頼は取り下げられません。先に保存と反映で確かめてください。');
+        }
+        final requestId = j['requestId'] as String;
+        final items = await _readWithdrawn();
+        // 取り下げを残した後に止まった（ファイルが残った）ときは、残した記録のまま消し直す。
+        final again = items.any((i) => i.requestId == requestId);
+        if (!again) {
+          // 先に取り下げたことを残す（消した後に止まっても、同じ操作IDで保存し直さないように）。
+          await _writeWithdrawn([
+            ...items,
+            WithdrawnRequest(
+              requestId: requestId,
+              operationId: operationId,
+              rootHash: j['rootHash'] as String,
+              title: WithdrawnRequest.clip(title),
+              at: DateTime.now().toUtc(),
+            ),
+          ]);
+        }
+        Future<void> forget() async {
+          if (again) return;
+          try {
+            await _writeWithdrawn(items);
+          } catch (_) {
+            /* 残っても、同じ依頼を保存し直さないだけ。 */
+          }
+        }
+
+        final String result;
+        try {
+          result = await access.withdrawRequest(
+            location,
+            requestId,
+            j['rawHash'] as String,
+          );
+        } catch (error, stack) {
+          // 消せたかどうか分からない（消した後に失敗した・結果が届かなかった）。ファイルが保存したときのまま残っていれば
+          // 取り下げの記録を外し、消えていれば取り下げたものとして扱う。確かめられなければ記録を残す（「取り下げ中」から取り下げ直せる）。
+          String? raw;
+          var known = false;
+          try {
+            raw = await access.readRequest(location, requestId);
+            known = true;
+          } catch (_) {
+            /* 確かめられないので記録を残す。 */
+          }
+          if (known && raw == null) return 'withdrawn';
+          if (known && digest(raw!) == j['rawHash']) await forget();
+          Error.throwWithStackTrace(error, stack);
+        }
+        if (result == 'changed') {
+          await forget();
+          throw StateError('依頼のファイルが保存したときと変わっているため、取り下げませんでした。');
+        }
+        if (result == 'started') {
+          await forget();
+          throw StateError('Mac miniが既にこの依頼の受付を始めているため、取り下げませんでした。受付の記録が届いたら、逆の操作（訂正・未解決に戻すなど）をしてください。');
+        }
+        return result;
+      });
+
   Future<CaptureResult> _saveRequest(
     String operationId,
     String fingerprint,
@@ -1298,6 +1577,11 @@ class CaptureService {
     Future<Map<String, dynamic>> Function(String requestId)? stage,
   }) async {
     await _checkJournals();
+    // 取り下げた依頼の操作IDで保存し直さない（消したファイルを書き直すと、取り下げが取り消される）。
+    final requestOf = 'REQ-${operationId.replaceAll('-', '')}';
+    if ((await _readWithdrawn()).any((i) => i.requestId == requestOf)) {
+      throw StateError('この操作は取り下げ済みです。もう一度操作してください。');
+    }
     final name = '$operationId.json';
     // 書き終える前に止まったjournalは、同じ操作IDで書き直す（何も送っていないため）。
     var incomplete = false;
@@ -1346,6 +1630,10 @@ class CaptureService {
   Future<CaptureResult> confirm(String operationId) => _serial(() async {
     if (!_uuid.hasMatch(operationId)) {
       throw const FormatException('操作IDが不正です。');
+    }
+    final requestId = 'REQ-${operationId.replaceAll('-', '')}';
+    if ((await _readWithdrawn()).any((i) => i.requestId == requestId)) {
+      throw StateError('この依頼は取り下げ済みです。');
     }
     return _confirm(await _journal('$operationId.json'));
   });

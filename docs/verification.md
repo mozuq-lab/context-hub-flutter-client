@@ -402,6 +402,13 @@
 - 「AIの設定」で選んだモデルが`guided.json`に残り、問いとまとめの依頼に使われること、一覧にない値・古い状態ファイルでは既定のOpus 5.5に戻ること、Haikuでは`fallbacks`と`anthropic-beta`を付けないこと、404の案内に依頼したモデルの名前が出ること、設定画面でモデルを選んでも入力中のAPIキーが消えないこと、問いとまとめのEffortを別々に選んで依頼に使い・端末に残し・選べない値は既定（問いlow・まとめmedium）に戻すこと、high以上で出力の上限と待つ時間を広げることを`test/guided_test.dart`・`test/guided_widget_test.dart`で確認（偽のClaude APIを使用）。
 - 未検証: 実際のClaude APIでSonnet 5.5・Haiku 5.5を呼んだときと、high以上のEffortで呼んだときの応答時間・応答と、問いやまとめの質（モデルの課金があるため未実施）。xhigh・maxでは、考えている間に応答が90秒以上届かず途切れたと判断する可能性があります。Mac・Androidの実アプリでの設定画面の表示（狭い画面の一覧を含む）は、ウィジェットテスト（幅360）だけで確かめています。Haiku 5.5の料金は依頼が10万トークン以下の料金表で概算します。
 
+## 先に済ませること・1日の締め・依頼の取り下げ（2026-11-24）
+
+- Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通テストはすべて成功。本体の固定参照は、先に済ませること（`item-blocks`）・1日の締め（`day-close`）と、受け付ける前に消えた依頼を失敗として残さない扱いを含む本体のマージコミット（mozuq-lab/context-hub#59）です。
+- `test/blocks_day_close_withdraw_test.dart`で確認: 対応表（`item_blocks`・`day_close`）と項目一覧の`after`・締めの記録の読み方（不正な値と、根拠の入力`input_id`がない旧形式は本体と同じく記録の不正として示す）、先の項目の状態（残っている・済み・外した・見当たらない。統合したプロジェクトの項目は統合先の項目として、キー・行動に引き取った元の行のキー（ほかの置き場へ移した行動も）・同じ欄と本文の1件の順に探す）、ひとことの整え方（空白の範囲をJavaScriptにそろえ、U+0085は消さない）と上限が本体と同じこと。Dartが保存した`item-blocks`・`day-close`（締めと、ひとことを消す）の依頼を固定参照の本体が受理し、項目一覧・NOW・HOMEに反映すること（`scripts/check_request_protocol.mjs`）。互いに待つ項目を先の項目に選ばないこと。先に済ませることの選択から「先待ち」「動けるようになった項目」への表示、今日を締める画面と、ホームのひとことを消す操作。
+- 取り下げは、保存を確かめた依頼で内容が保存したときのままのときだけファイルを消すこと、取り下げた依頼の操作IDで保存し直したり確かめ直したりしないこと、別のVaultの一覧に出さないこと、受付の記録が同期されてきた依頼は取り下げないこと、本体が受付を始めた（停止回復の記録がある）依頼は消さないこと、消す前の失敗では取り下げの記録を外し、消した後に応答が届かないときは取り下げたものとして扱うことを、同じテストで確認。
+- 未検証: Mac・Androidで依頼のファイルを消す動作（`VaultBridge.swift`・`VaultBridge.kt`の`withdrawRequest`）。この環境にXcode・Android SDKがなく、ビルドと実機での確認をしていません。同期（iCloud Drive・Syncthingなど）で削除がMac miniへ伝わるまでの時間と、その間に受け付けられたときの表示も、実機では確かめていません。
+
 ## 再検証
 
 基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.47.9を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。
