@@ -897,7 +897,9 @@ class HubRepository {
     final items = <ItemAfterRef>[];
     for (final a in list) {
       if (a is! Map ||
-          a.length != 4 ||
+          a.length != 5 ||
+          a['input_id'] is! String ||
+          !RegExp(r'^IN-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(a['input_id']) ||
           a['project_id'] is! String ||
           (a['project_id'] != unassignedScope &&
               !projectIdPattern.hasMatch(a['project_id'])) ||
@@ -913,6 +915,7 @@ class HubRepository {
           a['item_key'] as String,
           a['section'] as String,
           a['text'] as String,
+          a['input_id'] as String,
         ),
       );
     }
@@ -1783,34 +1786,58 @@ class HubRepository {
       ? null
       : projects[scope]!.nowItems;
 
-  /// 先の項目を一覧から探す（本体のfindPrerequisiteと同じ順: キー、行動に引き取った元の行のキー、同じ欄・同じ本文が1件だけ）。
-  NowItemRef? findPrerequisite(ItemAfterRef ref) {
-    final items = itemsOf(ref.projectId);
-    if (items == null) return null;
-    final direct =
-        items.where((i) => i.key == ref.itemKey).firstOrNull ??
-        items.where((i) => i.fromKey == ref.itemKey).firstOrNull;
-    if (direct != null) return direct;
-    final same = items
+  /// 先の項目を一覧から探す（本体のlocatePrerequisiteと同じ）。統合したプロジェクトの項目は統合先の項目として、
+  /// キー、行動に引き取った元の行のキー（ほかの置き場へ移した行動も探す）、同じ欄・同じ本文が1件だけ、の順に探す。
+  NowItemRef? findPrerequisite(ItemAfterRef ref) => _locatePrerequisite(ref).item;
+
+  ({String scope, String key, NowItemRef? item}) _locatePrerequisite(
+    ItemAfterRef ref,
+  ) {
+    final scope = ref.projectId == unassignedScope
+        ? ref.projectId
+        : resolveProject(ref.projectId);
+    // 統合先でのキー（本体のitemKeyと同じ作り方）。根拠の入力がない旧版の一覧では読み替えない。
+    final key = scope != ref.projectId && ref.inputId != null
+        ? digest('$scope\n${ref.section}\n${ref.inputId}\n${ref.text}')
+        : ref.itemKey;
+    final own = itemsOf(scope);
+    final direct = own?.where((i) => i.key == key).firstOrNull;
+    if (direct != null) return (scope: scope, key: direct.key, item: direct);
+    for (final s in [
+      scope,
+      ...[
+        unassignedScope,
+        ...projects.keys,
+      ].where((s) => s != scope),
+    ]) {
+      final moved = itemsOf(s)
+          ?.where((i) => i.fromKey == ref.itemKey || i.fromKey == key)
+          .firstOrNull;
+      if (moved != null) return (scope: s, key: moved.key, item: moved);
+    }
+    final same = (own ?? const <NowItemRef>[])
         .where((i) => i.section == ref.section && i.text == ref.text)
         .toList();
-    return same.length == 1 ? same.single : null;
+    return same.length == 1
+        ? (scope: scope, key: same.single.key, item: same.single)
+        : (scope: scope, key: key, item: null);
   }
+
+  /// 先の項目のいまの置き場（統合先・移した先）。見当たらなければ記録の置き場を統合先へ読み替えたもの。
+  String prerequisiteScope(ItemAfterRef ref) => _locatePrerequisite(ref).scope;
 
   /// 先の項目の今の状態（本体のprerequisiteStateと同じ）。一覧に見当たらないときは、本人の完了・外す記録から決める。
   PrerequisiteState prerequisiteState(ItemAfterRef ref) {
-    final found = findPrerequisite(ref);
-    if (found != null) {
-      if (!found.resolved) return PrerequisiteState.open;
-      return found.excluded
-          ? PrerequisiteState.dropped
-          : PrerequisiteState.done;
+    final found = _locatePrerequisite(ref), item = found.item;
+    if (item != null) {
+      if (!item.resolved) return PrerequisiteState.open;
+      return item.excluded ? PrerequisiteState.dropped : PrerequisiteState.done;
     }
-    final last = _latestResolutions[ref.itemKey];
+    final last = _latestResolutions[found.key];
     if (last == null || _reopenIds.contains(last)) {
       return PrerequisiteState.missing;
     }
-    return _exclusions[ref.itemKey]?.id == last
+    return _exclusions[found.key]?.id == last
         ? PrerequisiteState.dropped
         : PrerequisiteState.done;
   }

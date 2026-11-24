@@ -254,16 +254,22 @@ final class VaultBridge {
       digest = try copyDigest(fd, to: -1, limit: 1_048_576).1
     }
     guard digest == expected else { return "changed" }
+    // 本体が受付を始めた依頼（停止回復の記録がある）は、ファイルを消しても記録の写しから受け付けるので消さない。
+    var pst = stat()
+    let pending = root.appendingPathComponent("90_system/intake/pending/" + id + ".json")
+    if lstat(pending.path, &pst) == 0 { return "started" }
+    guard errno == ENOENT || errno == ENOTDIR else { throw Failure.io }
     guard unlink(file.path) == 0 || errno == ENOENT else { throw Failure.io }
-    try syncDirectory(dir)
+    // 依頼を消した後の失敗（同期・添付の削除）は取り下げを止めない。残った添付は本体のdoctorが示す。
+    try? syncDirectory(dir)
     let files = dir.appendingPathComponent("files")
     var fst = stat()
     if lstat(files.path, &fst) == 0, (fst.st_mode & S_IFMT) == S_IFDIR {
       let attachment = files.appendingPathComponent(id)
       var ast = stat()
-      if lstat(attachment.path, &ast) == 0, (ast.st_mode & S_IFMT) == S_IFREG {
-        guard unlink(attachment.path) == 0 || errno == ENOENT else { throw Failure.io }
-        try syncDirectory(files)
+      if lstat(attachment.path, &ast) == 0, (ast.st_mode & S_IFMT) == S_IFREG,
+        unlink(attachment.path) == 0 {
+        try? syncDirectory(files)
       }
     }
     return "withdrawn"

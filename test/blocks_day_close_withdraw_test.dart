@@ -45,6 +45,9 @@ Map<String, String> withAfter(
           'section': 'open',
           'text':
               (list.firstWhere((i) => (i as Map)['key'] == key) as Map)['text'],
+          'input_id':
+              (list.firstWhere((i) => (i as Map)['key'] == key)
+                  as Map)['input_id'],
         },
     ],
   };
@@ -180,7 +183,20 @@ void main() {
           'item_key': openKey,
           'section': 'open',
           'text': 'a',
+          'input_id': 'IN-01M2DSFVSNCJSF7XKRPW29TM7M',
         }),
+      },
+      // 根拠の入力（input_id）がない旧形式の先の項目も読まない。
+      {
+        'id': blockId,
+        'items': [
+          {
+            'project_id': projectId,
+            'item_key': openKey,
+            'section': 'open',
+            'text': 'a',
+          },
+        ],
       },
     ]) {
       final path = '90_system/now-items/$projectId.json',
@@ -451,6 +467,58 @@ void main() {
       expect((await service.withdrawn()).map((w) => w.requestId), [
         saved.requestId,
       ]);
+    });
+
+    test('取り下げの失敗では、ファイルが残っていれば記録を外し、消えていれば取り下げたものとして扱う', () async {
+      final service = CaptureService(access, location);
+      Future<CaptureResult> save(String op, String text) =>
+          service.save(CaptureDraft(operationId: op, text: text));
+      // 消す前に失敗した: ファイルは残るので、取り下げの記録を外す。
+      const op1 = 'e3111111-2222-4333-8444-555555555555';
+      final first = await save(op1, '消す前に失敗');
+      access.withdrawFailure = 'before';
+      await expectLater(service.withdraw(op1, '消す前に失敗'), throwsStateError);
+      expect(await service.withdrawn(), isEmpty);
+      expect(await access.request(location, first.requestId).exists(), isTrue);
+      // 消した後に応答が届かない: ファイルは消えているので、取り下げたものとして残す。
+      const op2 = 'e4111111-2222-4333-8444-555555555555';
+      final second = await save(op2, '消した後に失敗');
+      access.withdrawFailure = 'after';
+      expect(await service.withdraw(op2, '消した後に失敗'), 'withdrawn');
+      expect((await service.withdrawn()).map((w) => w.requestId), [
+        second.requestId,
+      ]);
+      access.withdrawFailure = null;
+      // 本体が受付を始めた（停止回復の記録がある）依頼は消さない。
+      const op3 = 'e5111111-2222-4333-8444-555555555555';
+      final third = await save(op3, '受付中');
+      final pending = File(
+        '${access.request(location, third.requestId).parent.parent.path}/90_system/intake/pending/${third.requestId}.json',
+      );
+      await pending.parent.create(recursive: true);
+      await pending.writeAsString('{}');
+      await expectLater(service.withdraw(op3, '受付中'), throwsStateError);
+      expect(await access.request(location, third.requestId).exists(), isTrue);
+      expect((await service.withdrawn()).map((w) => w.requestId), [
+        second.requestId,
+      ]);
+      // 取り下げられる依頼は、このVaultへ保存した依頼だけ。
+      final own = await service.journalRequests();
+      expect(own.keys, containsAll([first.requestId, third.requestId]));
+      expect(
+        await CaptureService(
+          access,
+          const VaultLocation('two', '別'),
+        ).journalRequests(),
+        isEmpty,
+      );
+    });
+
+    test('ひとことの整え方は本体と同じ（U+0085は空白として消さない）', () {
+      expect(normalizeDayNote(' \n 見積もり\u3000 \n\n'), ' 見積もり');
+      final nel = normalizeDayNote('見積もり\u0085');
+      expect(nel, '見積もり\u0085');
+      expect(validDayNote(nel), isFalse);
     });
   });
 

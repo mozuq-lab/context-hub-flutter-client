@@ -249,8 +249,17 @@ const itemBlocksMax = 3;
 
 /// 先に済ませる項目の1件。置き場（プロジェクトIDかプロジェクト未定）と項目キー、付けた時の欄と本文。
 class ItemAfterRef {
-  const ItemAfterRef(this.projectId, this.itemKey, this.section, this.text);
+  const ItemAfterRef(
+    this.projectId,
+    this.itemKey,
+    this.section,
+    this.text, [
+    this.inputId,
+  ]);
   final String projectId, itemKey, section, text;
+
+  /// 先の項目の根拠の入力（統合したプロジェクトの項目を、統合先の項目として探すのに使う）。旧版の一覧にはない。
+  final String? inputId;
 
   /// 依頼で送る形（置き場とキーだけ）。
   Map<String, String> toRequest() => {
@@ -289,15 +298,19 @@ const dayNoteChars = 300, dayNoteLines = 3, dayCloseBackDays = 7;
 
 /// ひとことを本体と同じく整える（改行をそろえ、行末の空白と前後の空行を除く）。空ならnull。
 String? normalizeDayNote(String text) {
+  // 空白はJavaScriptのtrimと同じ範囲にする（DartのtrimはU+0085も消すため、本体と結果が変わる）。
+  final space =
+      '[\t\n\u000B\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]';
+  final tail = RegExp('$space+\$'), blank = RegExp('^$space*\$');
   final lines = text
       .replaceAll(RegExp(r'\r\n?'), '\n')
       .split('\n')
-      .map((l) => l.trimRight())
+      .map((l) => l.replaceFirst(tail, ''))
       .toList();
-  while (lines.isNotEmpty && lines.first.trim().isEmpty) {
+  while (lines.isNotEmpty && blank.hasMatch(lines.first)) {
     lines.removeAt(0);
   }
-  while (lines.isNotEmpty && lines.last.trim().isEmpty) {
+  while (lines.isNotEmpty && blank.hasMatch(lines.last)) {
     lines.removeLast();
   }
   return lines.isEmpty ? null : lines.join('\n');

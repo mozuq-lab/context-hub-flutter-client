@@ -363,9 +363,15 @@ class VaultBridge(
             if (!file.exists()) return "missing"
             require(file.isFile)
             if (digestOf(file.inputStream(), 1L shl 20).second != expected) return "changed"
-            require(file.delete() || !file.exists()); syncDir(input)
-            val attachment = safe(File(File(input, "files"), id))
-            if (attachment.isFile) { require(attachment.delete() || !attachment.exists()); syncDir(attachment.parentFile!!) }
+            // 本体が受付を始めた依頼（停止回復の記録がある）は、ファイルを消しても記録の写しから受け付けるので消さない。
+            if (File(sample, "90_system/intake/pending/$id.json").exists()) return "started"
+            require(file.delete() || !file.exists())
+            // 依頼を消した後の失敗（同期・添付の削除）は取り下げを止めない。残った添付は本体のdoctorが示す。
+            runCatching {
+                syncDir(input)
+                val attachment = safe(File(File(input, "files"), id))
+                if (attachment.isFile && attachment.delete()) syncDir(attachment.parentFile!!)
+            }
             return "withdrawn"
         }
         val root = tree(handle)
@@ -375,10 +381,17 @@ class VaultBridge(
         require(!file.dir)
         val actual = digestOf(resolver.openInputStream(file.uri) ?: error("読取不可"), 1L shl 20).second
         if (actual != expected) return "changed"
+        // 本体が受付を始めた依頼（停止回復の記録がある）は、ファイルを消しても記録の写しから受け付けるので消さない。
+        var dir: Entry? = Entry(root, "", true)
+        for (part in listOf("90_system", "intake", "pending")) dir = dir?.let { d -> children(d.uri).firstOrNull { it.name == part && it.dir } }
+        if (dir != null && children(dir.uri).any { it.name == "$id.json" }) return "started"
         require(Docs.deleteDocument(resolver, file.uri))
-        val files = children(input.uri).firstOrNull { it.name == "files" && it.dir }
-        val attachment = files?.let { dir -> children(dir.uri).firstOrNull { it.name == id && !it.dir } }
-        if (attachment != null) require(Docs.deleteDocument(resolver, attachment.uri))
+        // 依頼を消した後の失敗（添付の削除）は取り下げを止めない。残った添付は本体のdoctorが示す。
+        runCatching {
+            val files = children(input.uri).firstOrNull { it.name == "files" && it.dir }
+            val attachment = files?.let { d -> children(d.uri).firstOrNull { it.name == id && !it.dir } }
+            if (attachment != null) Docs.deleteDocument(resolver, attachment.uri)
+        }
         return "withdrawn"
     }
     /** Vault内のメモに添えたファイル（05_files/<年-月>/<キー>/<名前>）。名前で1段ずつたどる。 */

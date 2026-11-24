@@ -2760,6 +2760,8 @@ class HubController extends ChangeNotifier {
       }
       await CaptureService(access, target).withdraw(operationId, status.title);
       _tracked.remove(requestId);
+      // 同じ操作をもう一度したときに、取り下げた操作IDを使い回さない（新しい依頼として保存する）。
+      _reviewOperations.removeWhere((_, value) => value == operationId);
     } finally {
       saving = false;
       if (!_disposed) await reload();
@@ -2879,7 +2881,15 @@ class HubController extends ChangeNotifier {
               '「${clip(target.text, 30)}」は、この項目を先に済ませることとして待っています。別の項目を選んでください。',
             );
           }
-          next.add(ItemAfterRef(a.scope, a.key, target.section, target.text));
+          next.add(
+            ItemAfterRef(
+              a.scope,
+              a.key,
+              target.section,
+              target.text,
+              target.inputId,
+            ),
+          );
         }
         if (after != null &&
             found.after != null &&

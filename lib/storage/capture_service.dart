@@ -172,6 +172,11 @@ class WithdrawnRequest {
   /// 取り下げた日時。
   final DateTime at;
 
+  /// 残す題名は200字まで（サロゲートペアを分けない）。
+  static String clip(String title) => title.runes.length > 200
+      ? String.fromCharCodes(title.runes.take(200))
+      : title;
+
   Map<String, Object> toJson() => {
     'requestId': requestId,
     'operationId': operationId,
@@ -197,7 +202,7 @@ class WithdrawnRequest {
         requestId: requestId,
         operationId: operationId,
         rootHash: rootHash,
-        title: title.length > 200 ? title.substring(0, 200) : title,
+        title: clip(title),
         at: DateTime.parse(at),
       );
     }
@@ -1431,11 +1436,14 @@ class CaptureService {
 
   /// この端末のjournalがある依頼（受付IDから操作IDへ）。名前だけから作り、journalの中身は読まない
   /// （別のVaultの依頼が混ざることがある。取り下げるときにjournalで確かめる）。
+  /// 取り下げられる依頼（このVaultへ保存を確かめた依頼）の受付ID→操作ID。
   Future<Map<String, String>> journalRequests() => _serial(() async {
-    final out = <String, String>{};
+    final out = <String, String>{}, root = digest(location.identity);
     for (final name in await _journalNames()) {
       final id = name.replaceFirst(RegExp(r'\.json$'), '');
-      if (name.endsWith('.json') && _uuid.hasMatch(id)) {
+      if (!name.endsWith('.json') || !_uuid.hasMatch(id)) continue;
+      final j = await _readJournal(name);
+      if (j != null && j['state'] == 'saved' && j['rootHash'] == root) {
         out[_requestOf(name)] = id;
       }
     }
@@ -1476,10 +1484,13 @@ class CaptureService {
 
   /// このVaultでこの端末が取り下げた依頼（古い順）。
   Future<List<WithdrawnRequest>> withdrawn() => _serial(() async {
-    final root = digest(location.identity);
+    final root = digest(location.identity),
+        since = DateTime.now().subtract(
+          const Duration(days: withdrawnKeepDays),
+        );
     return [
       for (final i in await _readWithdrawn())
-        if (i.rootHash == root) i,
+        if (i.rootHash == root && i.at.isAfter(since)) i,
     ];
   });
 
@@ -1511,7 +1522,7 @@ class CaptureService {
               requestId: requestId,
               operationId: operationId,
               rootHash: j['rootHash'] as String,
-              title: title,
+              title: WithdrawnRequest.clip(title),
               at: DateTime.now().toUtc(),
             ),
           ]);
@@ -1532,13 +1543,28 @@ class CaptureService {
             requestId,
             j['rawHash'] as String,
           );
-        } catch (_) {
-          await forget();
-          rethrow;
+        } catch (error, stack) {
+          // 消せたかどうか分からない（消した後に失敗した・結果が届かなかった）。ファイルが保存したときのまま残っていれば
+          // 取り下げの記録を外し、消えていれば取り下げたものとして扱う。確かめられなければ記録を残す（「取り下げ中」から取り下げ直せる）。
+          String? raw;
+          var known = false;
+          try {
+            raw = await access.readRequest(location, requestId);
+            known = true;
+          } catch (_) {
+            /* 確かめられないので記録を残す。 */
+          }
+          if (known && raw == null) return 'withdrawn';
+          if (known && digest(raw!) == j['rawHash']) await forget();
+          Error.throwWithStackTrace(error, stack);
         }
         if (result == 'changed') {
           await forget();
           throw StateError('依頼のファイルが保存したときと変わっているため、取り下げませんでした。');
+        }
+        if (result == 'started') {
+          await forget();
+          throw StateError('Mac miniが既にこの依頼の受付を始めているため、取り下げませんでした。受付の記録が届いたら、逆の操作（訂正・未解決に戻すなど）をしてください。');
         }
         return result;
       });

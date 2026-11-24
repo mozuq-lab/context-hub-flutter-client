@@ -2540,7 +2540,10 @@ class _HubViewState extends State<HubView> {
     final note = repo.currentDayNote;
     if (note == null) return const [];
     final today = hubToday(),
-        days = DateTime.parse(today).difference(DateTime.parse(note.on)).inDays,
+        // 日付どうしの差はUTCで数える（夏時間の切り替えをまたいでも1日ずれない）。
+        days = DateTime.parse(
+          '${today}T00:00:00Z',
+        ).difference(DateTime.parse('${note.on}T00:00:00Z')).inDays,
         when = days <= 0
             ? '今日'
             : days == 1
@@ -2662,10 +2665,13 @@ class _HubViewState extends State<HubView> {
     );
     if (result == null || !mounted) return;
     try {
-      for (final key in result.drop) {
-        await c.setToday(unassignedScope, key, false);
-      }
       final saved = await c.requestDayClose(today, result.note);
+      // 今日の3つから外すのは、締めを保存できた後（断られたときは選んだままにする）。
+      if (saved.saved) {
+        for (final key in result.drop) {
+          await c.setToday(unassignedScope, key, false);
+        }
+      }
       if (mounted) {
         notice(
           context,
@@ -2795,7 +2801,7 @@ class _HubViewState extends State<HubView> {
           ),
           for (final (i, a) in after.items.indexed)
             Text(
-              '${i + 1}. ${clip((repo.findPrerequisite(a)?.text ?? a.text).trim(), 60)}（${scopeTitle(a.projectId)}・${prerequisiteStateLabels[states[i]]}）',
+              '${i + 1}. ${clip((repo.findPrerequisite(a)?.text ?? a.text).trim(), 60)}（${scopeTitle(repo.prerequisiteScope(a))}・${prerequisiteStateLabels[states[i]]}）',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           if (states.contains(PrerequisiteState.missing))

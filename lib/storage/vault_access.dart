@@ -76,7 +76,8 @@ abstract class VaultAccess {
 
   /// `Input/<requestId>.md`の内容のSHA-256が[expectedSha256]と同じときだけ、そのファイルと添えたファイル
   /// （`Input/files/<requestId>`）を消す。消したら`withdrawn`、依頼のファイルがなければ`missing`、
-  /// 内容が違えば何も消さずに`changed`を返す。
+  /// 内容が違えば何も消さずに`changed`、本体が受付を始めていれば（停止回復の記録`90_system/intake/pending/<requestId>.json`がある）
+  /// 何も消さずに`started`を返す。依頼を消した後の失敗（同期・添付の削除）は`withdrawn`として返す。
   Future<String> withdrawRequest(
     VaultLocation location,
     String requestId,
@@ -263,7 +264,7 @@ class NativeVaultAccess implements VaultAccess {
       'requestId': requestId,
       'sha256': expectedSha256,
     });
-    if (!const ['withdrawn', 'missing', 'changed'].contains(result)) {
+    if (!const ['withdrawn', 'missing', 'changed', 'started'].contains(result)) {
       throw const FormatException('取り下げの結果を確かめられません。');
     }
     return result!;
