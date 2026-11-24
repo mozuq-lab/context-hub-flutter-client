@@ -115,6 +115,12 @@ class HubController extends ChangeNotifier {
 
   String? error, captureWarning;
   List<CaptureResult> pending = [];
+
+  /// この端末のjournalがある依頼（受付IDから操作IDへ）。取り下げを出す依頼を決めるのに使う。
+  Map<String, String> ownRequests = const {};
+
+  /// このVaultでこの端末が取り下げた依頼（古い順）。
+  List<WithdrawnRequest> withdrawnRequests = const [];
   int _epoch = 0;
 
   /// 再読込の世代（[reload]ごとに進める）。
@@ -1196,10 +1202,25 @@ class HubController extends ChangeNotifier {
   ]) async {
     bool still() => epoch == _epoch && (current?.call() ?? true);
     try {
-      final list = await CaptureService(access, target).pending();
+      final service = CaptureService(access, target);
+      final list = await service.pending();
       if (still()) {
         pending = list;
         captureWarning = null;
+      }
+      // 取り下げの表示に使う。読めなくても保存は止めない（取り下げを出さないだけ）。
+      try {
+        final own = await service.journalRequests(),
+            withdrawn = await service.withdrawn();
+        if (still()) {
+          ownRequests = own;
+          withdrawnRequests = withdrawn;
+        }
+      } catch (_) {
+        if (still()) {
+          ownRequests = const {};
+          withdrawnRequests = const [];
+        }
       }
     } catch (e) {
       if (still()) {
@@ -1218,6 +1239,8 @@ class HubController extends ChangeNotifier {
     attention = const [];
     location = target;
     pending = [];
+    ownRequests = const {};
+    withdrawnRequests = const [];
     captureWarning = null;
     basket = const Basket();
     _basketFor = null;
@@ -2694,6 +2717,240 @@ class HubController extends ChangeNotifier {
           service.saveItemSteps(operation, projectId, item, steps),
     );
   }
+
+  /// この端末が保存し、まだMac miniが受け付けていない依頼か（取り下げられる）。
+  /// 受け付けられなかった依頼（形式の誤り・理由付きで断ったもの）も、ファイルを消して片付けられる。
+  bool canWithdraw(IntakeStatus status) =>
+      access.withdrawSupported &&
+      ownRequests.containsKey(status.id) &&
+      const ['waiting', 'rejected'].contains(status.state);
+
+  /// この端末が保存した依頼を取り下げる（Inputの依頼と添えたファイルを消す）。消す直前にVaultを読み直し、
+  /// 受け付けの記録が同期されていれば消さない。削除がMac miniへ伝わる前に受け付けられることはあり得るので、
+  /// 結果は取り下げた依頼の一覧（[withdrawnRequests]）で、受付の記録が後から届いたかを見て示す。
+  Future<void> withdrawRequest(String requestId) async {
+    final target = location, epoch = _epoch;
+    if (target == null ||
+        repository == null ||
+        loading ||
+        saving ||
+        error != null ||
+        captureWarning != null) {
+      throw StateError('保存先と確認情報を先に確認してください。');
+    }
+    final operationId = ownRequests[requestId];
+    if (operationId == null || !access.withdrawSupported) {
+      throw StateError('この端末から保存した依頼だけを取り下げられます。');
+    }
+    saving = true;
+    _changed();
+    try {
+      final fresh = HubRepository(await access.readSnapshot(target));
+      if (epoch != _epoch || _disposed) throw StateError('Vaultが切り替わりました。');
+      repository = fresh;
+      _changed();
+      final status = fresh.intake.where((s) => s.id == requestId).firstOrNull;
+      if (status == null) {
+        throw StateError('依頼が見つかりません。既に取り下げたか、同期で消えた可能性があります。');
+      }
+      if (!const ['waiting', 'rejected'].contains(status.state)) {
+        throw StateError(
+          'Mac miniが既に受け取っているため、取り下げられません。逆の操作（訂正・未解決に戻すなど）をしてください。',
+        );
+      }
+      await CaptureService(access, target).withdraw(operationId, status.title);
+      _tracked.remove(requestId);
+    } finally {
+      saving = false;
+      if (!_disposed) await reload();
+      _changed();
+    }
+  }
+
+  /// 先に済ませることを付けられる項目（プロジェクトの、片付いていない次の一手・未解決）を、選べる先の項目と一緒に返す。
+  /// 先の項目は、進行中・休止中のプロジェクトの片付いていない項目と、プロジェクト未定の本人の行動。
+  /// [item]自身と、[item]を（ほかの項目を通して）待っている項目は選べない（互いに待つと、どちらも動けなくなる）。
+  static List<(String scope, NowItemRef item)> prerequisiteChoices(
+    HubRepository repo,
+    String projectId,
+    NowItemRef item,
+  ) {
+    final waiting = waitersOf(repo, item.key);
+    return [
+      for (final p in repo.orderedProjects)
+        if (!p.merged && p.nowItemsGeneratedAt != null)
+          for (final i in p.nowItems)
+            if (!i.resolved && i.key != item.key && !waiting.contains(i.key))
+              (p.id, i),
+      if (repo.intakeFeatures.unassignedActions)
+        for (final i in repo.unassignedItems)
+          if (i.action && !i.resolved && !waiting.contains(i.key))
+            (unassignedScope, i),
+    ];
+  }
+
+  /// [itemKey]を（ほかの項目を通して）先に済ませることとして待っている項目のキー。
+  static Set<String> waitersOf(HubRepository repo, String itemKey) {
+    final all = [
+      for (final p in repo.projects.values) ...p.nowItems,
+      ...repo.unassignedItems,
+    ];
+    final found = <String>{}, queue = [itemKey];
+    while (queue.isNotEmpty) {
+      final key = queue.removeLast();
+      for (final i in all) {
+        final after = i.after;
+        if (after == null || i.resolved || found.contains(i.key)) continue;
+        if (after.items.any(
+          (a) => (repo.findPrerequisite(a)?.key ?? a.itemKey) == key,
+        )) {
+          found.add(i.key);
+          queue.add(i.key);
+        }
+      }
+    }
+    return found;
+  }
+
+  /// 次の一手・未解決の「先に済ませること」を、[after]の全体（先の項目。先に済ませる順）に置き換える依頼。nullなら外す。
+  /// [seen]は本人が見ていた記録のID（なければnull）。読み直した今の記録と違えば依頼しない。
+  Future<CaptureResult> requestItemBlocks(
+    String projectId,
+    String itemKey,
+    List<({String scope, String key})>? after, {
+    required String? seen,
+  }) {
+    if (after != null &&
+        (after.isEmpty ||
+            after.length > itemBlocksMax ||
+            after.map((a) => a.key).toSet().length != after.length)) {
+      throw StateError('先に済ませることは$itemBlocksMax件まで、重ねずに選んでください。');
+    }
+    late NowItemRef item;
+    late List<ItemAfterRef>? refs;
+    return _confirmedRequest(
+      (parsed) {
+        if (!parsed.intakeFeatures.blocks) {
+          throw StateError('Mac miniの本体が先に済ませることに対応していません。本体を更新してください。');
+        }
+        if (projectId == unassignedScope) {
+          throw StateError('先に済ませることは、プロジェクトの項目に付けられます。');
+        }
+        final found = _recordTarget(parsed, projectId, itemKey);
+        if (found == null || found.resolved) {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        if (found.after?.id != seen) {
+          throw StateError(
+            'この項目の先に済ませることは、別の端末などで変わっています。今の内容を確かめてから操作してください。',
+          );
+        }
+        if (after == null && found.after == null) {
+          throw StateError('外す先に済ませることはありません。');
+        }
+        final waiting = waitersOf(parsed, itemKey);
+        final next = <ItemAfterRef>[];
+        for (final a in after ?? const <({String scope, String key})>[]) {
+          if (a.key == itemKey) {
+            throw StateError('項目そのものは、先に済ませることにできません。');
+          }
+          if (a.scope != unassignedScope) {
+            final owner = parsed.projects[a.scope];
+            if (owner == null) {
+              throw StateError('先に済ませる項目のプロジェクトが見つかりません。表示を確認してから選び直してください。');
+            }
+            _refuseMerged(parsed, owner);
+          }
+          final target = parsed
+              .itemsOf(a.scope)
+              ?.where((i) => i.key == a.key)
+              .firstOrNull;
+          if (target == null ||
+              (a.scope == unassignedScope && !target.action)) {
+            throw StateError('先に済ませる項目が見つかりません。表示を確認してから選び直してください。');
+          }
+          if (target.resolved || parsed.itemRequestIdFor(a.key) != null) {
+            throw StateError(
+              '先に済ませる項目は、既に完了・解決しているか外しています（反映待ちを含む）。残っている項目を選んでください。',
+            );
+          }
+          if (waiting.contains(a.key)) {
+            throw StateError(
+              '「${clip(target.text, 30)}」は、この項目を先に済ませることとして待っています。別の項目を選んでください。',
+            );
+          }
+          next.add(ItemAfterRef(a.scope, a.key, target.section, target.text));
+        }
+        if (after != null &&
+            found.after != null &&
+            listEquals(
+              [
+                for (final r in found.after!.items)
+                  '${r.projectId}/${r.itemKey}',
+              ],
+              [for (final r in next) '${r.projectId}/${r.itemKey}'],
+            )) {
+          throw StateError('先に済ませることは変わっていません。');
+        }
+        if (parsed.blocksRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の先に済ませることは依頼済みです。保存と反映を確認してください。');
+        }
+        // 完了・解決の報告が先に反映されると、本体はこの依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の完了・解決の報告が反映されるまで待ってから依頼してください。');
+        }
+        item = found;
+        refs = after == null ? null : next;
+        return 'blocks/$projectId/$itemKey/${parsed.latestBlocksIdFor(itemKey) ?? '-'}/${digest(jsonEncode([
+          found.after?.id,
+          after == null ? null : [for (final a in after) '${a.scope}/${a.key}'],
+        ]))}';
+      },
+      (service, parsed, operation) =>
+          service.saveItemBlocks(operation, projectId, item, refs),
+    );
+  }
+
+  /// [on]の日を締める依頼。[note]は明日へのひとこと（なければnull）。同じ日を締め直すと、最後の締めがその日の締めになる。
+  Future<CaptureResult> requestDayClose(String on, String? note) {
+    final text = note == null ? null : normalizeDayNote(note);
+    if (text != null && !validDayNote(text)) {
+      throw StateError('明日へのひとことは$dayNoteLines行・$dayNoteChars文字以内で入力してください。');
+    }
+    return _confirmedRequest((parsed) {
+      if (!parsed.intakeFeatures.dayClose) {
+        throw StateError('Mac miniの本体が1日の締めに対応していません。本体を更新してください。');
+      }
+      final today = hubToday(),
+          back = parsed.intakeFeatures.dayCloseLimits!.backDays;
+      if (on.compareTo(addScheduleDays(today, 1)) > 0 ||
+          on.compareTo(addScheduleDays(today, -back)) < 0) {
+        throw StateError('締める日は、今日から$back日前までの日を選んでください。');
+      }
+      if (parsed.dayCloseRequestId != null) {
+        throw StateError('1日の締めは依頼済みです。保存と反映を確認してください。');
+      }
+      // 締め直しは、最後の締めの記録IDを含めて別の操作にする（同じ内容で締め直す再試行だけを同じ操作にする）。
+      return 'day-close/$on/${parsed.dayCloseOn(on)?.id ?? '-'}/${digest(text ?? '')}';
+    }, (service, parsed, operation) => service.saveDayClose(operation, on, text));
+  }
+
+  /// 表示中の明日へのひとことを消す依頼。締めの記録は残る。
+  Future<CaptureResult> requestDayDismiss(String closeId) => _confirmedRequest(
+    (parsed) {
+      if (!parsed.intakeFeatures.dayClose) {
+        throw StateError('Mac miniの本体が1日の締めに対応していません。本体を更新してください。');
+      }
+      if (parsed.currentDayNote?.id != closeId) {
+        throw StateError('明日へのひとことは、別の端末などで変わっています。表示を確かめてください。');
+      }
+      if (parsed.dayCloseRequestId != null) {
+        throw StateError('1日の締めは依頼済みです。保存と反映を確認してください。');
+      }
+      return 'day-dismiss/$closeId';
+    },
+    (service, parsed, operation) => service.saveDayDismiss(operation, closeId),
+  );
 
   /// 場所・道具の札を、[contexts]の全体に置き換える依頼。nullなら外す。札は本人が選び、AIは付けない。
   Future<CaptureResult> requestItemContexts(

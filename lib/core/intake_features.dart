@@ -34,6 +34,8 @@ class IntakeFeatures {
     this.contextLimits,
     this.areaLimits,
     this.stepLimits,
+    this.blocksMax,
+    this.dayCloseLimits,
     this.referenceTitleMax,
     this.attachmentLimits,
   });
@@ -90,6 +92,20 @@ class IntakeFeatures {
 
   /// 次の一手の手順の数の下限・上限と、1つの文字数（`item_steps`）。対応前の本体はnull。
   final ({int min, int max, int maxChars})? stepLimits;
+
+  /// 先に済ませることにできる項目の数の上限（`item_blocks.max`）。対応前の本体はnull。
+  final int? blocksMax;
+
+  /// 明日へのひとことの文字数・行数の上限と、さかのぼって締められる日数（`day_close`）。対応前の本体はnull。
+  final ({int maxChars, int maxLines, int backDays})? dayCloseLimits;
+
+  /// 次の一手・未解決に「先に済ませること」（別の項目1〜[blocksMax]件）を付け外しできる（item-blocks）。
+  /// 付けられるのはプロジェクトの項目だけで、先の項目にはプロジェクト未定の本人の行動も選べる。
+  bool get blocks => operations.contains('item-blocks') && blocksMax != null;
+
+  /// 1日を締め、明日へのひとことを残し・消せる（day-close）。
+  bool get dayClose =>
+      operations.contains('day-close') && dayCloseLimits != null;
 
   /// 資料の名前の文字数の上限（`references.title_max_chars`）。対応前の本体はnull。
   final int? referenceTitleMax;
@@ -305,6 +321,20 @@ class IntakeFeatures {
         },
         referenceTitleMax: switch (m['references']) {
           {'title_max_chars': final int chars} when chars >= 1 => chars,
+          _ => null,
+        },
+        blocksMax: switch (m['item_blocks']) {
+          {'max': final int max} when max >= 1 => max,
+          _ => null,
+        },
+        dayCloseLimits: switch (m['day_close']) {
+          {
+            'max_chars': final int chars,
+            'max_lines': final int lines,
+            'back_days': final int days,
+          }
+              when chars >= 1 && lines >= 1 && days >= 0 =>
+            (maxChars: chars, maxLines: lines, backDays: days),
           _ => null,
         },
         stepLimits: switch (m['item_steps']) {

@@ -772,8 +772,12 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
+      // 前回の締めで残した明日へのひとことは、今日の3つより前に置く（次に締めるか消すまで出す）。
+      children.addAll(dayNoteHome());
       // 本人が今日やると決めたものを、いちばん上に置く。
       children.addAll(todaySection(compact: true));
+      children.addAll(dayCloseHome());
+      children.addAll(readyHome());
       // 今週の気づきは、行動につながる欄（次の一手）より前に置く。
       children.addAll(insightsHome());
       // 件数の札。毎日開く画面への入口を横に並べ、件数と要点だけを示す。
@@ -1291,7 +1295,9 @@ class _HubViewState extends State<HubView> {
           ),
         );
       }
-      if (repo.intake.isEmpty && c.pending.isEmpty) {
+      if (repo.intake.isEmpty &&
+          c.pending.isEmpty &&
+          c.withdrawnRequests.isEmpty) {
         children.add(emptyText(context, 'この端末から保存したものはありません。'));
       }
       if (repo.intake.isNotEmpty) {
@@ -1309,6 +1315,16 @@ class _HubViewState extends State<HubView> {
                   ].join('\n'),
                   style: const TextStyle(height: 1.7),
                 ),
+                // この端末が保存し、まだ受け付けられていない依頼は取り下げられる。
+                trailing: c.canWithdraw(status)
+                    ? TextButton(
+                        key: Key('withdraw-${status.id}'),
+                        onPressed: c.saving || c.loading
+                            ? null
+                            : () => withdrawRequest(status),
+                        child: const Text('取り下げる'),
+                      )
+                    : null,
                 onTap: () {
                   showDialog<void>(
                     context: context,
@@ -1327,6 +1343,47 @@ class _HubViewState extends State<HubView> {
                     ),
                   );
                 },
+              ),
+          ]),
+        );
+      }
+      // この端末で取り下げた依頼。受付の記録が後から届いたら、間に合わなかったと示す。
+      if (c.withdrawnRequests.isNotEmpty) {
+        children.add(
+          sectionHeading(
+            '取り下げた依頼',
+            key: const Key('intake-withdrawn'),
+            note:
+                'この端末で取り下げた依頼です（$withdrawnKeepDays日間示します）。Mac miniへ削除が伝わる前に受け付けられた場合は「間に合いませんでした」と示します。',
+          ),
+        );
+        children.add(
+          groupCard([
+            for (final w in c.withdrawnRequests.reversed)
+              ListTile(
+                key: Key('withdrawn-${w.requestId}'),
+                title: Text(
+                  repo.snapshot.files.containsKey(
+                        '90_system/intake/${w.requestId}.json',
+                      )
+                      ? '取り下げが間に合いませんでした'
+                      : repo.snapshot.files.containsKey(
+                          'Input/${w.requestId}.md',
+                        )
+                      ? '取り下げ中（依頼のファイルが残っています）'
+                      : '取り下げました',
+                ),
+                subtitle: Text(
+                  [
+                    w.title,
+                    '${timeLabel(w.at)}に取り下げ',
+                    if (repo.snapshot.files.containsKey(
+                      '90_system/intake/${w.requestId}.json',
+                    ))
+                      'Mac miniが先に受け取りました。訂正・未解決に戻す・外すなど、その依頼に合う逆の操作をしてください。',
+                  ].join('\n'),
+                  style: const TextStyle(height: 1.7),
+                ),
               ),
           ]),
         );
@@ -2478,6 +2535,329 @@ class _HubViewState extends State<HubView> {
   }
 
   /// 連絡待ちの印を外すよう依頼する。項目は元の欄（次の一手・未解決）へ戻る。
+  /// ホームの先頭に置く、前回の締めの明日へのひとこと。示すひとことがなければ空。
+  List<Widget> dayNoteHome() {
+    final note = repo.currentDayNote;
+    if (note == null) return const [];
+    final today = hubToday(),
+        days = DateTime.parse(today).difference(DateTime.parse(note.on)).inDays,
+        when = days <= 0
+            ? '今日'
+            : days == 1
+            ? '昨日'
+            : '$days日前',
+        pending = repo.dayCloseRequestId != null;
+    return [
+      Card(
+        key: const Key('home-day-note'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '前回の締め（${note.on}・$when）',
+                style: Theme.of(context).textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text('明日へのひとこと', style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 2),
+              SelectableText(note.note!, key: const Key('home-day-note-text')),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      pending ? '締め・消す依頼を保存済み（反映待ち）' : '次に締めると置き換わります。',
+                      style: noteStyle(context),
+                    ),
+                  ),
+                  if (repo.intakeFeatures.dayClose && !pending)
+                    TextButton(
+                      key: const Key('home-day-note-dismiss'),
+                      onPressed: busy ? null : () => dismissDayNote(note),
+                      child: const Text('消す'),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+    ];
+  }
+
+  /// 今日を締める入口（本体が1日の締めに対応しているときだけ）。
+  List<Widget> dayCloseHome() {
+    if (!repo.intakeFeatures.dayClose) return const [];
+    final pending = repo.dayCloseRequestId != null,
+        closed = repo.dayCloseOn(hubToday()) != null;
+    return [
+      Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Wrap(
+          spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            OutlinedButton.icon(
+              key: const Key('home-day-close'),
+              onPressed: busy || pending ? null : closeDay,
+              icon: const Icon(Icons.nightlight_outlined, size: 18),
+              label: Text(closed ? '今日の締めを書き直す' : '今日を締める'),
+            ),
+            if (pending)
+              Text('締めを依頼済み（反映待ち）', style: noteStyle(context))
+            else if (closed)
+              Text('今日は締めてあります', style: noteStyle(context)),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  /// 今日、完了・解決にした項目（誤りとして外したものは除く）。置き場の名前と項目。
+  List<(String, NowItemRef)> doneToday(String today) => [
+    for (final p in repo.orderedProjects)
+      if (!p.merged)
+        for (final i in p.nowItems)
+          if (i.resolved &&
+              !i.excluded &&
+              i.resolvedAt != null &&
+              hubToday(i.resolvedAt) == today)
+            (p.title, i),
+    for (final i in repo.unassignedItems)
+      if (i.resolved &&
+          !i.excluded &&
+          i.resolvedAt != null &&
+          hubToday(i.resolvedAt) == today)
+        ('プロジェクト未定', i),
+  ];
+
+  /// 今日を締める。今日できたことと今日の3つの残りを確かめ、明日へのひとことを残す。
+  Future<void> closeDay() async {
+    final today = hubToday(), limits = repo.intakeFeatures.dayCloseLimits;
+    if (limits == null) return;
+    final memos = repo.recent
+        .where(
+          (r) =>
+              r.kind == 'memo' &&
+              r.receivedAt != null &&
+              hubToday(r.receivedAt) == today,
+        )
+        .length;
+    final remaining = [
+      for (final p in c.today.picks)
+        if (todayOpen(repo, p)) todayEntry(repo, p),
+    ];
+    final result = await showDialog<({String? note, Set<String> drop})>(
+      context: context,
+      builder: (_) => DayCloseDialog(
+        today: today,
+        done: doneToday(today),
+        memos: memos,
+        remaining: remaining,
+        initialNote: repo.dayCloseOn(today)?.note,
+      ),
+    );
+    if (result == null || !mounted) return;
+    try {
+      for (final key in result.drop) {
+        await c.setToday(unassignedScope, key, false);
+      }
+      final saved = await c.requestDayClose(today, result.note);
+      if (mounted) {
+        notice(
+          context,
+          saved.saved
+              ? result.note == null
+                    ? '今日を締めました。Mac miniで処理されると記録に残ります。'
+                    : '今日を締めました。明日へのひとことは、Mac miniで処理されると次に締めるまでホームの先頭に出ます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 表示中の明日へのひとことを消す（締めの記録は残る）。
+  Future<void> dismissDayNote(DayClose note) async {
+    try {
+      final result = await c.requestDayDismiss(note.id);
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? 'ひとことを消す依頼を保存しました。Mac miniで処理されると表示から外れます。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// ホームに出す、先に済ませることが片付いて取りかかれるようになった項目。
+  List<Widget> readyHome() {
+    final items = [
+      for (final p in repo.actionableProjects)
+        for (final i in p.nowItems)
+          if (readyNow(i) && !i.someday && !i.waiting) (p, i),
+    ];
+    if (items.isEmpty) return const [];
+    void openNext() {
+      nextSection = 'next';
+      widget.onNavigate('next');
+    }
+
+    return [
+      sectionHeading('動けるようになった項目（${items.length}件）'),
+      groupCard([
+        for (final (p, i) in items.take(homeUnassigned))
+          ListTile(
+            key: Key('home-ready-${i.key.substring(0, 12)}'),
+            dense: true,
+            title: Text(
+              i.display,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text('${p.title}・先に済ませることが片付きました'),
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: openNext,
+          ),
+      ]),
+      const SizedBox(height: 12),
+    ];
+  }
+
+  /// この端末が保存した、まだ受け付けられていない依頼を取り下げる。
+  Future<void> withdrawRequest(IntakeStatus status) async {
+    if (!await confirmAction(
+          '依頼を取り下げる',
+          '${status.title}\n\nこの端末が保存した依頼のファイル（添えたファイルを含む）を消します。同期で削除がMac miniへ伝わる前に受け付けられた場合は取り下げは間に合わず、「取り下げた依頼」にそう示します。',
+          '取り下げる',
+        ) ||
+        !mounted) {
+      return;
+    }
+    try {
+      await c.withdrawRequest(status.id);
+      if (mounted) notice(context, '依頼を取り下げました。');
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
+  /// 項目に付けた先の項目の、今の状態（先に済ませる順）。付けていなければ空。
+  List<PrerequisiteState> prerequisiteStates(NowItemRef item) => [
+    for (final a in item.after?.items ?? const <ItemAfterRef>[])
+      repo.prerequisiteState(a),
+  ];
+
+  /// 先の項目が残っている（先待ち）。片付いた項目には付かない。
+  bool blockedNow(NowItemRef item) =>
+      item.after != null &&
+      !item.resolved &&
+      !blockSettled(prerequisiteStates(item));
+
+  /// 先の項目がすべて片付き、取りかかれるようになった。
+  bool readyNow(NowItemRef item) =>
+      item.after != null &&
+      !item.resolved &&
+      blockSettled(prerequisiteStates(item));
+
+  /// 先の項目の置き場の名前（プロジェクトの名前か「プロジェクト未定」）。
+  String scopeTitle(String scope) => scope == unassignedScope
+      ? 'プロジェクト未定'
+      : repo.projects[scope]?.title ?? scope;
+
+  /// 項目の下に添える、先に済ませることの説明（先の項目と今の状態）。
+  Widget afterNote(NowItemRef item) {
+    final after = item.after!, states = prerequisiteStates(item);
+    final ready = blockSettled(states);
+    final tag = item.key.substring(0, 12);
+    return Padding(
+      key: Key('after-note-$tag'),
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            ready
+                ? '先に済ませることが片付きました。取りかかれます。'
+                : '先に済ませること（残り${states.where((s) => s == PrerequisiteState.open).length}件）',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: ready ? Theme.of(context).colorScheme.primary : null,
+            ),
+          ),
+          for (final (i, a) in after.items.indexed)
+            Text(
+              '${i + 1}. ${clip((repo.findPrerequisite(a)?.text ?? a.text).trim(), 60)}（${scopeTitle(a.projectId)}・${prerequisiteStateLabels[states[i]]}）',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          if (states.contains(PrerequisiteState.missing))
+            Text(
+              '見当たらない項目は待ちません。本文が変わった場合は、選び直してください。',
+              style: noteStyle(context),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 先に済ませることを選んで依頼する（1〜3件、プロジェクトをまたいでよい）。[projectId]はプロジェクトの項目の置き場。
+  Future<void> blocksItem(String projectId, NowItemRef item) async {
+    final choices = [
+      for (final (scope, i) in HubController.prerequisiteChoices(
+        repo,
+        projectId,
+        item,
+      ))
+        (scope: scope, title: scopeTitle(scope), item: i),
+    ];
+    final max = repo.intakeFeatures.blocksMax ?? itemBlocksMax;
+    final choice =
+        await showDialog<({List<({String scope, String key})>? after})>(
+          context: context,
+          builder: (_) => BlocksDialog(
+            item: item,
+            choices: choices,
+            max: max < itemBlocksMax ? max : itemBlocksMax,
+            current: [
+              for (final a in item.after?.items ?? const <ItemAfterRef>[])
+                if (repo.findPrerequisite(a) case final found?
+                    when !found.resolved &&
+                        choices.any((c) => c.item.key == found.key))
+                  (scope: a.projectId, key: found.key),
+            ],
+          ),
+        );
+    if (choice == null || !mounted) return;
+    try {
+      final result = await c.requestItemBlocks(
+        projectId,
+        item.key,
+        choice.after,
+        seen: item.after?.id,
+      );
+      if (mounted) {
+        notice(
+          context,
+          result.saved
+              ? choice.after == null
+                    ? '先に済ませることを外す依頼を保存しました。Mac miniで処理されると現状に反映されます。'
+                    : '先に済ませることを依頼しました。Mac miniで処理されると、先の項目が片付くまで「先待ち」にまとまります。'
+              : '保存結果を確認できません。保存と反映から同じ操作を確認してください。',
+        );
+      }
+    } catch (e) {
+      if (mounted) notice(context, HubController.message(e));
+    }
+  }
+
   Future<void> unwaitItem(String projectId, NowItemRef item) async {
     if (!await confirmAction(
           '連絡待ちを外す',
@@ -3623,6 +4003,9 @@ class _HubViewState extends State<HubView> {
         // 連絡待ちの印。依頼が反映待ちの間は出さない。
         waitPending = repo.waitRequestIdFor(key) != null,
         wait = repo.intakeFeatures.wait && !project.merged,
+        // 先に済ませること（プロジェクトの項目だけ）。依頼が反映待ちの間は出さない。
+        blocksPending = repo.blocksRequestIdFor(key) != null,
+        blocks = repo.intakeFeatures.blocks && !project.merged,
         // 「いつかやる」へ移す・戻す。依頼が反映待ちの間は出さない。連絡待ちの項目には出さない。
         somedayPending = repo.somedayRequestIdFor(key) != null,
         // 休止中・完了のプロジェクトはプロジェクトごと「いつかやる」に並ぶので、項目を移すのは進行中だけ（戻すのは出す）。
@@ -3650,7 +4033,8 @@ class _HubViewState extends State<HubView> {
             !contextsPending &&
             !stepsPending &&
             !waitPending &&
-            !somedayPending,
+            !somedayPending &&
+            !blocksPending,
         calendar =
             c.access.calendarSupported &&
             validScheduleDate(item.due) &&
@@ -3686,6 +4070,12 @@ class _HubViewState extends State<HubView> {
           key: Key('unwait-$tag'),
           value: () => unwaitItem(project.id, item),
           child: const Text('連絡待ちを外す'),
+        ),
+      if (blocks && !blocksPending)
+        PopupMenuItem(
+          key: Key('blocks-$tag'),
+          value: () => blocksItem(project.id, item),
+          child: Text(item.after == null ? '先に済ませることを選ぶ' : '先に済ませることを変える・外す'),
         ),
       if (someday && !somedayPending && !waitPending && !item.waiting)
         PopupMenuItem(
@@ -3782,6 +4172,11 @@ class _HubViewState extends State<HubView> {
           padding: const EdgeInsets.symmetric(vertical: 10),
           child: Text('「いつかやる」を依頼済み（反映待ち）', style: noteStyle(context)),
         ),
+      if (blocksPending)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text('先に済ませることを依頼済み（反映待ち）', style: noteStyle(context)),
+        ),
       // 今日の3つ（この端末だけ）。
       todayToggle(project.id, key),
       PopupMenuButton<VoidCallback>(
@@ -3836,6 +4231,10 @@ class _HubViewState extends State<HubView> {
             key: Key('waiting-label-${item.key.substring(0, 12)}'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
+        // 先に済ませること（NOWの本文には件数だけを書くため、先の項目と状態をここで示す）。
+        if (project.itemOf(entry) case final item?
+            when item.after != null && !item.resolved)
+          afterNote(item),
         const SizedBox(height: 4),
         if (entry.itemKey case final key?)
           if (project.nowItems.where((i) => i.key == key).firstOrNull
@@ -3935,6 +4334,10 @@ class _HubViewState extends State<HubView> {
         // 本人が連絡待ちの印を付けた項目。一覧・件数・期日の欄から外し、「連絡待ち」にまとめる。
         // 見直す日が来たものは、先頭の「連絡待ちの確認」にも出す。
         waits = <(HubProject?, NowEntry?, NowItemRef, int)>[],
+        // 先の項目が残っている項目（先待ち）と、先の項目が片付いて取りかかれるようになった項目。
+        // 先待ちは一覧から外して下にまとめ（件数には含める）、取りかかれるようになった項目は先頭に出す。
+        blocked = <(HubProject?, NowEntry?, NowItemRef, int)>[],
+        ready = <(HubProject?, NowEntry?, NowItemRef, int)>[],
         // 次の一手の画面に出す、未解決の欄の連絡待ち（HOMEと同じく、次の一手の画面でもまとめて示す）。
         openWaits = Set<NowEntry>.identity();
     // 手間の目安での絞り込み。目安に対応した本体のときだけ使う。
@@ -3971,6 +4374,14 @@ class _HubViewState extends State<HubView> {
         }
         if (item != null && item.waiting) {
           waits.add((project, entry, item, order));
+          continue;
+        }
+        if (item != null && blockedNow(item)) {
+          blocked.add((project, entry, item, order));
+          continue;
+        }
+        if (item != null && readyNow(item) && !filtering) {
+          ready.add((project, entry, item, order));
           continue;
         }
         // 項目に結び付かない行は目安も札も分からないので、絞り込み中は出さない（「目安なし」「札なし」とも言えない）。
@@ -4231,6 +4642,14 @@ class _HubViewState extends State<HubView> {
           ),
         ),
       const SizedBox(height: 4),
+      if (ready.isNotEmpty) ...[
+        sectionHeading(
+          '動けるようになった項目（${ready.length}件）',
+          key: const Key('next-ready'),
+          note: '先に済ませることがすべて片付いた項目です。取りかかるか、「先に済ませることを変える・外す」で印を外してください。',
+        ),
+        entryCard([for (final e in ready) crossEntry(e)]),
+      ],
       if (checks.isNotEmpty) ...[
         sectionHeading(
           '連絡待ちの確認（${checks.length}件）',
@@ -4240,7 +4659,12 @@ class _HubViewState extends State<HubView> {
         ),
         entryCard([for (final e in checks) crossEntry(e)]),
       ],
-      if (projects.isEmpty && front.isEmpty && resting.isEmpty && waits.isEmpty)
+      if (projects.isEmpty &&
+          front.isEmpty &&
+          resting.isEmpty &&
+          waits.isEmpty &&
+          blocked.isEmpty &&
+          ready.isEmpty)
         Padding(
           padding: const EdgeInsets.only(top: 20),
           child: emptyText(context, '進行中のプロジェクトはありません。'),
@@ -4352,6 +4776,16 @@ class _HubViewState extends State<HubView> {
               '人に頼んだこと・返事を待っていることです。${sectionLabels[section]}の件数には入れていません。頼んだ日の古い順です。見直す日を付けると、その日に先頭の「連絡待ちの確認」へ出ます。',
         ),
         entryCard([for (final e in waitRest) crossEntry(e)]),
+      ],
+      // 先待ちのまとまり。絞り込み中は出さない（先の項目が片付くまで取りかかれないため）。
+      if (blocked.isNotEmpty && !filtering) ...[
+        sectionHeading(
+          '先待ち（${blocked.length}件）',
+          key: const Key('next-blocked'),
+          note:
+              '先に済ませることが残っている項目です。${sectionLabels[section]}の件数には含みます。先の項目が片付くと、先頭の「動けるようになった項目」に出ます。',
+        ),
+        entryCard([for (final e in blocked) crossEntry(e)]),
       ],
       if (resting.isNotEmpty) ...[
         const SizedBox(height: 24),
@@ -9321,6 +9755,327 @@ class _EffortDialogState extends State<EffortDialog> {
       ),
     ],
   );
+}
+
+/// 今日を締める。今日できたこと（完了・解決にした項目と受け取ったメモの数）と、今日の3つの残りを確かめ、
+/// 明日へのひとこと（任意・[dayNoteLines]行・[dayNoteChars]文字まで）を書く。結果のdropは今日の3つから外す項目のキー。
+/// モデルは使わない。
+class DayCloseDialog extends StatefulWidget {
+  const DayCloseDialog({
+    super.key,
+    required this.today,
+    required this.done,
+    required this.memos,
+    required this.remaining,
+    this.initialNote,
+  });
+  final String today;
+  final List<(String, NowItemRef)> done;
+  final int memos;
+  final List<TodayEntry> remaining;
+  final String? initialNote;
+  @override
+  State<DayCloseDialog> createState() => _DayCloseDialogState();
+}
+
+class _DayCloseDialogState extends State<DayCloseDialog> {
+  late final note = TextEditingController(text: widget.initialNote ?? '');
+  final drop = <String>{};
+
+  @override
+  void dispose() {
+    note.dispose();
+    super.dispose();
+  }
+
+  String? get error {
+    final text = normalizeDayNote(note.text);
+    if (text == null || validDayNote(text)) return null;
+    if (text.split('\n').length > dayNoteLines) {
+      return '$dayNoteLines行以内にしてください。';
+    }
+    if (text.length > dayNoteChars) return '$dayNoteChars文字以内にしてください。';
+    return '使えない文字が含まれています。';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final small = Theme.of(context).textTheme.bodySmall,
+        heading = Theme.of(context).textTheme.titleSmall
+            ?.copyWith(fontWeight: FontWeight.w700);
+    return HubAlertDialog(
+      key: const Key('day-close-dialog'),
+      title: Text('今日を締める（${widget.today}）'),
+      onClose: () => Navigator.pop(context),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: DialogScroll(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('今日できたこと', style: heading),
+              const SizedBox(height: 4),
+              if (widget.done.isEmpty)
+                Text('今日、完了・解決にした項目はありません。', style: small)
+              else
+                for (final (where, item) in widget.done)
+                  Padding(
+                    key: Key('day-close-done-${item.key.substring(0, 12)}'),
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text('✓ ${clip(item.text.trim(), 60)}（$where）'),
+                  ),
+              if (widget.memos > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '今日Mac miniが受け取ったメモ ${widget.memos}件',
+                    key: const Key('day-close-memos'),
+                    style: small,
+                  ),
+                ),
+              if (widget.remaining.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text('今日の3つで残っているもの', style: heading),
+                const SizedBox(height: 4),
+                for (final e in widget.remaining)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(clip(e.text, 60)),
+                        SegmentedButton<bool>(
+                          key: Key(
+                            'day-close-pick-${e.pick.itemKey.substring(0, 12)}',
+                          ),
+                          showSelectedIcon: false,
+                          style: const ButtonStyle(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          segments: const [
+                            ButtonSegment(value: false, label: Text('明日も続ける')),
+                            ButtonSegment(
+                              value: true,
+                              label: Text('今日の3つから外す'),
+                            ),
+                          ],
+                          selected: {drop.contains(e.pick.itemKey)},
+                          onSelectionChanged: (v) => setState(
+                            () => v.single
+                                ? drop.add(e.pick.itemKey)
+                                : drop.remove(e.pick.itemKey),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Text(
+                  '続けるものは、明日開いたときに持ち越しとして確かめます。「いつかやる」へ移すときは、項目の「ほかの操作」から移してください。',
+                  style: noteStyle(context),
+                ),
+              ],
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('day-close-note'),
+                controller: note,
+                minLines: 2,
+                maxLines: dayNoteLines + 1,
+                decoration: InputDecoration(
+                  labelText: '明日へのひとこと（任意）',
+                  helperText:
+                      '明日は何から始めるか、どこまで進めたかなど。$dayNoteLines行・$dayNoteChars文字まで。次に締めるか消すまで、ホームの先頭に出ます。',
+                  helperMaxLines: 3,
+                  errorText: error,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        FilledButton(
+          key: const Key('day-close-submit'),
+          onPressed: error != null
+              ? null
+              : () => Navigator.pop(context, (
+                  note: normalizeDayNote(note.text),
+                  drop: {...drop},
+                )),
+          child: const Text('締める'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 先に済ませること（別の項目1〜[max]件、先に済ませる順）を選ぶ。結果のafterがnullなら外す。
+/// [choices]は選べる先の項目（置き場・置き場の名前・項目）。[current]は今付いていて、まだ残っている先の項目。
+class BlocksDialog extends StatefulWidget {
+  const BlocksDialog({
+    super.key,
+    required this.item,
+    required this.choices,
+    required this.current,
+    this.max = itemBlocksMax,
+  });
+  final NowItemRef item;
+  final List<({String scope, String title, NowItemRef item})> choices;
+  final List<({String scope, String key})> current;
+  final int max;
+  @override
+  State<BlocksDialog> createState() => _BlocksDialogState();
+}
+
+class _BlocksDialogState extends State<BlocksDialog> {
+  late final selected = [...widget.current];
+  final query = TextEditingController();
+  static const shown = 20;
+
+  @override
+  void dispose() {
+    query.dispose();
+    super.dispose();
+  }
+
+  ({String scope, String title, NowItemRef item})? choiceOf(String key) =>
+      widget.choices.where((c) => c.item.key == key).firstOrNull;
+
+  /// 今の記録（片付いた・見当たらない先の項目も含む）から変わったか。
+  bool get changed {
+    final before = [
+      for (final a in widget.item.after?.items ?? const <ItemAfterRef>[])
+        a.itemKey,
+    ];
+    return selected.length != before.length ||
+        selected.indexed.any((e) => before[e.$1] != e.$2.key);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final words = query.text.trim().toLowerCase();
+    final matches = [
+      for (final c in widget.choices)
+        if (!selected.any((s) => s.key == c.item.key) &&
+            (words.isEmpty ||
+                c.item.text.toLowerCase().contains(words) ||
+                c.title.toLowerCase().contains(words)))
+          c,
+    ];
+    final full = selected.length >= widget.max;
+    return HubAlertDialog(
+      key: const Key('blocks-dialog'),
+      title: const Text('先に済ませること'),
+      onClose: () => Navigator.pop(context),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: DialogScroll(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.item.display,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'この項目より先に済ませる項目を${widget.max}件まで、済ませる順に選びます。先の項目が残っている間は「先待ち」にまとまり、片付くと「動けるようになった項目」に出ます。',
+                style: noteStyle(context),
+              ),
+              const SizedBox(height: 12),
+              if (selected.isEmpty)
+                Text('まだ選んでいません。', style: noteStyle(context))
+              else
+                for (final (i, s) in selected.indexed)
+                  Row(
+                    key: Key('blocks-selected-${s.key.substring(0, 12)}'),
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${i + 1}. ${clip(choiceOf(s.key)?.item.text.trim() ?? s.key, 60)}（${choiceOf(s.key)?.title ?? s.scope}）',
+                        ),
+                      ),
+                      IconButton(
+                        key: Key('blocks-remove-${s.key.substring(0, 12)}'),
+                        tooltip: '外す',
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: () => setState(() => selected.removeAt(i)),
+                      ),
+                    ],
+                  ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('blocks-search'),
+                controller: query,
+                decoration: const InputDecoration(
+                  labelText: '項目を探す',
+                  prefixIcon: Icon(Icons.search),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 4),
+              if (widget.choices.isEmpty)
+                Text('選べる項目がありません。', style: noteStyle(context))
+              else if (matches.isEmpty)
+                Text('合う項目がありません。', style: noteStyle(context))
+              else ...[
+                for (final c in matches.take(shown))
+                  ListTile(
+                    key: Key('blocks-choice-${c.item.key.substring(0, 12)}'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    enabled: !full,
+                    title: Text(
+                      c.item.display,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      '${c.title}・${c.item.section == 'next' ? '次の一手' : '未解決'}',
+                    ),
+                    onTap: () => setState(
+                      () => selected.add((scope: c.scope, key: c.item.key)),
+                    ),
+                  ),
+                if (matches.length > shown)
+                  Text(
+                    'ほか${matches.length - shown}件。語を入れて絞り込んでください。',
+                    style: noteStyle(context),
+                  ),
+              ],
+              if (full)
+                Text('${widget.max}件まで選べます。', style: noteStyle(context)),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('やめる'),
+        ),
+        if (widget.item.after != null)
+          TextButton(
+            key: const Key('blocks-clear'),
+            onPressed: () => Navigator.pop(context, (after: null)),
+            child: const Text('すべて外す'),
+          ),
+        FilledButton(
+          key: const Key('blocks-submit'),
+          onPressed: selected.isEmpty || !changed
+              ? null
+              : () => Navigator.pop(context, (after: [...selected])),
+          child: const Text('依頼する'),
+        ),
+      ],
+    );
+  }
 }
 
 /// 札を選ぶチップの並び。[options]は語彙と、語彙にないが今付いている札（「一覧にない」と添える）。

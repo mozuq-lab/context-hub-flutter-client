@@ -62,7 +62,7 @@ class VaultBridge(
     // Vault直下で読む生成物。共通方針と、本体が生成するふりかえり。
     private val rootFiles = listOf("POLICY.md", "REVIEW.md")
     // 操作journal以外の状態ファイル。保存先の設定、端末に残す書きかけのメモ、選んで深掘りの途中の状態。
-    private val nonJournalStates = setOf("settings.json", "drafts.json", "guided.json", "basket.json", "templates.json")
+    private val nonJournalStates = setOf("settings.json", "drafts.json", "guided.json", "basket.json", "templates.json", "withdrawn.json")
     // 端末に暗号化して置く秘密の名前。選んで深掘りで使うClaudeのAPIキーだけ。
     private val secretNames = setOf("anthropic-api-key")
     private val data = File(context.filesDir, "context-hub").canonicalFile.apply { mkdirs() }
@@ -348,6 +348,38 @@ class VaultBridge(
         }
         require(digestOf(resolver.openInputStream(renamed) ?: error("読取不可"), limit) == Pair(total, hash))
         return mapOf("bytes" to total, "sha256" to hash)
+    }
+    /**
+     * この端末が書いた依頼（Input/<受付ID>.md）を取り下げる。内容のSHA-256が書いたときのまま（expected）のときだけ、
+     * 依頼を消してから、添えたファイル（Input/files/<受付ID>）も消す（先に添付を消すと、受付が添付なしとして断るため）。
+     * 消したらwithdrawn、依頼がなければmissing、内容が違えば何も消さずにchangedを返す。
+     */
+    private fun withdraw(handle: String, id: String, expected: String): String {
+        val name = "$id.md"
+        if (handle == "sample") {
+            val input = safe(File(sample, "Input"))
+            if (!input.isDirectory) return "missing"
+            val file = safe(File(input, name))
+            if (!file.exists()) return "missing"
+            require(file.isFile)
+            if (digestOf(file.inputStream(), 1L shl 20).second != expected) return "changed"
+            require(file.delete() || !file.exists()); syncDir(input)
+            val attachment = safe(File(File(input, "files"), id))
+            if (attachment.isFile) { require(attachment.delete() || !attachment.exists()); syncDir(attachment.parentFile!!) }
+            return "withdrawn"
+        }
+        val root = tree(handle)
+        val input = children(root).firstOrNull { it.name == "Input" } ?: return "missing"
+        require(input.dir)
+        val file = children(input.uri).firstOrNull { it.name == name } ?: return "missing"
+        require(!file.dir)
+        val actual = digestOf(resolver.openInputStream(file.uri) ?: error("読取不可"), 1L shl 20).second
+        if (actual != expected) return "changed"
+        require(Docs.deleteDocument(resolver, file.uri))
+        val files = children(input.uri).firstOrNull { it.name == "files" && it.dir }
+        val attachment = files?.let { dir -> children(dir.uri).firstOrNull { it.name == id && !it.dir } }
+        if (attachment != null) require(Docs.deleteDocument(resolver, attachment.uri))
+        return "withdrawn"
     }
     /** Vault内のメモに添えたファイル（05_files/<年-月>/<キー>/<名前>）。名前で1段ずつたどる。 */
     private fun vaultFile(root: Uri, path: String): Entry {
@@ -643,6 +675,12 @@ class VaultBridge(
             val limit = (args["maxBytes"] as Number).toLong()
             require(limit > 0)
             return stage(tree(handle), id, source, limit)
+        }
+        if (method == "withdrawRequest") {
+            val id = args["requestId"] as String
+            val expected = args["sha256"] as String
+            require(id.matches(Regex("REQ-[a-f0-9]{32}")) && expected.matches(Regex("[a-f0-9]{64}")))
+            return withdraw(handle, id, expected)
         }
         require(method in listOf("readRequest", "writeRequest"))
         val id = args["requestId"] as String

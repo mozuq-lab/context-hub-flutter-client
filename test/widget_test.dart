@@ -6,6 +6,7 @@ import 'package:context_hub_client/ui/app.dart';
 import 'controller_test.dart' show UIAccess;
 import 'fixtures.dart';
 import 'package:context_hub_client/storage/vault_access.dart';
+import 'package:context_hub_client/core/models.dart' show digest;
 
 class MemoryUIAccess extends UIAccess {
   final states = <String, String>{}, requests = <String, String>{};
@@ -37,6 +38,19 @@ class MemoryUIAccess extends UIAccess {
     }
     requests[id] = raw;
     writes++;
+  }
+
+  @override
+  Future<String> withdrawRequest(
+    VaultLocation l,
+    String id,
+    String expectedSha256,
+  ) async {
+    final raw = requests[id];
+    if (raw == null) return 'missing';
+    if (digest(raw) != expectedSha256) return 'changed';
+    requests.remove(id);
+    return 'withdrawn';
   }
 }
 

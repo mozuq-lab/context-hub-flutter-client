@@ -49,6 +49,9 @@ class HubRepository {
   final Map<String, DateTime> _resolutionTimes = {};
   final Map<String, String> _latestResolutions = {};
 
+  /// 未解決に戻した記録のID（先の項目が一覧に見当たらないときの状態に使う）。
+  final Set<String> _reopenIds = {};
+
   /// 今も有効な「誤りとして外す」記録（項目ごとの最後の記録が外す操作のもの）。項目キー → 記録。
   final Map<
     String,
@@ -77,6 +80,19 @@ class HubRepository {
   final Map<String, DateTime> _stepTimes = {};
   final Map<String, String> _outstandingSteps = {};
   final Map<String, String> _latestSteps = {};
+
+  /// 先に済ませることの記録の作成時刻（記録IDごと）と、反映を待っている依頼・最新の記録（項目キーごと）。
+  final Map<String, DateTime> _blockTimes = {};
+  final Map<String, String> _outstandingBlocks = {};
+  final Map<String, String> _latestBlocks = {};
+
+  /// 1日の締めの記録（日ごとに最後の締め。日付の古い順）と、消したひとことの締めのID。対応前の本体では空。
+  final List<DayClose> dayCloses = [];
+  final Set<String> _dismissedDayCloses = {};
+  final Set<String> _dayCloseIds = {};
+
+  /// 反映を待っている1日の締め・ひとことを消す依頼（受付ID）。なければnull。
+  String? dayCloseRequestId;
 
   /// 反映を待っている札の語彙の変更（受付ファイルの値）。なければnull。
   /// 反映を待っている語彙の変更（好みのまとまりごと: 札のcontexts・領域のareas）。
@@ -522,6 +538,7 @@ class HubRepository {
     _readPersonChanges();
     _readMergeChanges();
     _readNowItems();
+    _readDayCloses();
     _readHistories();
     _readGitDrafts();
     _readIdeaIndex();
@@ -537,6 +554,60 @@ class HubRepository {
     _hideTakenOver();
     _readDigest();
     _readBackupChecks();
+  }
+
+  /// 1日の締めの記録（本体のday-closes）を読む。日ごとに最後の締めを残し、消したひとことの締めを控える。
+  void _readDayCloses() {
+    final pattern = RegExp(
+      r'^90_system/day-closes/(DAY-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    final closes = <DayClose>[];
+    for (final e in _files.entries) {
+      final match = pattern.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']);
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            at == null ||
+            j['source'] is! String) {
+          throw const FormatException();
+        }
+        if (j['action'] == 'close') {
+          final note = j['note'];
+          if (!validScheduleDate(j['on']) ||
+              !j.containsKey('note') ||
+              (note != null && !validDayNote(note))) {
+            throw const FormatException();
+          }
+          closes.add(
+            DayClose(j['id'] as String, j['on'] as String, note as String?, at),
+          );
+        } else if (j['action'] == 'dismiss') {
+          final target = j['close_id'];
+          if (target is! String ||
+              !RegExp(r'^DAY-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(target)) {
+            throw const FormatException();
+          }
+          _dismissedDayCloses.add(target);
+        } else {
+          throw const FormatException();
+        }
+        _dayCloseIds.add(j['id'] as String);
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    // 記録IDの順（作った順）に並べ、同じ日を締め直したときは最後の締めをその日の締めにする。
+    closes.sort((a, b) => a.id.compareTo(b.id));
+    final byDate = <String, DayClose>{};
+    for (final c in closes) {
+      byDate[c.on] = c;
+    }
+    dayCloses.addAll(
+      byDate.values.toList()..sort((a, b) => a.on.compareTo(b.on)),
+    );
   }
 
   /// アイデアの題。訂正のない短いメモ1件から作られたアイデアは、AIの言い換えではなく本人の言葉を題にする。
@@ -631,6 +702,7 @@ class HubRepository {
         }
         final id = j['id'] as String, key = j['item_key'] as String;
         _resolutionTimes[id] = at;
+        if (j['action'] == 'reopen') _reopenIds.add(id);
         final last = _latestResolutions[key];
         if (last == null || id.compareTo(last) > 0) {
           _latestResolutions[key] = id;
@@ -716,6 +788,9 @@ class HubRepository {
             ).hasMatch(rawSteps['id']))) {
       throw const FormatException();
     }
+    // 本人が付けた「先に済ませること」。旧版の一覧と付けていない項目にはない。
+    final after = _itemAfterOf(i['after']);
+    if (i['after'] != null && after == null) throw const FormatException();
     // 本人が付けた連絡待ちの印。旧版の一覧と印のない項目にはない。
     final wait = i['waiting'];
     // 本人が「いつかやる」へ移した記録。旧版の一覧と移していない項目にはない。
@@ -804,7 +879,44 @@ class HubRepository {
       somedayId: someday is Map ? someday['id'] as String : null,
       somedaySince: someday is Map ? someday['since'] as String : null,
       somedayReviewed: someday is Map ? someday['reviewed'] as String : null,
+      after: after,
     );
+  }
+
+  /// 項目一覧の`after`（本体のnowItemSchemaと同じ形）。形が合わなければnull。
+  static ItemAfter? _itemAfterOf(Object? raw) {
+    if (raw is! Map ||
+        raw.length != 2 ||
+        raw['id'] is! String ||
+        !RegExp(r'^BLK-[0-9A-HJKMNP-TV-Z]{26}$').hasMatch(raw['id']) ||
+        raw['items'] is! List) {
+      return null;
+    }
+    final list = raw['items'] as List;
+    if (list.isEmpty || list.length > itemBlocksMax) return null;
+    final items = <ItemAfterRef>[];
+    for (final a in list) {
+      if (a is! Map ||
+          a.length != 4 ||
+          a['project_id'] is! String ||
+          (a['project_id'] != unassignedScope &&
+              !projectIdPattern.hasMatch(a['project_id'])) ||
+          a['item_key'] is! String ||
+          !RegExp(r'^[a-f0-9]{64}$').hasMatch(a['item_key']) ||
+          !['next', 'open'].contains(a['section']) ||
+          a['text'] is! String) {
+        return null;
+      }
+      items.add(
+        ItemAfterRef(
+          a['project_id'] as String,
+          a['item_key'] as String,
+          a['section'] as String,
+          a['text'] as String,
+        ),
+      );
+    }
+    return ItemAfter(raw['id'] as String, items);
   }
 
   /// 本体がNOWと同時に書く項目一覧を読み、NOWの各行に項目キーを結び付ける。
@@ -914,6 +1026,33 @@ class HubRepository {
         _stepTimes[id] = at;
         final last = _latestSteps[key];
         if (last == null || id.compareTo(last) > 0) _latestSteps[key] = id;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    // 先に済ませることの記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（効いている記録は項目一覧のafterを使う）。
+    final blocksRecord = RegExp(
+      r'^90_system/item-blocks/(BLK-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = blocksRecord.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']), v = j['after'];
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['item_key'] is! String ||
+            !j.containsKey('after') ||
+            (v != null &&
+                (v is! List || v.isEmpty || v.length > itemBlocksMax)) ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _blockTimes[id] = at;
+        final last = _latestBlocks[key];
+        if (last == null || id.compareTo(last) > 0) _latestBlocks[key] = id;
       } catch (_) {
         _problem(e.key);
       }
@@ -1630,6 +1769,66 @@ class HubRepository {
 
   /// この項目の最新の手順の記録のID（外した記録を含む）。記録がなければnull。
   String? latestStepsIdFor(String itemKey) => _latestSteps[itemKey];
+
+  /// 反映を待っている、この項目への先に済ませることの依頼。
+  String? blocksRequestIdFor(String itemKey) => _outstandingBlocks[itemKey];
+
+  /// この項目の最新の先に済ませることの記録のID（外した記録を含む）。記録がなければnull。
+  String? latestBlocksIdFor(String itemKey) => _latestBlocks[itemKey];
+
+  /// 置き場（プロジェクトIDかプロジェクト未定）の項目一覧。読めない・ない置き場はnull。
+  List<NowItemRef>? itemsOf(String scope) => scope == unassignedScope
+      ? (unassignedItemsGeneratedAt == null ? null : unassignedItems)
+      : projects[scope]?.nowItemsGeneratedAt == null
+      ? null
+      : projects[scope]!.nowItems;
+
+  /// 先の項目を一覧から探す（本体のfindPrerequisiteと同じ順: キー、行動に引き取った元の行のキー、同じ欄・同じ本文が1件だけ）。
+  NowItemRef? findPrerequisite(ItemAfterRef ref) {
+    final items = itemsOf(ref.projectId);
+    if (items == null) return null;
+    final direct =
+        items.where((i) => i.key == ref.itemKey).firstOrNull ??
+        items.where((i) => i.fromKey == ref.itemKey).firstOrNull;
+    if (direct != null) return direct;
+    final same = items
+        .where((i) => i.section == ref.section && i.text == ref.text)
+        .toList();
+    return same.length == 1 ? same.single : null;
+  }
+
+  /// 先の項目の今の状態（本体のprerequisiteStateと同じ）。一覧に見当たらないときは、本人の完了・外す記録から決める。
+  PrerequisiteState prerequisiteState(ItemAfterRef ref) {
+    final found = findPrerequisite(ref);
+    if (found != null) {
+      if (!found.resolved) return PrerequisiteState.open;
+      return found.excluded
+          ? PrerequisiteState.dropped
+          : PrerequisiteState.done;
+    }
+    final last = _latestResolutions[ref.itemKey];
+    if (last == null || _reopenIds.contains(last)) {
+      return PrerequisiteState.missing;
+    }
+    return _exclusions[ref.itemKey]?.id == last
+        ? PrerequisiteState.dropped
+        : PrerequisiteState.done;
+  }
+
+  /// いま示す明日へのひとこと（本体のcurrentDayNoteと同じ）。いちばん新しい日の締めにひとことがあり、消していなければ、その締め。
+  DayClose? get currentDayNote {
+    final latest = dayCloses.lastOrNull;
+    if (latest == null ||
+        latest.note == null ||
+        _dismissedDayCloses.contains(latest.id)) {
+      return null;
+    }
+    return latest;
+  }
+
+  /// その日の締め（同じ日を締め直したときは最後の締め）。なければnull。
+  DayClose? dayCloseOn(String on) =>
+      dayCloses.where((c) => c.on == on).firstOrNull;
 
   /// 反映を待っている、この項目への場所・道具の札の依頼。
   String? contextsRequestIdFor(String itemKey) =>
@@ -2821,6 +3020,8 @@ class HubRepository {
               'client-preferences',
               'policy-keep',
               'reference-mark',
+              'item-blocks',
+              'day-close',
             ].contains(m['operation']) ||
             timestamp(m['occurred_at']) == null) {
           throw const FormatException();
@@ -2923,6 +3124,50 @@ class HubRepository {
                 !m.containsKey('expected') ||
                 (m['expected'] != null &&
                     ItemSteps.tryParse(m['expected']) == null))) {
+          throw const FormatException();
+        }
+        // 先に済ませること。afterは変更後の全体（先の項目の置き場とキー）で、nullは外す依頼。付けられるのはプロジェクトの項目だけ。
+        final itemBlocksChange = m['operation'] == 'item-blocks';
+        final blocksValueOf = m['after'];
+        if (itemBlocksChange &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                !projectIdPattern.hasMatch(m['project_id']) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('after') ||
+                (blocksValueOf != null &&
+                    (blocksValueOf is! List ||
+                        blocksValueOf.isEmpty ||
+                        blocksValueOf.length > itemBlocksMax ||
+                        !blocksValueOf.every(
+                          (a) =>
+                              a is Map &&
+                              a.length == 2 &&
+                              a['project_id'] is String &&
+                              (a['project_id'] == unassignedScope ||
+                                  projectIdPattern.hasMatch(a['project_id'])) &&
+                              a['item_key'] is String &&
+                              RegExp(r'^[a-f0-9]{64}$').hasMatch(a['item_key']),
+                        ))))) {
+          throw const FormatException();
+        }
+        // 1日の締め（本文は明日へのひとこと。なければ空）と、表示中のひとことを消す依頼（本文は空）。
+        final dayCloseChange = m['operation'] == 'day-close';
+        if (dayCloseChange &&
+            (m['confirmed'] != true ||
+                (m['action'] == 'close'
+                    ? !validScheduleDate(m['on']) ||
+                          m.containsKey('close_id') ||
+                          (normalizeDayNote(doc.body) != null &&
+                              !validDayNote(normalizeDayNote(doc.body)))
+                    : m['action'] != 'dismiss' ||
+                          m.containsKey('on') ||
+                          m['close_id'] is! String ||
+                          !RegExp(r'^DAY-[0-9A-HJKMNP-TV-Z]{26}$')
+                              .hasMatch(m['close_id']) ||
+                          doc.body.trim().isNotEmpty))) {
           throw const FormatException();
         }
         final personChange = m['operation'] == 'person-definition';
@@ -3223,6 +3468,8 @@ class HubRepository {
             effortId,
             contextId,
             stepsId,
+            blocksId,
+            dayCloseId,
             areaChangeId,
             retryId,
             referenceMarkId,
@@ -3363,6 +3610,12 @@ class HubRepository {
                   null => '手順を外す依頼',
                   final next => '手順の依頼（${next.items.length}つのうち${next.done}つ済み）',
                 }}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemBlocksChange
+              ? '${blocksValueOf == null ? '先に済ませることを外す依頼' : '先に済ませることの依頼（${(blocksValueOf as List).length}件）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : dayCloseChange
+              ? m['action'] == 'dismiss'
+                    ? '明日へのひとことを消す依頼'
+                    : '1日の締め（${m['on']}）${normalizeDayNote(doc.body) == null ? '' : ': ${clip(normalizeDayNote(doc.body)!.replaceAll('\n', ' / '), 60)}'}'
               : areaChange
               ? '${m['area'] == null ? '領域を外す依頼' : '領域の依頼（${m['area']}）'}: ${projects[m['project_id']]?.title ?? m['project_id']}'
               : organizeRetry
@@ -3554,6 +3807,29 @@ class HubRepository {
                 throw const FormatException();
               }
               stepsId = r['stepsId'] as String;
+            }
+            if (itemBlocksChange) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['blocksId'] is! String ||
+                  !RegExp(r'^BLK-[0-9A-HJKMNP-TV-Z]{26}$')
+                      .hasMatch(r['blocksId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              blocksId = r['blocksId'] as String;
+            }
+            if (dayCloseChange) {
+              final r = ack['result'] as Map;
+              if (r['action'] != m['action'] ||
+                  r['dayCloseId'] is! String ||
+                  !RegExp(r'^DAY-[0-9A-HJKMNP-TV-Z]{26}$')
+                      .hasMatch(r['dayCloseId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              dayCloseId = r['dayCloseId'] as String;
             }
             if (areaChange) {
               final r = ack['result'] as Map;
@@ -3992,6 +4268,34 @@ class HubRepository {
             outstanding: _outstandingSteps,
             what: '手順',
           );
+        }
+        if (itemBlocksChange) {
+          _itemRequest(
+            item,
+            m,
+            blocksId,
+            times: _blockTimes,
+            outstanding: _outstandingBlocks,
+            what: '先に済ませること',
+          );
+        }
+        if (dayCloseChange) {
+          if (item.state == 'waiting' ||
+              (item.state == 'accepted' &&
+                  !_dayCloseIds.contains(dayCloseId))) {
+            // 新しい依頼を後に数える（同じ端末から続けて送った依頼は、最後の依頼を待つ）。
+            final previous = dayCloseRequestId;
+            if (previous == null || previous.compareTo(item.id) < 0) {
+              dayCloseRequestId = item.id;
+            }
+            if (item.state == 'accepted') {
+              item.detail = 'Mac miniが受け取り済み。締めの記録の同期を待っています。';
+            }
+          } else if (item.state == 'accepted') {
+            item.detail = m['action'] == 'dismiss'
+                ? 'ひとことを消しました。'
+                : '締めをMac miniが記録しました。';
+          }
         }
         if (areaChange) {
           _projectRequest(
@@ -4501,6 +4805,21 @@ class HubRepository {
         'target-mismatch' => '統合先が確認した内容と違っていました。再読込して確認してください。',
         _ => '統合を受け付けられませんでした。再読込して、統合元と統合先を確認してください。',
       };
+    }
+    if (reason is Map && reason['code'] == 'blocks-refused') {
+      return switch (reason['cause']) {
+        'self' => '項目そのものは、先に済ませることにできません。',
+        'missing' => '先に済ませる項目が見つかりませんでした。同期して現状を確かめ、選び直してください。',
+        'closed' => '先に済ませる項目は、既に完了・解決しているか外しています。残っている項目を選んでください。',
+        'cycle' =>
+          '先に済ませる項目が、この項目を先に済ませることとして待っています（互いに待つと、どちらも動けなくなります）。別の項目を選んでください。',
+        _ => '先に済ませることを受け付けられませんでした。再読込して確かめてください。',
+      };
+    }
+    if (reason is Map && reason['code'] == 'day-close-refused') {
+      return reason['cause'] == 'missing'
+          ? '消す明日へのひとことが見当たりませんでした。別の端末で締め直したか、既に消してあります。'
+          : '締める日は、今日から$dayCloseBackDays日前までの日を選んでください。';
     }
     if (reason is Map && reason['code'] == 'person-overlap') {
       final other = reason['person_id'];
