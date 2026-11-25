@@ -72,6 +72,9 @@ extension HubNext on HubViewState {
             blocked =
             <(HubProject?, NowEntry?, NowItemRef, int)>[],
         ready = <(HubProject?, NowEntry?, NowItemRef, int)>[],
+            // 本人が取りかかり中の印を付けた次の一手。絞り込みに関係なく先頭にまとめる（件数には含める）。
+            progressing =
+            <(HubProject?, NowEntry?, NowItemRef, int)>[],
             // 次の一手の画面に出す、未解決の欄の連絡待ち（HOMEと同じく、次の一手の画面でもまとめて示す）。
             openWaits =
             Set<NowEntry>.identity();
@@ -114,6 +117,14 @@ extension HubNext on HubViewState {
         }
         if (item != null && blockedNow(item)) {
           blocked.add((project, entry, item, order));
+          continue;
+        }
+        if (item != null && section == 'next' && item.progressing) {
+          if (effortFits(filter, item.effort) &&
+              contextFits(contextChoice, item.contexts)) {
+            matched++;
+          }
+          progressing.add((project, entry, item, order));
           continue;
         }
         if (item != null && readyNow(item) && !filtering) {
@@ -167,6 +178,14 @@ extension HubNext on HubViewState {
       var order = 0;
       for (final item in repo.unassignedOwnActions) {
         order++;
+        if (item.progressing) {
+          if (effortFits(filter, item.effort) &&
+              contextFits(contextChoice, item.contexts)) {
+            matched++;
+          }
+          progressing.add((null, null, item, order));
+          continue;
+        }
         if (!effortFits(filter, item.effort)) continue;
         if (!contextFits(contextChoice, item.contexts)) continue;
         final b = item.scheduled
@@ -196,6 +215,13 @@ extension HubNext on HubViewState {
             : a.$4.compareTo(b.$4),
       );
     }
+    // 取りかかり中は、印を更新した日の新しい順（同じ日は始めた日の古い順）。
+    progressing.sort(
+      (a, b) => b.$3.progressUpdated!.compareTo(a.$3.progressUpdated!) != 0
+          ? b.$3.progressUpdated!.compareTo(a.$3.progressUpdated!)
+          : a.$3.progressSince!.compareTo(b.$3.progressSince!),
+    );
+    final progressLimit = repo.intakeFeatures.progressLimits?.limit;
     // 連絡待ちは頼んだ日の古い順（同じ日は置き場とNOWでの並び順）。
     // 見直す日が来た確認は絞り込みに関係なく先頭に出し、残りの連絡待ちは目安で絞り込んでいる間は出さない。
     waits.sort(
@@ -378,6 +404,16 @@ extension HubNext on HubViewState {
           ),
         ),
       const SizedBox(height: 4),
+      if (progressing.isNotEmpty) ...[
+        sectionHeading(
+          '取りかかり中（${progressing.length}件）',
+          key: const Key('next-progress'),
+          note: progressLimit != null && progressing.length > progressLimit
+              ? '取りかかり中が$progressLimit件を超えています。終えたものは完了に、手を止めているものは「取りかかり中をやめる」にすると、今の仕事が見えやすくなります。'
+              : '手を付けている項目です。区切りでは「…」の「どこまで進んだか書く」で、次に再開する位置を残せます。',
+        ),
+        entryCard([for (final e in progressing) crossEntry(e)]),
+      ],
       if (ready.isNotEmpty) ...[
         sectionHeading(
           '動けるようになった項目（${ready.length}件）',
@@ -399,6 +435,7 @@ extension HubNext on HubViewState {
           resting.isEmpty &&
           waits.isEmpty &&
           blocked.isEmpty &&
+          progressing.isEmpty &&
           ready.isEmpty)
         Padding(
           padding: const EdgeInsets.only(top: 20),

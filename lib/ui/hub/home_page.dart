@@ -17,6 +17,7 @@ import 'hub_common.dart';
 import 'hub_view.dart';
 import 'insights_section.dart';
 import 'item_actions.dart';
+import 'progress_section.dart';
 import 'today_section.dart';
 import 'weekly_page.dart';
 
@@ -275,6 +276,8 @@ extension HubHome on HubViewState {
     children.addAll(dayNoteHome());
     // 本人が今日やると決めたものを、いちばん上に置く。
     children.addAll(todaySection(compact: true));
+    // 取りかかり中の項目は、今日の3つの次に置く（手を付けているものを先に思い出す）。
+    children.addAll(progressHome());
     children.addAll(dayCloseHome());
     children.addAll(readyHome());
     // 今週の気づきは、行動につながる欄（次の一手）より前に置く。

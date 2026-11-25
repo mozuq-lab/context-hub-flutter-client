@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 git submodule update --init
-test "$(git -C vendor/context-hub rev-parse HEAD)" = e388375343c67b1f51b78eaf0bc75afd11036062
+test "$(git -C vendor/context-hub rev-parse HEAD)" = ea3ca4a7736d24ca1afb6e1c512e2402c310e2d5
 npm ci --ignore-scripts
 npm run build:protocol
 scripts/check_file_sizes.sh

@@ -13,6 +13,7 @@ import 'hub_view.dart';
 import 'insights_section.dart';
 import 'item_actions.dart';
 import 'item_rows.dart';
+import 'progress_section.dart';
 import 'project_actions.dart';
 import 'someday_page.dart';
 import 'unassigned_section.dart';
@@ -92,8 +93,15 @@ extension HubWeekly on HubViewState {
   List<(WeeklyItem, HubProject?, NowEntry?, NowItemRef)> get weeklyLingering =>
       weeklyRows(
         repo.weeklyReview?.lingering ?? const [],
-        (i, _) => !i.waiting && !i.someday && !i.scheduled,
+        (i, _) => !i.waiting && !i.someday && !i.scheduled && !i.progressing,
       );
+
+  /// 止まった取りかかり中（印を外した・ひとことを書き直して動き出した・片付けた項目は除く）。
+  List<(WeeklyItem, HubProject?, NowEntry?, NowItemRef)>
+  get weeklyStalledProgress => weeklyRows(
+    repo.weeklyReview?.progressStale ?? const [],
+    (i, _) => progressStale(i, hubToday(), progressStaleDays),
+  );
 
   /// 連絡待ちの行（印を外した項目は除く）。
   List<(WeeklyItem, HubProject?, NowEntry?, NowItemRef)> get weeklyWaiting =>
@@ -144,7 +152,10 @@ extension HubWeekly on HubViewState {
     'unassigned' =>
       repo.unassignedActionCount +
           repo.unassignedItems.where((i) => !i.action && !i.resolved).length,
-    'projects' => weeklyEmptyProjects.length + weeklyLingering.length,
+    'projects' =>
+      weeklyEmptyProjects.length +
+          weeklyLingering.length +
+          weeklyStalledProgress.length,
     'stale' => weeklyStaleProjects.length,
     'waiting' => weeklyWaiting.length,
     'dates' => weeklyDated.length,
@@ -366,6 +377,7 @@ extension HubWeekly on HubViewState {
       case 'projects':
         final empty = weeklyEmptyProjects,
             lingering = weeklyLingering,
+            stalled = weeklyStalledProgress,
             hinted = [
               for (final p in review.projects)
                 if (p.hints > 0)
@@ -408,7 +420,10 @@ extension HubWeekly on HubViewState {
             ),
           );
         }
-        if (empty.isEmpty && lingering.isEmpty && hinted.isEmpty) {
+        if (empty.isEmpty &&
+            lingering.isEmpty &&
+            stalled.isEmpty &&
+            hinted.isEmpty) {
           body.add(const SizedBox(height: 12));
           body.add(
             const Text(
@@ -452,6 +467,43 @@ extension HubWeekly on HubViewState {
               ),
             ),
           );
+        }
+        if (stalled.isNotEmpty) {
+          body.add(
+            weeklyHeading(
+              '止まった取りかかり中（${stalled.length}件）',
+              key: const Key('weekly-progress-stale'),
+            ),
+          );
+          body.add(
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                '取りかかり中のまま$progressStaleDays日以上、印もひとことも更新していない項目です。続けるなら「どこまで進んだか書く」で書き直し、手を止めているなら「取りかかり中をやめる」か「いつかやる」へ移してください。',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          );
+          body.add(
+            weeklyCard([
+              for (final r in stalled)
+                weeklyRow(
+                  r,
+                  head: '${waitingDays(r.$4.progressUpdated!, today)}日更新なし',
+                ),
+            ]),
+          );
+          if (review.progressStaleTotal > review.progressStale.length) {
+            body.add(
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'ほかに${review.progressStaleTotal - review.progressStale.length}件あります（更新の古い${review.progressStale.length}件だけを並べています）。',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            );
+          }
         }
         if (hinted.isNotEmpty) {
           body.add(weeklyHeading('片付いたかも'));

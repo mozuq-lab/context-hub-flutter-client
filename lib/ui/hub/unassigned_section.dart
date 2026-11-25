@@ -12,6 +12,7 @@ import 'hub_common.dart';
 import 'hub_view.dart';
 import 'item_actions.dart';
 import 'item_rows.dart';
+import 'progress_section.dart';
 import 'someday_page.dart';
 import 'today_section.dart';
 
@@ -195,6 +196,8 @@ extension HubUnassigned on HubViewState {
             !item.resolved,
         waitPending = repo.waitRequestIdFor(item.key) != null,
         wait = records && repo.intakeFeatures.wait,
+        progressPending = repo.progressRequestIdFor(item.key) != null,
+        progress = records && progressAvailable(item),
         somedayPending = repo.somedayRequestIdFor(item.key) != null,
         someday = records && repo.intakeFeatures.someday,
         rounds =
@@ -219,8 +222,15 @@ extension HubUnassigned on HubViewState {
             !contextsPending &&
             !stepsPending &&
             !waitPending &&
+            !progressPending &&
             !somedayPending;
     final more = <PopupMenuEntry<VoidCallback>>[
+      ...progressMenu(
+        unassignedScope,
+        item,
+        'unassigned-$tag',
+        enabled: progress && !progressPending,
+      ),
       ...stepsMenu(
         unassignedScope,
         item,
@@ -326,6 +336,8 @@ extension HubUnassigned on HubViewState {
             Text('連絡待ちを依頼済み（反映待ち）', style: noteStyle(context)),
           if (somedayPending && records)
             Text('「いつかやる」を依頼済み（反映待ち）', style: noteStyle(context)),
+          if (progressPending && records)
+            Text('取りかかり中を依頼済み（反映待ち）', style: noteStyle(context)),
           if (more.isNotEmpty)
             PopupMenuButton<VoidCallback>(
               key: Key('unassigned-more-$tag'),
@@ -383,6 +395,7 @@ extension HubUnassigned on HubViewState {
             key: Key('waiting-label-${item.key.substring(0, 12)}'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
+        if (item.progressing) progressLine(item),
         unassignedItemActions(item),
       ],
     ),

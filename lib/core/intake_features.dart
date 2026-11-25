@@ -36,6 +36,7 @@ class IntakeFeatures {
     this.stepLimits,
     this.blocksMax,
     this.dayCloseLimits,
+    this.progressLimits,
     this.referenceTitleMax,
     this.attachmentLimits,
   });
@@ -98,6 +99,15 @@ class IntakeFeatures {
 
   /// 明日へのひとことの文字数・行数の上限と、さかのぼって締められる日数（`day_close`）。対応前の本体はnull。
   final ({int maxChars, int maxLines, int backDays})? dayCloseLimits;
+
+  /// 取りかかり中のひとことの文字数の上限・HOMEで「多い」と添える件数・「止まった」とする更新のない日数（`item_progress`）。
+  /// 対応前の本体はnull。
+  final ({int noteMaxChars, int limit, int staleDays})? progressLimits;
+
+  /// 次の一手に「取りかかり中」の印と、どこまで進んだかのひとことを付け外しできる（item-progress）。
+  /// プロジェクト未定の行動に付けられるかは[unassignedRecords]で決まる。
+  bool get progress =>
+      operations.contains('item-progress') && progressLimits != null;
 
   /// 次の一手・未解決に「先に済ませること」（別の項目1〜[blocksMax]件）を付け外しできる（item-blocks）。
   /// 付けられるのはプロジェクトの項目だけで、先の項目にはプロジェクト未定の本人の行動も選べる。
@@ -325,6 +335,16 @@ class IntakeFeatures {
         },
         blocksMax: switch (m['item_blocks']) {
           {'max': final int max} when max >= 1 => max,
+          _ => null,
+        },
+        progressLimits: switch (m['item_progress']) {
+          {
+            'note_max_chars': final int chars,
+            'limit': final int limit,
+            'stale_days': final int days,
+          }
+              when chars >= 1 && limit >= 1 && days >= 1 =>
+            (noteMaxChars: chars, limit: limit, staleDays: days),
           _ => null,
         },
         dayCloseLimits: switch (m['day_close']) {

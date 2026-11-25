@@ -1236,6 +1236,46 @@ class CaptureService {
     return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
   });
 
+  /// 次の一手に「取りかかり中」の印を付ける依頼。[progress]は変更後の全体（始めた日と任意のひとこと）で、nullで外す。
+  /// [expected]は本人が見た今の印（なければnull）。本体は今の印と違えば断る（別の端末で書き直したひとことを上書きしない）。
+  Future<CaptureResult> saveItemProgress(
+    String operationId,
+    String projectId,
+    NowItemRef item,
+    ({String since, String? note})? progress, {
+    required ({String since, String? note})? expected,
+    int noteMaxChars = progressNoteChars,
+  }) => _serial(() async {
+    bool valid(({String since, String? note})? v) =>
+        v == null ||
+        (validScheduleDate(v.since) &&
+            (v.note == null || validProgressNote(v.note, noteMaxChars)));
+    if (!_uuid.hasMatch(operationId) ||
+        // プロジェクト未定の本人が追加した行動は、置き場_unassignedで依頼する。
+        (projectId != unassignedScope &&
+            !projectIdPattern.hasMatch(projectId)) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(item.key) ||
+        item.resolved ||
+        item.section != 'next' ||
+        !valid(progress) ||
+        !valid(expected) ||
+        progress == expected) {
+      throw const FormatException('項目と取りかかり中の印を確認してください。');
+    }
+    Map<String, String>? shape(({String since, String? note})? v) => v == null
+        ? null
+        : {'since': v.since, if (v.note != null) 'note': v.note!};
+    final fields = <String, dynamic>{
+      'operation': 'item-progress',
+      'project_id': projectId,
+      'item_key': item.key,
+      'progress': shape(progress),
+      'expected': shape(expected),
+      'confirmed': true,
+    };
+    return _saveRequest(operationId, digest(jsonEncode(fields)), fields, '');
+  });
+
   /// 定例の今の回（[due]）を完了する（done）・見送る（skip）依頼。本体が次の回の期日を付ける。
   Future<CaptureResult> saveItemOccurrence(
     String operationId,

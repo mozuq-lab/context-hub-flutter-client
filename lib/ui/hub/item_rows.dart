@@ -9,6 +9,7 @@ import '../parts.dart';
 import 'hub_common.dart';
 import 'hub_view.dart';
 import 'item_actions.dart';
+import 'progress_section.dart';
 import 'someday_page.dart';
 import 'today_section.dart';
 
@@ -212,6 +213,10 @@ extension HubItemRows on HubViewState {
             blocksPending =
             repo.blocksRequestIdFor(key) != null,
         blocks = repo.intakeFeatures.blocks && !project.merged,
+            // 取りかかり中（次の一手だけ）。依頼が反映待ちの間は出さない。
+            progressPending =
+            repo.progressRequestIdFor(key) != null,
+        progress = progressAvailable(item, merged: project.merged),
             // 「いつかやる」へ移す・戻す。依頼が反映待ちの間は出さない。連絡待ちの項目には出さない。
             somedayPending =
             repo.somedayRequestIdFor(key) != null,
@@ -240,11 +245,17 @@ extension HubItemRows on HubViewState {
             !contextsPending &&
             !stepsPending &&
             !waitPending &&
+            !progressPending &&
             !somedayPending &&
             !blocksPending,
-        calendar =
-            c.access.calendarSupported && validScheduleDate(item.due) && !item.resolved;
+        calendar = c.access.calendarSupported && validScheduleDate(item.due) && !item.resolved;
     final more = <PopupMenuEntry<VoidCallback>>[
+      ...progressMenu(
+        project.id,
+        item,
+        tag,
+        enabled: progress && !progressPending,
+      ),
       ...stepsMenu(project.id, item, tag, steps && !stepsPending),
       if (!scheduling)
         PopupMenuItem(
@@ -377,6 +388,7 @@ extension HubItemRows on HubViewState {
           padding: const EdgeInsets.symmetric(vertical: 10),
           child: Text('「いつかやる」を依頼済み（反映待ち）', style: noteStyle(context)),
         ),
+      if (progressPending) progressPendingNote(),
       if (blocksPending)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 10),
@@ -436,6 +448,9 @@ extension HubItemRows on HubViewState {
             key: Key('waiting-label-${item.key.substring(0, 12)}'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
+        // 取りかかり中の日数とひとこと（NOWの本文には始めた日だけを書くため、ここで示す）。
+        if (project.itemOf(entry) case final item? when item.progressing)
+          progressLine(item),
         // 先に済ませること（NOWの本文には件数だけを書くため、先の項目と状態をここで示す）。
         if (project.itemOf(entry) case final item?
             when item.after != null && !item.resolved)
