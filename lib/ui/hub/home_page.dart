@@ -752,7 +752,8 @@ extension HubHome on HubViewState {
     final items = [
       for (final p in repo.actionableProjects)
         for (final i in p.nowItems)
-          if (readyNow(i) && !i.someday && !i.waiting) (p, i),
+          // 取りかかり中の項目は「取りかかり中」に出す（本体のHOME・「次の一手」画面と同じ）。
+          if (readyNow(i) && !i.someday && !i.waiting && !i.progressing) (p, i),
     ];
     if (items.isEmpty) return const [];
     void openNext() {

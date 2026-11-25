@@ -3401,7 +3401,8 @@ class HubRepository {
             v == null ||
             (v is Map &&
                 validScheduleDate(v['since']) &&
-                (v['note'] == null || validProgressNote(v['note'])) &&
+                // ひとことの上限は対応表で変わりうるので、ここでは項目一覧と同じく広めに確かめる。
+                (v['note'] == null || validProgressNote(v['note'], 200)) &&
                 v.keys.every((k) => k == 'since' || k == 'note'));
         if (itemProgress &&
             (doc.body.trim().isNotEmpty ||

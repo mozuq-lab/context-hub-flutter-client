@@ -75,8 +75,10 @@ class _ProgressDialogState extends State<ProgressDialog> {
                 key: const Key('progress-note'),
                 controller: note,
                 autofocus: true,
-                maxLength: widget.noteMaxChars,
                 decoration: InputDecoration(
+                  // 本体と同じく、絵文字などはUTF-16の長さで数える（maxLengthは見た目の文字数で数えるため使わない）。
+                  counterText:
+                      '${note.text.trim().length}/${widget.noteMaxChars}',
                   labelText: 'どこまで進んだか（任意）',
                   hintText: '例: 見積もりの表は半分まで。残りは単価の確認',
                   helperText: '次に手を付けるときの自分へのメモです。NOWの本文と、別のAIへ渡す資料には載りません。',

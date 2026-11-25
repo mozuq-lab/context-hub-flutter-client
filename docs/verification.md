@@ -409,6 +409,13 @@
 - 取り下げは、保存を確かめた依頼で内容が保存したときのままのときだけファイルを消すこと、取り下げた依頼の操作IDで保存し直したり確かめ直したりしないこと、別のVaultの一覧に出さないこと、受付の記録が同期されてきた依頼は取り下げないこと、本体が受付を始めた（停止回復の記録がある）依頼は消さないこと、消す前の失敗では取り下げの記録を外し、消した後に応答が届かないときは取り下げたものとして扱うことを、同じテストで確認。
 - 未検証: Mac・Androidで依頼のファイルを消す動作（`VaultBridge.swift`・`VaultBridge.kt`の`withdrawRequest`）。この環境にXcode・Android SDKがなく、ビルドと実機での確認をしていません。同期（iCloud Drive・Syncthingなど）で削除がMac miniへ伝わるまでの時間と、その間に受け付けられたときの表示も、実機では確かめていません。
 
+## views.dartの分割と取りかかり中（2026-11-25）
+
+- Linux上のFlutter 3.47.9で、静的解析の指摘なし、共通テストはすべて成功。本体の固定参照は、取りかかり中（`item-progress`）を加えた本体のブランチのcommit（mozuq-lab/context-hub のPR、未マージ）です。マージ後にマージコミットへ進めます。
+- `lib/ui/views.dart`の分割は振る舞いを変えない移動で、分割前と同じテストがすべて成功すること、元のファイルの行と分割後の行を突き合わせて意図した変更（公開した名前・`setState`から`refresh`・静的定数の修飾・`build`の分岐の切り出し）だけであること、拡張の中で同じ名前の関数に解決が変わる箇所がないことを確かめた。
+- `test/progress_test.dart`で確認: 対応表（`item_progress`）と項目一覧の`progress`の読み方（不正な印は本体と同じく一覧ごと読まない）、ひとことの規則が本体と同じこと、Dartが保存した`item-progress`の依頼（付ける・見た印を添えたひとことの書き直し）を固定参照の本体が受理して項目一覧とNOWに反映し、ひとことをNOWに載せないこと（`scripts/check_request_protocol.mjs`）、画面で見た印と読み直した印が違うときや連絡待ちの項目・対応前の本体には送らないこと、「取りかかる」「どこまで進んだか書く」「取りかかり中をやめる」の操作と、ホーム・「次の一手」の先頭への表示、先に済ませることとの組み合わせ（片付いた後は取りかかり中だけに出し、先待ちの間は出さない）。
+- 未検証: Mac・Androidの実機での表示（ネイティブ側の変更はありません）。週次レビューの「止まった取りかかり中」の欄と、プロジェクト未定の行動の行での操作は、ウィジェットテストでは確かめていません。
+
 ## 再検証
 
 基本検証は `scripts/verify.sh`、release生成は `scripts/build.sh macos` と `scripts/build.sh android` です。上流protocol検査はDartテストから本体を呼び出します。GitHub Actions（`.github/workflows/ci.yml`）も、push・pull requestごとにLinux上で `scripts/verify.sh` を実行します（submoduleを含めて取得し、Node 24とFlutter 3.47.9を用意します。actionsはcommitのSHAで固定し、権限は`contents: read`だけです）。MacのSwift検査とビルド、Androidのビルドは含みません。

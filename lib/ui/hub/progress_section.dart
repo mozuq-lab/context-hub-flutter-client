@@ -43,6 +43,7 @@ extension HubProgress on HubViewState {
           item.someday ||
           blockedNow(item) ||
           repo.waitRequestIdFor(item.key) != null ||
+          repo.blocksRequestIdFor(item.key) != null ||
           repo.somedayRequestIdFor(item.key) != null) {
         return const [];
       }
@@ -164,11 +165,12 @@ extension HubProgress on HubViewState {
   }
 
   /// ホームに出す、取りかかり中の項目（印を更新した新しい順）。本体の上限を超えたら、絞るよう添える。
+  /// 連絡待ち・「いつかやる」・先待ちの項目は、それぞれの欄で示すので含めない（本体のHOME・「次の一手」画面と同じ）。
   List<Widget> progressHome() {
     if (!repo.intakeFeatures.progress) return const [];
     final items = [
       for (final e in repo.progressingItems)
-        if (!e.item.waiting && !e.item.someday) e,
+        if (!e.item.waiting && !e.item.someday && !blockedNow(e.item)) e,
     ];
     if (items.isEmpty) return const [];
     final limit = repo.intakeFeatures.progressLimits!.limit;

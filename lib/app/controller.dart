@@ -3318,8 +3318,11 @@ class HubController extends ChangeNotifier {
               ])) {
             throw StateError('先に済ませることが残っている項目は取りかかり中にできません。');
           }
-          if (parsed.waitRequestIdFor(itemKey) != null) {
-            throw StateError('この項目の連絡待ちの依頼が反映されるまで待ってから依頼してください。');
+          if (parsed.waitRequestIdFor(itemKey) != null ||
+              parsed.blocksRequestIdFor(itemKey) != null) {
+            throw StateError(
+              'この項目への連絡待ち・先に済ませることの依頼が反映されるまで待ってから依頼してください。',
+            );
           }
         }
         item = found;

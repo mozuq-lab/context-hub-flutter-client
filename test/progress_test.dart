@@ -15,6 +15,8 @@ import 'package:context_hub_client/ui/app.dart';
 import 'capture_test.dart' show TempAccess, location;
 import 'fixtures.dart';
 import 'recurring_ask_preferences_test.dart' show openMore;
+import 'blocks_day_close_withdraw_test.dart'
+    show withAfter, withResolved, nextKey, openKey;
 import 'waiting_test.dart' show withWaiting;
 import 'widget_test.dart' show MemoryUIAccess;
 import 'work_records_test.dart' show protocol, projectId;
@@ -443,5 +445,44 @@ void main() {
     await tester.pumpAndSettle();
     await openMore(tester, tag);
     expect(find.byKey(Key('progress-start-$tag')), findsNothing);
+  });
+
+  testWidgets('先に済ませることが片付いた項目に取りかかると、動けるようになった項目には重ねず、先待ちの間は取りかかり中に出さない', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 1400);
+    tester.view.devicePixelRatio = 1;
+    final access = MemoryUIAccess();
+    await access.init();
+    final after = withAfter(fixtureFiles(), 0, [(projectId, openKey)]);
+    final ready = withProgress(withResolved(after, openKey), 0);
+    access.current = fixture(ready);
+    final c = HubController(access, sampleLoader: () async => ready);
+    addTearDown(() {
+      c.dispose();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(ContextHubApp(controller: c));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('サンプルで試す'));
+    await tester.pumpAndSettle();
+    final tag = nextKey.substring(0, 12);
+    expect(find.byKey(Key('home-progress-$tag')), findsOneWidget);
+    expect(find.byKey(Key('home-ready-$tag')), findsNothing);
+    await tester.tap(find.byKey(const Key('nav-next')).last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('next-progress')), findsOneWidget);
+    expect(find.byKey(const Key('next-ready')), findsNothing);
+
+    // 先の項目が残っている間は先待ちとして扱い、取りかかり中には出さない（印は残る）。
+    access.current = fixture(withProgress(after, 0));
+    await c.reload();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('next-progress')), findsNothing);
+    expect(find.byKey(const Key('next-blocked')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('nav-home')).last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('home-progress')), findsNothing);
   });
 }

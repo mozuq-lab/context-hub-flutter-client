@@ -100,7 +100,11 @@ extension HubWeekly on HubViewState {
   List<(WeeklyItem, HubProject?, NowEntry?, NowItemRef)>
   get weeklyStalledProgress => weeklyRows(
     repo.weeklyReview?.progressStale ?? const [],
-    (i, _) => progressStale(i, hubToday(), progressStaleDays),
+    (i, _) =>
+        !i.waiting &&
+        !i.someday &&
+        !blockedNow(i) &&
+        progressStale(i, hubToday(), progressStaleDays),
   );
 
   /// 連絡待ちの行（印を外した項目は除く）。
