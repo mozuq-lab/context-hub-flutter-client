@@ -23,10 +23,14 @@
 - `lib/core/`: 上限付きsnapshotのMarkdown/frontmatter・receipt・訂正の読取、検索、context、候補一覧と方針の読取、選んで深掘りの依頼の組み立てと出力の検証（`guided.dart`）、秘密情報らしい文字列の検出（`secrets.dart`。本体と同じ規則）、Androidのホーム画面ウィジェットに出す内容（`home_widget.dart`）、判断待ちの一覧と既読の記録・通知の文（`attention.dart`）、期日の通知で数える項目と通知の文（`due_notice.dart`）。
 - `lib/ai/`: 選んで深掘りのClaude API呼び出し（HTTPS）と、テストで差し替える外部とのやり取りの束ね（`GuidedServices`）。
 - `lib/storage/`: OSアクセス契約、本文を含まない操作journal、固定REQ IDによる保存確認、候補の採用・却下・適用停止要求の保存、選んで深掘りの途中の状態（`guided.json`）とAPIキーの保管、文脈かご（`basket.json`）、メモのひな形（`templates.json`）。状態ファイルを増やすときは、Dart・Swift・Kotlinの操作journalから除く一覧（`nonJournalStates`）にも加える。
-- `lib/app/` / `lib/ui/`: 共通画面、Vault切替の応答管理、安全なMarkdownリンク。`lib/app/attention_check.dart`は、Androidでアプリを閉じている間に動く確認待ちと期日の確認（`lib/main.dart`の`attentionCheck`から呼ぶ。読むだけで書かない）。
+- `lib/app/` / `lib/ui/`: 共通画面、Vault切替の応答管理、安全なMarkdownリンク。`lib/app/attention_check.dart`は、Androidでアプリを閉じている間に動く確認待ちと期日の確認（`lib/main.dart`の`attentionCheck`から呼ぶ。読むだけで書かない）。`lib/ui/views.dart`はホームの画面・ダイアログ・表示用の関数をまとめて公開する入口（`export`だけ）で、中身は次に分けている。ほかの画面とテストは`views.dart`を読み込めばよい。
+  - `lib/ui/hub/`: ホームの各画面。`hub_view.dart`の`HubViewState`が状態（検索条件・表示件数・絞り込み）と画面の切り替え（`build`）だけを持ち、画面ごとの組み立てと操作は同じフォルダーの拡張（`extension HubNext on HubViewState`など）に置く。拡張から描き直すときは`setState`ではなく`refresh`を呼び、状態を足すときは`HubViewState`にフィールドを足す。画面は`home_page.dart`（ホーム）・`next_page.dart`（次の一手）・`project_page.dart`（プロジェクト）・`search_page.dart`（検索・文脈かご）・`weekly_page.dart`（週次レビュー）・`someday_page.dart`（いつかやる）・`people_page.dart`（人ごとの見返し）・`intake_page.dart`（保存と反映）、項目の行とボタンは`item_rows.dart`、項目への操作は`item_actions.dart`、プロジェクトへの操作は`project_actions.dart`。ホームと「次の一手」に出す欄は`today_section.dart`（今日の3つ）・`day_close_section.dart`（1日の締め）・`insights_section.dart`（今週の気づき）・`unassigned_section.dart`（プロジェクト未定）・`progress_section.dart`（取りかかり中）、画面をまたいで使う部品（見出し・確認・ページ送りなど）は`hub_common.dart`。
+  - `lib/ui/dialogs/`: 入力・確認のダイアログ（1つのダイアログに1ファイル）。
+  - `lib/ui/record_view.dart`（記録の画面）、`lib/ui/labels.dart`（日時・状態の表示の文言）、`lib/ui/save_checks.dart`（保存前の秘密情報の確認と注意の枠）。
+  - 1ファイルの目安は1,500行。`scripts/check_file_sizes.sh`（`scripts/verify.sh`とCIから呼ぶ）が超えたファイルを警告として示す（検証は止めない）。機能を足すときは、既存のファイルに追記し続けずに、画面・ダイアログ・機能ごとのファイルに分ける。
 - `macos/Runner/VaultBridge.swift` / `android/app/src/main/kotlin/.../VaultBridge.kt`: 限定されたネイティブアクセス（MethodChannel）。`HomeScreen.kt`はAndroidのホーム画面ウィジェットとアイコン長押しのショートカット。`AttentionCheck.kt`はAndroidの確認待ちと期日の通知（数時間おきの確認の登録と、お知らせの種類ごとの通知の表示）。
 - `vendor/context-hub`: 本体の公開commitをsubmoduleで固定。protocol検査とfixture生成に使う。
-- `scripts/`: 検証（`verify.sh`）、release生成（`build.sh`）、protocol検査とfixture生成のNodeスクリプト、MacのSwift snapshot検査（`test_macos_snapshot.py`）、両OSのアプリアイコンの書き出し（`generate_icons.mjs`。PNGの描画にPlaywrightのChromiumを使う）。
+- `scripts/`: 検証（`verify.sh`）、ファイルの行数の確認（`check_file_sizes.sh`）、release生成（`build.sh`）、protocol検査とfixture生成のNodeスクリプト、MacのSwift snapshot検査（`test_macos_snapshot.py`）、両OSのアプリアイコンの書き出し（`generate_icons.mjs`。PNGの描画にPlaywrightのChromiumを使う）。
 
 データ処理と保存の設計は[構成と制限](docs/architecture.md)、権限とデータ保全は[SECURITY.md](SECURITY.md)を参照してください。
 
@@ -48,8 +52,9 @@ scripts/verify.sh
 
 1. submoduleを取得し、`vendor/context-hub` が固定commitであることを確認する。
 2. `npm ci --ignore-scripts` と `npm run build:protocol` で本体のcoreをビルドする。
-3. `flutter pub get`、`flutter analyze --no-pub`、`flutter test --no-pub` を実行する。
-4. Macでは `scripts/test_macos_snapshot.py` でSwiftのsnapshot検査を行う。
+3. `scripts/check_file_sizes.sh` で、`lib/` のDartファイルが目安の行数（1,500行）を超えていないかを確かめる（超えても警告だけ）。
+4. `flutter pub get`、`flutter analyze --no-pub`、`flutter test --no-pub` を実行する。
+5. Macでは `scripts/test_macos_snapshot.py` でSwiftのsnapshot検査を行う。
 
 `flutter test` のprotocolテストは、Dartが保存したcapture・採用・却下（同じ対象を指すプロジェクト案をまとめた採用・却下と、先に届いた採用の後のまとめた依頼を本体が受け付ける場合・受け付けられない場合の記録を含む）・適用停止・プロジェクト作成・プロジェクト状態変更・プロジェクトの統合と取り消し・NOWを生成版に戻す依頼・完了報告・誤りとして外す報告・期日と見直す日の依頼・下書きの見送りと入力化・アイデアを束ねる・別の話にする依頼・今週の気づきへの反応と問いへの答え（meta付きのcapture）・人の登録・変更・外す依頼・本人が次の一手に足す行動（`kind: action`のcapture。AIの読み取りを引き取るものを含む）のREQを固定参照の本体（Node）へ渡し、受理・本文/出典一致・重複排除・方針と履歴の再同期を確認します。実モデルは使いません。
 

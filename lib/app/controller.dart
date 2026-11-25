@@ -2531,6 +2531,7 @@ class HubController extends ChangeNotifier {
             parsed.contextsRequestIdFor(itemKey) != null ||
             parsed.stepsRequestIdFor(itemKey) != null ||
             parsed.waitRequestIdFor(itemKey) != null ||
+            parsed.progressRequestIdFor(itemKey) != null ||
             parsed.somedayRequestIdFor(itemKey) != null ||
             parsed.correctionRequestIdForInput(found.inputId) != null) {
           throw StateError('この行動への依頼が反映待ちです。保存と反映を確認してください。');
@@ -3255,6 +3256,89 @@ class HubController extends ChangeNotifier {
         projectId,
         item,
         since == null ? null : (who: who, since: since),
+      ),
+    );
+  }
+
+  /// 次の一手の「取りかかり中」の印を依頼する。[progress]は変更後の全体（始めた日とひとこと）で、nullなら印を外す。
+  /// [expected]は本人が画面で見た印（なければnull）。読み直した項目の印と違えば送らず、本体にも添えて、
+  /// 別の端末で書き直したひとことを古い表示から上書きしない。
+  Future<CaptureResult> requestItemProgress(
+    String projectId,
+    String itemKey, {
+    required ({String since, String? note})? progress,
+    required ({String since, String? note})? expected,
+  }) {
+    if (progress == expected) throw StateError('取りかかり中は変わっていません。');
+    late NowItemRef item;
+    late int noteMax;
+    return _confirmedRequest(
+      (parsed) {
+        final features = parsed.intakeFeatures;
+        if (!features.progress) {
+          throw StateError('Mac miniの本体が取りかかり中に対応していません。本体を更新してください。');
+        }
+        noteMax = features.progressLimits!.noteMaxChars;
+        if (progress != null &&
+            (!validScheduleDate(progress.since) ||
+                progress.since.compareTo(hubToday()) > 0 ||
+                (progress.note != null &&
+                    !validProgressNote(progress.note, noteMax)))) {
+          throw StateError('始めた日とひとことを確認してください（ひとことは1行・$noteMax文字まで）。');
+        }
+        final found = _recordTarget(parsed, projectId, itemKey);
+        if (found == null || found.resolved || found.section != 'next') {
+          throw StateError('現状が更新されています。表示を確認してから操作してください。');
+        }
+        final current = found.progressing
+            ? (since: found.progressSince!, note: found.progressNote)
+            : null;
+        if (current != expected) {
+          throw StateError('取りかかり中の印が別の端末で変わっています。表示を確認してから操作してください。');
+        }
+        if (parsed.progressRequestIdFor(itemKey) != null) {
+          throw StateError('この項目の取りかかり中は依頼済みです。保存と反映を確認してください。');
+        }
+        // 完了・解決の報告や「いつかやる」の依頼が先に反映されると、本体は取りかかり中の依頼を断る。
+        if (parsed.itemRequestIdFor(itemKey) != null ||
+            parsed.somedayRequestIdFor(itemKey) != null) {
+          throw StateError('この項目への別の依頼が反映されるまで待ってから依頼してください。');
+        }
+        // 今は手を動かせない項目には新しく付けない（付いている印のひとことの書き直しと、外すのは送れる）。本体と同じ。
+        if (progress != null && current == null) {
+          if (found.waiting) {
+            throw StateError('連絡待ちの項目は取りかかり中にできません。返事が来たら連絡待ちを外してください。');
+          }
+          if (found.someday) {
+            throw StateError('「いつかやる」の項目は取りかかり中にできません。先に元の欄へ戻してください。');
+          }
+          if (found.after != null &&
+              !blockSettled([
+                for (final a in found.after!.items) parsed.prerequisiteState(a),
+              ])) {
+            throw StateError('先に済ませることが残っている項目は取りかかり中にできません。');
+          }
+          if (parsed.waitRequestIdFor(itemKey) != null ||
+              parsed.blocksRequestIdFor(itemKey) != null) {
+            throw StateError(
+              'この項目への連絡待ち・先に済ませることの依頼が反映されるまで待ってから依頼してください。',
+            );
+          }
+        }
+        item = found;
+        // 外した記録も含む最新の記録IDを含め、同じ内容の再試行だけを同じ操作にする。ひとことは長いので要約する。
+        final to = progress == null
+            ? 'none'
+            : '${progress.since}/${progress.note == null ? '-' : digest(progress.note!).substring(0, 16)}';
+        return 'progress/$projectId/$itemKey/${parsed.latestProgressIdFor(itemKey) ?? '-'}/${found.progressId ?? '-'}/$to';
+      },
+      (service, parsed, operation) => service.saveItemProgress(
+        operation,
+        projectId,
+        item,
+        progress,
+        expected: expected,
+        noteMaxChars: noteMax,
       ),
     );
   }

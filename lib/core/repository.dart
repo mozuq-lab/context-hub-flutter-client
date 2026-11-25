@@ -104,6 +104,11 @@ class HubRepository {
   final Map<String, String> _outstandingWaits = {};
   final Map<String, String> _latestWaits = {};
 
+  /// 取りかかり中の記録の作成時刻（記録IDごと）と、反映を待っている印の依頼・最新の記録（項目キーごと）。
+  final Map<String, DateTime> _progressTimes = {};
+  final Map<String, String> _outstandingProgress = {};
+  final Map<String, String> _latestProgress = {};
+
   /// 「いつかやる」へ移した記録の作成時刻（記録IDごと）と、反映を待っている依頼・最新の記録（項目キーごと）。
   final Map<String, DateTime> _somedayTimes = {};
   final Map<String, String> _outstandingSomedays = {};
@@ -240,6 +245,26 @@ class HubRepository {
     for (final i in unassignedItems)
       if (i.action && i.waiting) i,
   ];
+
+  /// 取りかかり中の印が付いた次の一手（進行中のプロジェクトと、プロジェクト未定の本人の行動）。印を更新した日の新しい順。
+  /// 連絡待ち・「いつかやる」の項目も含む（印は付いたまま。表示する側で分ける）。プロジェクトがnullの項目はプロジェクト未定の行動。
+  List<({HubProject? project, NowItemRef item})> get progressingItems {
+    final out = <({HubProject? project, NowItemRef item})>[
+      for (final p in actionableProjects)
+        for (final i in p.nowItems)
+          if (i.progressing && i.section == 'next') (project: p, item: i),
+      for (final i in unassignedItems)
+        if (i.action && i.progressing && i.section == 'next')
+          (project: null, item: i),
+    ];
+    out.sort((a, b) {
+      final updated = b.item.progressUpdated!.compareTo(a.item.progressUpdated!);
+      return updated != 0
+          ? updated
+          : a.item.progressSince!.compareTo(b.item.progressSince!);
+    });
+    return out;
+  }
 
   /// プロジェクトを決めずに本人が追加した行動のうち、「いつかやる」へ移したものの数。
   int get unassignedSomedayCount => [
@@ -793,6 +818,25 @@ class HubRepository {
     if (i['after'] != null && after == null) throw const FormatException();
     // 本人が付けた連絡待ちの印。旧版の一覧と印のない項目にはない。
     final wait = i['waiting'];
+    // 本人が付けた取りかかり中の印。旧版の一覧と印のない項目にはない。
+    final progress = i['progress'];
+    if (progress != null &&
+        (progress is! Map ||
+            progress.keys.any(
+              (k) => !const ['id', 'since', 'updated', 'note'].contains(k),
+            ) ||
+            progress['id'] is! String ||
+            !RegExp(
+              r'^PROG-[0-9A-HJKMNP-TV-Z]{26}$',
+            ).hasMatch(progress['id']) ||
+            !validScheduleDate(progress['since']) ||
+            !validScheduleDate(progress['updated']) ||
+            (progress['note'] != null &&
+                (progress['note'] is! String ||
+                    (progress['note'] as String).isEmpty ||
+                    (progress['note'] as String).length > 200)))) {
+      throw const FormatException();
+    }
     // 本人が「いつかやる」へ移した記録。旧版の一覧と移していない項目にはない。
     final someday = i['someday'];
     if ((someday != null &&
@@ -876,6 +920,10 @@ class HubRepository {
       waitingId: wait is Map ? wait['id'] as String : null,
       waitingSince: wait is Map ? wait['since'] as String : null,
       waitingWho: wait is Map ? wait['who'] as String? : null,
+      progressId: progress is Map ? progress['id'] as String : null,
+      progressSince: progress is Map ? progress['since'] as String : null,
+      progressUpdated: progress is Map ? progress['updated'] as String : null,
+      progressNote: progress is Map ? progress['note'] as String? : null,
       somedayId: someday is Map ? someday['id'] as String : null,
       somedaySince: someday is Map ? someday['since'] as String : null,
       somedayReviewed: someday is Map ? someday['reviewed'] as String : null,
@@ -1082,6 +1130,32 @@ class HubRepository {
         _waitTimes[id] = at;
         final last = _latestWaits[key];
         if (last == null || id.compareTo(last) > 0) _latestWaits[key] = id;
+      } catch (_) {
+        _problem(e.key);
+      }
+    }
+    // 取りかかり中の記録。依頼の反映を確かめる時刻と、項目ごとの最新の記録IDだけを読む（有効な印は項目一覧のprogressを使う）。
+    final progressRecord = RegExp(
+      r'^90_system/item-progress/(PROG-[0-9A-HJKMNP-TV-Z]{26})\.json$',
+    );
+    for (final e in _files.entries) {
+      final match = progressRecord.firstMatch(e.key);
+      if (match == null) continue;
+      try {
+        final j = jsonDecode(e.value) as Map<String, dynamic>;
+        final at = timestamp(j['created_at']), g = j['progress'];
+        if (j['schema_version'] != 1 ||
+            j['id'] != match.group(1) ||
+            j['item_key'] is! String ||
+            !j.containsKey('progress') ||
+            (g != null && (g is! Map || !validScheduleDate(g['since']))) ||
+            at == null) {
+          throw const FormatException();
+        }
+        final id = j['id'] as String, key = j['item_key'] as String;
+        _progressTimes[id] = at;
+        final last = _latestProgress[key];
+        if (last == null || id.compareTo(last) > 0) _latestProgress[key] = id;
       } catch (_) {
         _problem(e.key);
       }
@@ -1978,6 +2052,12 @@ class HubRepository {
   /// この項目の最新の連絡待ちの記録のID（外した記録を含む）。記録がなければnull。
   String? latestWaitIdFor(String itemKey) => _latestWaits[itemKey];
 
+  /// 反映を待っている、この項目への取りかかり中の依頼（付ける・ひとことを書き直す・外す）。
+  String? progressRequestIdFor(String itemKey) => _outstandingProgress[itemKey];
+
+  /// この項目の最新の取りかかり中の記録のID（外した記録を含む）。記録がなければnull。
+  String? latestProgressIdFor(String itemKey) => _latestProgress[itemKey];
+
   /// 反映を待っている、この項目への「いつかやる」の依頼（移す・そのまま・戻す）。
   String? somedayRequestIdFor(String itemKey) => _outstandingSomedays[itemKey];
 
@@ -2170,6 +2250,13 @@ class HubRepository {
         lingering: items(j['lingering'], 'lingering'),
         lingeringTotal: count(j['lingering_total']),
         waiting: items(j['waiting'], 'waiting'),
+        // 止まった取りかかり中は、1件でもあるときだけ書かれる（対応前の本体にはない）。
+        progressStale: j['progress_stale'] == null
+            ? const []
+            : items(j['progress_stale'], 'progress'),
+        progressStaleTotal: j['progress_stale_total'] == null
+            ? 0
+            : count(j['progress_stale_total']),
         dated: items(j['dated'], 'dated'),
         datedTotal: count(j['dated_total']),
         somedayTotal: count(someday['total']),
@@ -3031,6 +3118,7 @@ class HubRepository {
               'item-effort',
               'item-contexts',
               'item-wait',
+              'item-progress',
               'item-someday',
               'someday-review',
               'weekly-review',
@@ -3307,6 +3395,29 @@ class HubRepository {
                         ))))) {
           throw const FormatException();
         }
+        final itemProgress = m['operation'] == 'item-progress';
+        final progressValue = m['progress'], expectedProgress = m['expected'];
+        bool progressShape(Object? v) =>
+            v == null ||
+            (v is Map &&
+                validScheduleDate(v['since']) &&
+                // ひとことの上限は対応表で変わりうるので、ここでは項目一覧と同じく広めに確かめる。
+                (v['note'] == null || validProgressNote(v['note'], 200)) &&
+                v.keys.every((k) => k == 'since' || k == 'note'));
+        if (itemProgress &&
+            (doc.body.trim().isNotEmpty ||
+                m['confirmed'] != true ||
+                m['project_id'] is! String ||
+                (m['project_id'] != unassignedScope &&
+                    !projectIdPattern.hasMatch(m['project_id'])) ||
+                m['item_key'] is! String ||
+                !RegExp(r'^[a-f0-9]{64}$').hasMatch(m['item_key']) ||
+                !m.containsKey('progress') ||
+                !m.containsKey('expected') ||
+                !progressShape(progressValue) ||
+                !progressShape(expectedProgress))) {
+          throw const FormatException();
+        }
         final itemSomeday = m['operation'] == 'item-someday';
         final somedayValue = m['someday'];
         if (itemSomeday &&
@@ -3501,6 +3612,7 @@ class HubRepository {
             retryId,
             referenceMarkId,
             waitId,
+            progressId,
             somedayId,
             reviewId,
             weeklyReviewId,
@@ -3653,6 +3765,8 @@ class HubRepository {
               ? '${contextsValueOf == null ? '場所・道具の札を外す依頼' : '場所・道具の札の依頼（${contextsLabel(List<String>.from(contextsValueOf as List))}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemWait
               ? '${waitValue == null ? '連絡待ちを外す依頼' : '連絡待ちの依頼（${(waitValue as Map)['who'] == null ? '' : '相手: ${waitValue['who']}・'}頼んだ日 ${waitValue['since']}）'}: ${_itemTitle(m['project_id'], m['item_key'])}'
+              : itemProgress
+              ? '${progressValue == null ? '取りかかり中をやめる依頼' : expectedProgress == null ? '取りかかり中にする依頼' : 'どこまで進んだかの依頼${(progressValue as Map)['note'] is String ? '（${progressValue['note']}）' : ''}'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : itemSomeday
               ? '${somedayValue == null ? '「いつかやる」から戻す依頼' : (somedayValue as Map)['reviewed'] != null && somedayValue['reviewed'] != somedayValue['since'] ? '「いつかやる」を見直した（そのまま）' : '「いつかやる」へ移す依頼'}: ${_itemTitle(m['project_id'], m['item_key'])}'
               : somedayReview
@@ -3921,6 +4035,19 @@ class HubRepository {
                 throw const FormatException();
               }
               waitId = r['waitId'] as String;
+            }
+            if (itemProgress) {
+              final r = ack['result'] as Map;
+              if (r['projectId'] != m['project_id'] ||
+                  r['itemKey'] != m['item_key'] ||
+                  r['progressId'] is! String ||
+                  !RegExp(
+                    r'^PROG-[0-9A-HJKMNP-TV-Z]{26}$',
+                  ).hasMatch(r['progressId']) ||
+                  r['deduped'] is! bool) {
+                throw const FormatException();
+              }
+              progressId = r['progressId'] as String;
             }
             if (itemSomeday) {
               final r = ack['result'] as Map;
@@ -4374,6 +4501,16 @@ class HubRepository {
             times: _waitTimes,
             outstanding: _outstandingWaits,
             what: '連絡待ち',
+          );
+        }
+        if (itemProgress) {
+          _itemRequest(
+            item,
+            m,
+            progressId,
+            times: _progressTimes,
+            outstanding: _outstandingProgress,
+            what: '取りかかり中',
           );
         }
         if (itemSomeday) {

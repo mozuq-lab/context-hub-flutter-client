@@ -155,6 +155,10 @@ class NowItemRef {
     this.waitingId,
     this.waitingSince,
     this.waitingWho,
+    this.progressId,
+    this.progressSince,
+    this.progressUpdated,
+    this.progressNote,
     this.somedayId,
     this.somedaySince,
     this.somedayReviewed,
@@ -179,6 +183,13 @@ class NowItemRef {
 
   /// 連絡待ちの印が付いている（片付いた項目には付かない）。「いつかやる」の項目は連絡待ちとして扱わない。
   bool get waiting => waitingSince != null && !resolved && !someday;
+
+  /// 本人が付けた「取りかかり中」の印（本体のitem-progress）。効いている記録のID・始めた日・最後に印を更新した日（YYYY-MM-DD）と、
+  /// どこまで進んだかのひとこと（任意）。印のない項目や、取りかかり中を知らない本体ではnull。ひとことはNOWの本文には載らない。
+  final String? progressId, progressSince, progressUpdated, progressNote;
+
+  /// 取りかかり中の印が付いている（片付いた項目には付かない）。
+  bool get progressing => progressSince != null && !resolved;
 
   /// 本人が付けた手間の目安（[itemEfforts]）。目安のない項目や、目安を知らない本体ではnull。
   final String? effort;
@@ -233,7 +244,7 @@ const itemEffortLabels = {
 };
 
 /// 本人が付けた日付・手間の目安の表示（本体のNOW・HOMEの行末と同じ並び）。どれもなければ空文字。
-/// 連絡待ちは相手と日数を添えたwaitingLabelで別の行に示すので、ここには含めない。
+/// 連絡待ちは相手と日数を添えたwaitingLabelで、取りかかり中は日数とひとことを添えたprogressDetailで別の行に示すので、ここには含めない。
 /// 本体がNOWの本文に書かない置き場（プロジェクト未定の行動）で、行の下に示す。相手の名前は含めない。
 String itemRecordLabel(NowItemRef item) => [
   if (item.due != null)
@@ -243,6 +254,37 @@ String itemRecordLabel(NowItemRef item) => [
   if (item.contexts.isNotEmpty) contextsLabel(item.contexts),
   if (item.steps case final steps?) steps.label,
 ].join('・');
+
+/// 本体と同じ、取りかかり中のひとことの文字数の上限（PROGRESS_NOTE_CHARS）。本体の一覧（`item_progress`）が優先する。
+const progressNoteChars = 80;
+
+/// 本体と同じ、印もひとことも更新していない取りかかり中を「止まった」とみなす日数（PROGRESS_STALE_DAYS）。
+const progressStaleDaysDefault = 14;
+
+/// 本体と同じ、取りかかり中のひとこと（progressNoteSchema）: 1行・前後に空白なし・1〜[max]文字。
+bool validProgressNote(Object? note, [int max = progressNoteChars]) =>
+    note is String &&
+    note.isNotEmpty &&
+    note.length <= max &&
+    note.trim() == note &&
+    !RegExp(r'[\p{Cc}\u2028\u2029]', unicode: true).hasMatch(note);
+
+/// 本体のNOWの行末と同じ、取りかかり中の表示（ひとことは含めない）。
+String progressLabel(NowItemRef item) => '取りかかり中 ${item.progressSince}から';
+
+/// 印もひとことも[staleDays]日以上更新していない取りかかり中か。
+bool progressStale(NowItemRef item, String today, int staleDays) =>
+    item.progressing && waitingDays(item.progressUpdated!, today) >= staleDays;
+
+/// 取りかかり中の詳しい表示（本体のprogressDetailと同じ: 始めてからの日数、止まっていれば更新のない日数、ひとこと）。
+String progressDetail(NowItemRef item, String today, int staleDays) {
+  final quiet = waitingDays(item.progressUpdated!, today);
+  return [
+    '取りかかり中 ${item.progressSince}から${waitingDays(item.progressSince!, today)}日',
+    if (quiet >= staleDays) '$quiet日更新なし',
+    if (item.progressNote case final note?) 'どこまで: $note',
+  ].join('・');
+}
 
 /// 本体と同じ、先に済ませることにできる項目の数の上限（ITEM_BLOCKS_MAX）。
 const itemBlocksMax = 3;
@@ -1633,6 +1675,8 @@ class WeeklyReview {
     required this.lingering,
     required this.lingeringTotal,
     required this.waiting,
+    this.progressStale = const [],
+    this.progressStaleTotal = 0,
     required this.dated,
     required this.datedTotal,
     required this.somedayTotal,
@@ -1647,6 +1691,11 @@ class WeeklyReview {
   final List<WeeklyProject> projects;
   final List<WeeklyItem> lingering, waiting, dated;
   final int lingeringTotal, datedTotal, somedayTotal, somedayStale;
+
+  /// 止まった取りかかり中（印もひとことも長く更新していない次の一手。更新の古い順）と、その総数。対応前の本体では空。
+  /// 行の日付（[WeeklyItem.date]）は始めた日。
+  final List<WeeklyItem> progressStale;
+  final int progressStaleTotal;
 
   /// 最後に見直してから[today]までの日数。記録がなければnull。
   int? daysSinceReview(String today) =>
