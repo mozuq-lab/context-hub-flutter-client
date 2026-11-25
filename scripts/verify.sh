@@ -5,6 +5,7 @@ git submodule update --init
 test "$(git -C vendor/context-hub rev-parse HEAD)" = e388375343c67b1f51b78eaf0bc75afd11036062
 npm ci --ignore-scripts
 npm run build:protocol
+scripts/check_file_sizes.sh
 flutter_bin="${FLUTTER_BIN:-flutter}"
 "$flutter_bin" pub get
 "$flutter_bin" analyze --no-pub
