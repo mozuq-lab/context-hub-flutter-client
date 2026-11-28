@@ -4,7 +4,7 @@ name: リリース
 # タグ v<version>（例: v0.3.1）を付けたGitHub Releaseとして公開する。
 # 署名用のSecretsがなければ、Androidは一時的な鍵、Macはad-hoc署名でビルドする（README「リリースの自動公開」）。
 #
-# - push（main・pubspec.yaml の変更）: versionが前のcommitから変わり、そのタグがまだなければ公開する。
+# - push（main・pubspec.yaml の変更）: タグ v<version> がまだなければ公開する（失敗した回も次の変更で公開し直す）。
 # - workflow_dispatch: 手動で実行する。publishを外すと公開せずにビルドだけ行う（Secretsの確認用）。
 # - pull_request: ビルドが通るかだけを確かめる。Secretsは使わず、公開もしない。
 on:
@@ -56,12 +56,11 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
-          BEFORE: ${{ github.event.before }}
           INPUT_PUBLISH: ${{ inputs.publish }}
         run: |
           set -euo pipefail
           read_version() {
-            sed -n -E 's/^version:[[:space:]]*["'\'']?([^"'\''[:space:]]+)["'\'']?[[:space:]]*$/\1/p' | head -n 1
+            sed -n -E 's/^version:[[:space:]]*["'\'']?([^"'\''#[:space:]]+)["'\'']?[[:space:]]*(#.*)?$/\1/p' | head -n 1
           }
           full=$(read_version < pubspec.yaml)
           if [[ ! "$full" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)\+([0-9]+)$ ]]; then
@@ -86,17 +85,7 @@ jobs:
               fi
               ;;
             push)
-              previous=''
-              if [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]] \
-                && git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
-                previous=$(git show "$BEFORE:pubspec.yaml" 2>/dev/null | read_version || true)
-              fi
-              if [[ "$previous" == "$full" ]]; then
-                echo "::notice::version（$full）が変わっていないため、公開しません。"
-                build=false
-              else
-                publish=true
-              fi
+              publish=true
               ;;
           esac
 
@@ -105,7 +94,14 @@ jobs:
               echo "::error::公開は main からだけ行えます（今のref: $REF）。ビルドだけ試すときは publish を外してください。"
               exit 1
             fi
-            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            # --exit-code は、見つからないときだけ2を返す。それ以外の失敗は止める。
+            found=0
+            git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || found=$?
+            if [[ "$found" != 0 && "$found" != 2 ]]; then
+              echo "::error::タグ $tag があるかを確かめられませんでした（git ls-remote の終了コード: $found）。"
+              exit 1
+            fi
+            if [[ "$found" == 0 ]]; then
               if [[ "$EVENT" == push ]]; then
                 echo "::notice::タグ $tag はすでにあるため、公開しません。"
                 build=false
@@ -225,6 +221,10 @@ jobs:
           certs=$("$build_tools/apksigner" verify --print-certs artifacts/context-hub-client-android.apk)
           printf '%s\n' "$certs"
           digest=$(printf '%s\n' "$certs" | sed -n -E 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)$/\1/p' | head -n 1)
+          if [[ -z "$digest" ]]; then
+            echo '::error::APKの署名証明書を確かめられませんでした。'
+            exit 1
+          fi
           echo "certificate=$digest" >> "$GITHUB_OUTPUT"
           mkdir -p dist
           mv artifacts/context-hub-client-android.apk "dist/context-hub-client-android-v$VERSION.apk"
@@ -329,8 +329,9 @@ jobs:
           app='artifacts/ContextHub Client.app'
           submission="$RUNNER_TEMP/notarize.zip"
           ditto -c -k --keepParent "$app" "$submission"
+          # 通らなかったときも結果を読んでログを出すため、終了コードでは止めない。
           result=$(xcrun notarytool submit "$submission" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" --wait --timeout 30m --output-format json)
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 30m --output-format json) || true
           echo "$result"
           status=$(printf '%s' "$result" | jq -r '.status // empty')
           if [[ "$status" != Accepted ]]; then

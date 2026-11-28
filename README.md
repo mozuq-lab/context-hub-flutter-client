@@ -241,7 +241,7 @@ GitHub Actionsの「リリース」（`.github/workflows/release.yml`）が、An
 
 1. `pubspec.yaml` の `version` を `0.3.1+4` のように上げます。`+` の後ろの番号（Androidの更新の判定に使います）も前の版より大きくしてください。
 2. その変更を `main` へ反映すると、検証（`scripts/verify.sh`）とビルドの後に、タグ `v0.3.1` を付けたReleaseを公開します。`+` の前に `-beta.1` のような印を付けた版は「pre-release」として公開します。
-3. versionを変えずに公開し直すことはできません。同じタグがすでにある場合は公開しません。
+3. 同じタグがすでにある場合は公開しません。公開済みの版を作り直すには、versionを上げてください。途中で失敗してタグができなかった場合は、下の「Run workflow」か、失敗した実行の「Re-run failed jobs」で同じversionのまま公開し直せます。
 
 GitHubの「Actions」→「リリース」→「Run workflow」からも実行できます。「Releaseとして公開する」を外すと、公開せずにビルドだけを行い、成果物はその実行の画面から7日間ダウンロードできます（Secretsの確認に使えます）。`android/`・`macos/`・`scripts/build.sh` などを変えるpull requestでも、両OSのビルドが通るかだけを確かめます（Secretsは使いません）。
 
