@@ -26,6 +26,9 @@ android {
         versionName = flutter.versionName
     }
 
+    // 公開用の鍵は、リリースのワークフロー（.github/workflows/release.yml）が
+    // GitHubのSecretsから取り出して環境変数で渡す。指定がなければ手元検証用の鍵で署名する。
+    val releaseKeystore = System.getenv("CONTEXT_HUB_ANDROID_KEYSTORE")?.takeIf { it.isNotEmpty() }
     signingConfigs {
         create("localTest") {
             storeFile = rootProject.file("../.local-signing/context-hub-test.jks")
@@ -33,11 +36,18 @@ android {
             keyAlias = "context-hub-local"
             keyPassword = "android"
         }
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("CONTEXT_HUB_ANDROID_STORE_PASSWORD")
+                keyAlias = System.getenv("CONTEXT_HUB_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("CONTEXT_HUB_ANDROID_KEY_PASSWORD")
+            }
+        }
     }
     buildTypes {
         release {
-            // 手元検証用。公開配布の署名ではない。
-            signingConfig = signingConfigs.getByName("localTest")
+            signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "localTest")
         }
     }
 }

@@ -120,7 +120,7 @@ Macでは⌘、Androidの物理キーボードではCtrlを使います。Macで
 
 ### インストール
 
-**先にビルドが必要です。** ビルド済みのアプリはこのリポジトリでは配布していません。下の「[ビルド方法](#ビルド方法)」で作成してください。
+公開した版は[Releases](https://github.com/mozuq-lab/context-hub-flutter-client/releases)からダウンロードできます（入れ方は各Releaseの説明にあります）。自分でビルドする場合は、下の「[ビルド方法](#ビルド方法)」で作成してください。
 
 - **Mac**: `artifacts/ContextHub Client.app` をFinderから開きます。ターミナルから起動する必要はありません。ウインドウを閉じてもアプリは終了せず、ドックのアイコンを押すか⌘Tabなどで切り替えると開き直します（最小化したウインドウは、ドックのアイコンで戻します）。終了するには⌘Qを押します。
 - **Android**: `artifacts/context-hub-client-android.apk` を端末に転送してインストールします。このAPKは手元で使うための署名で、Playストアでは配布していません。実機のAndroid端末へのインストールは、まだ検証していません。
@@ -233,7 +233,47 @@ MACOS_SIGN_IDENTITY='署名証明書のhash' make macos-signed
 
 Androidのビルドでは、このclone（取得したフォルダー）専用の検証用の鍵を `.local-signing/` に作ります。同じアプリを上書き更新し続けるには、この鍵を残しておいてください。鍵を作り直すと、インストール済みのアプリを上書きできなくなります。この鍵は公開配布用ではなく、Gitにも含めません。
 
-Playストアでの配布とMacの公証には対応していません。
+Playストアでの配布には対応していません。Macの公証は、下の「[リリースの自動公開](#リリースの自動公開)」でAppleの署名用のSecretsを登録した場合だけ行います。
+
+### リリースの自動公開
+
+GitHub Actionsの「リリース」（`.github/workflows/release.yml`）が、AndroidのAPKとMac版のZIPをビルドし、GitHubのReleaseとして公開します。
+
+1. `pubspec.yaml` の `version` を `0.3.1+4` のように上げます。`+` の後ろの番号（Androidの更新の判定に使います）も前の版より大きくしてください。
+2. その変更を `main` へ反映すると、検証（`scripts/verify.sh`）とビルドの後に、タグ `v0.3.1` を付けたReleaseを公開します。`+` の前に `-beta.1` のような印を付けた版は「pre-release」として公開します。
+3. 同じタグがすでにある場合は公開しません。公開済みの版を作り直すには、versionを上げてください。途中で失敗してタグができなかった場合は、下の「Run workflow」か、失敗した実行の「Re-run failed jobs」で同じversionのまま公開し直せます。
+
+GitHubの「Actions」→「リリース」→「Run workflow」からも実行できます。「Releaseとして公開する」を外すと、公開せずにビルドだけを行い、成果物はその実行の画面から7日間ダウンロードできます（Secretsの確認に使えます）。`android/`・`macos/`・`scripts/build.sh` などを変えるpull requestでも、両OSのビルドが通るかだけを確かめます（Secretsは使いません）。
+
+署名には、リポジトリの「Settings」→「Secrets and variables」→「Actions」に登録したSecretsを使います。登録がなくても公開はできますが、次の制限があります。
+
+- **Android**: Secretsがなければ、実行のたびに一時的な鍵で署名します。前の版に上書きインストールできないため、更新のたびにアンインストールが必要です。
+- **Mac**: Secretsがなければad-hoc署名で、Appleの公証もありません。ダウンロードしたアプリは初回にmacOSに止められ、「システム設定」→「プライバシーとセキュリティ」の「このまま開く」で開く必要があります。
+
+| Secret | 内容 |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | 署名鍵（.jks）をbase64にした文字列 |
+| `ANDROID_KEYSTORE_PASSWORD` | 鍵ファイルのパスワード |
+| `ANDROID_KEY_ALIAS` | 鍵の別名 |
+| `ANDROID_KEY_PASSWORD` | 鍵のパスワード |
+| `MACOS_CERTIFICATE_P12_BASE64` | 「Developer ID Application」証明書と秘密鍵を書き出した .p12 をbase64にした文字列 |
+| `MACOS_CERTIFICATE_PASSWORD` | .p12 を書き出したときに付けたパスワード |
+| `APPLE_ID` | Apple Developer Programに登録したApple ID（公証に使います） |
+| `APPLE_APP_SPECIFIC_PASSWORD` | [Apple Accountのページ](https://account.apple.com/)で作ったApp用パスワード |
+| `APPLE_TEAM_ID` | Apple DeveloperのTeam ID（10文字） |
+
+Androidの4つは、どれか1つでも登録したら全部が必要です。Macの5つも同じです。
+
+Androidは、手元の `make android` で入れたアプリを上書き更新し続けたい場合、手元の `.local-signing/context-hub-test.jks` をそのまま使えます。このときのパスワードは `android`、別名は `context-hub-local`、鍵のパスワードは `android` です。このパスワードは公開されているため、鍵ファイル自体を他人に渡さないでください。新しい鍵を作る場合は、すでに入れたアプリにはその鍵の版を上書きできません。
+
+```sh
+# 鍵ファイルをbase64にしてクリップボードへ（Mac）
+base64 -i .local-signing/context-hub-test.jks | pbcopy
+# GitHub CLIで登録する場合
+base64 -i .local-signing/context-hub-test.jks | gh secret set ANDROID_KEYSTORE_BASE64
+```
+
+Macの証明書は、Apple Developer Program（有料）で作った「Developer ID Application」証明書を、キーチェーンアクセスで秘密鍵ごと .p12 として書き出し、同じように `base64 -i 証明書.p12 | pbcopy` で登録します。
 
 ## もっと詳しく
 
