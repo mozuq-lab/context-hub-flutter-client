@@ -220,7 +220,7 @@ jobs:
           build_tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
           certs=$("$build_tools/apksigner" verify --print-certs artifacts/context-hub-client-android.apk)
           printf '%s\n' "$certs"
-          digest=$(printf '%s\n' "$certs" | sed -n -E 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)$/\1/p' | head -n 1)
+          digest=$(printf '%s\n' "$certs" | sed -n -E 's/^(Signer #1|V[0-9]+ Signer):? certificate SHA-256 digest: ([0-9a-f]+)$/\2/p' | head -n 1)
           if [[ -z "$digest" ]]; then
             echo '::error::APKの署名証明書を確かめられませんでした。'
             exit 1
