@@ -1,0 +1,430 @@
+name: リリース
+
+# pubspec.yaml の version を上げて main へ反映すると、AndroidのAPKとMac版のZIPをビルドし、
+# タグ v<version>（例: v0.3.1）を付けたGitHub Releaseとして公開する。
+# 署名用のSecretsがなければ、Androidは一時的な鍵、Macはad-hoc署名でビルドする（README「リリースの自動公開」）。
+#
+# - push（main・pubspec.yaml の変更）: versionが前のcommitから変わり、そのタグがまだなければ公開する。
+# - workflow_dispatch: 手動で実行する。publishを外すと公開せずにビルドだけ行う（Secretsの確認用）。
+# - pull_request: ビルドが通るかだけを確かめる。Secretsは使わず、公開もしない。
+on:
+  push:
+    branches: [main]
+    paths: [pubspec.yaml]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Releaseとして公開する（外すとビルドだけ）'
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build.sh
+      - android/**
+      - macos/**
+      - pubspec.yaml
+      - pubspec.lock
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FLUTTER_VERSION: '3.47.9'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      build: ${{ steps.plan.outputs.build }}
+      publish: ${{ steps.plan.outputs.publish }}
+      sign: ${{ steps.plan.outputs.sign }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: バージョンと公開の判断
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          read_version() {
+            sed -n -E 's/^version:[[:space:]]*["'\'']?([^"'\''[:space:]]+)["'\'']?[[:space:]]*$/\1/p' | head -n 1
+          }
+          full=$(read_version < pubspec.yaml)
+          if [[ ! "$full" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)\+([0-9]+)$ ]]; then
+            echo "::error::pubspec.yaml の version は 0.3.1+4 のように「名前+番号」で書いてください（今の値: ${full:-なし}）。"
+            exit 1
+          fi
+          version=${BASH_REMATCH[1]}
+          tag="v$version"
+          prerelease=false
+          if [[ "$version" == *-* ]]; then prerelease=true; fi
+
+          build=true
+          publish=false
+          sign=true
+          case "$EVENT" in
+            pull_request)
+              sign=false
+              ;;
+            workflow_dispatch)
+              if [[ "$INPUT_PUBLISH" == true ]]; then
+                publish=true
+              fi
+              ;;
+            push)
+              previous=''
+              if [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]] \
+                && git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
+                previous=$(git show "$BEFORE:pubspec.yaml" 2>/dev/null | read_version || true)
+              fi
+              if [[ "$previous" == "$full" ]]; then
+                echo "::notice::version（$full）が変わっていないため、公開しません。"
+                build=false
+              else
+                publish=true
+              fi
+              ;;
+          esac
+
+          if [[ "$publish" == true ]]; then
+            if [[ "$REF" != refs/heads/main ]]; then
+              echo "::error::公開は main からだけ行えます（今のref: $REF）。ビルドだけ試すときは publish を外してください。"
+              exit 1
+            fi
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+              if [[ "$EVENT" == push ]]; then
+                echo "::notice::タグ $tag はすでにあるため、公開しません。"
+                build=false
+                publish=false
+              else
+                echo "::error::タグ $tag はすでにあります。pubspec.yaml の version を上げてから実行してください。"
+                exit 1
+              fi
+            fi
+          fi
+          if [[ "$build" == false ]]; then sign=false; fi
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "build=$build"
+            echo "publish=$publish"
+            echo "sign=$sign"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$full tag=$tag build=$build publish=$publish sign=$sign"
+
+  # 公開する前に、検証のワークフロー（ci.yml）と同じ検査を通す。
+  verify:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Flutterの取得
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Flutterの準備
+        run: |
+          flutter --disable-analytics
+          flutter --version
+      - name: 検証（scripts/verify.sh）
+        run: scripts/verify.sh
+
+  android:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      signed: ${{ steps.keystore.outputs.signed }}
+      certificate: ${{ steps.check.outputs.certificate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Flutterの取得
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Flutterの準備
+        run: |
+          flutter --disable-analytics
+          flutter --version
+      - name: 署名鍵の準備
+        id: keystore
+        env:
+          SIGN: ${{ needs.prepare.outputs.sign }}
+          KEYSTORE_BASE64: ${{ needs.prepare.outputs.sign == 'true' && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          STORE_PASSWORD: ${{ needs.prepare.outputs.sign == 'true' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          KEY_ALIAS: ${{ needs.prepare.outputs.sign == 'true' && secrets.ANDROID_KEY_ALIAS || '' }}
+          KEY_PASSWORD: ${{ needs.prepare.outputs.sign == 'true' && secrets.ANDROID_KEY_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYSTORE_BASE64" ]]; then
+            if [[ "$SIGN" == true ]]; then
+              echo '::warning::ANDROID_KEYSTORE_BASE64 がないため、一時的な鍵で署名します。この版は前の版に上書きインストールできません。'
+            fi
+            echo 'signed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo '::error::ANDROID_KEYSTORE_PASSWORD・ANDROID_KEY_ALIAS・ANDROID_KEY_PASSWORD もSecretsに登録してください。'
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode --ignore-garbage > "$keystore"
+          chmod 600 "$keystore"
+          if ! keytool -list -keystore "$keystore" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null; then
+            echo '::error::Secretsの署名鍵を開けませんでした。鍵ファイル・パスワード・別名を確かめてください。'
+            exit 1
+          fi
+          echo "keystore=$keystore" >> "$GITHUB_OUTPUT"
+          echo 'signed=true' >> "$GITHUB_OUTPUT"
+      - name: APKのビルド
+        env:
+          CONTEXT_HUB_ANDROID_KEYSTORE: ${{ steps.keystore.outputs.keystore }}
+          CONTEXT_HUB_ANDROID_STORE_PASSWORD: ${{ steps.keystore.outputs.signed == 'true' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          CONTEXT_HUB_ANDROID_KEY_ALIAS: ${{ steps.keystore.outputs.signed == 'true' && secrets.ANDROID_KEY_ALIAS || '' }}
+          CONTEXT_HUB_ANDROID_KEY_PASSWORD: ${{ steps.keystore.outputs.signed == 'true' && secrets.ANDROID_KEY_PASSWORD || '' }}
+        run: scripts/build.sh android
+      - name: 署名の確認
+        id: check
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          build_tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          certs=$("$build_tools/apksigner" verify --print-certs artifacts/context-hub-client-android.apk)
+          printf '%s\n' "$certs"
+          digest=$(printf '%s\n' "$certs" | sed -n -E 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)$/\1/p' | head -n 1)
+          echo "certificate=$digest" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          mv artifacts/context-hub-client-android.apk "dist/context-hub-client-android-v$VERSION.apk"
+      - name: 一時ファイルの削除
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-android
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Flutterの取得
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Flutterの準備
+        run: |
+          flutter --disable-analytics
+          flutter --version
+          xcodebuild -version
+      - name: 署名証明書の準備
+        id: signing
+        env:
+          SIGN: ${{ needs.prepare.outputs.sign }}
+          CERTIFICATE_BASE64: ${{ needs.prepare.outputs.sign == 'true' && secrets.MACOS_CERTIFICATE_P12_BASE64 || '' }}
+          CERTIFICATE_PASSWORD: ${{ needs.prepare.outputs.sign == 'true' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ needs.prepare.outputs.sign == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_APP_PASSWORD: ${{ needs.prepare.outputs.sign == 'true' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ needs.prepare.outputs.sign == 'true' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CERTIFICATE_BASE64" ]]; then
+            if [[ "$SIGN" == true ]]; then
+              echo '::warning::MACOS_CERTIFICATE_P12_BASE64 がないため、ad-hoc署名でビルドします（Appleの公証なし）。'
+            fi
+            echo 'signed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$CERTIFICATE_PASSWORD" || -z "$APPLE_ID" || -z "$APPLE_APP_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
+            echo '::error::MACOS_CERTIFICATE_PASSWORD・APPLE_ID・APPLE_APP_SPECIFIC_PASSWORD・APPLE_TEAM_ID もSecretsに登録してください。'
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -base64 24)
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          certificate="$RUNNER_TEMP/certificate.p12"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          if ! security import "$certificate" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -f pkcs12 -T /usr/bin/codesign >/dev/null; then
+            rm -f "$certificate"
+            echo '::error::Secretsの証明書を読み込めませんでした。p12ファイルとパスワードを確かめてください。'
+            exit 1
+          fi
+          rm -f "$certificate"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          existing=()
+          while IFS= read -r line; do
+            line=${line#"${line%%[![:space:]]*}"}
+            existing+=("${line//\"/}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application/ { print $2; exit }')
+          if [[ -z "$identity" ]]; then
+            echo '::error::証明書の中に「Developer ID Application」の署名用IDが見つかりません。'
+            exit 1
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo 'signed=true' >> "$GITHUB_OUTPUT"
+      - name: Mac版のビルド
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          MACOS_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+        run: |
+          if [[ "$SIGNED" == true ]]; then
+            scripts/build.sh macos-signed
+          else
+            scripts/build.sh macos
+          fi
+      - name: Appleの公証
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          app='artifacts/ContextHub Client.app'
+          submission="$RUNNER_TEMP/notarize.zip"
+          ditto -c -k --keepParent "$app" "$submission"
+          result=$(xcrun notarytool submit "$submission" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 30m --output-format json)
+          echo "$result"
+          status=$(printf '%s' "$result" | jq -r '.status // empty')
+          if [[ "$status" != Accepted ]]; then
+            id=$(printf '%s' "$result" | jq -r '.id // empty')
+            if [[ -n "$id" ]]; then
+              xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" || true
+            fi
+            echo "::error::Appleの公証が通りませんでした（結果: ${status:-不明}）。"
+            exit 1
+          fi
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          # 公証の結果を添付したアプリでZIPを作り直す。
+          rm -f artifacts/context-hub-client-macos-developer-id.zip
+          ditto -c -k --keepParent "$app" artifacts/context-hub-client-macos-developer-id.zip
+      - name: 成果物の名前の付け替え
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          source=artifacts/context-hub-client-macos.zip
+          if [[ "$SIGNED" == true ]]; then
+            source=artifacts/context-hub-client-macos-developer-id.zip
+          fi
+          mkdir -p dist
+          mv "$source" "dist/context-hub-client-macos-v$VERSION.zip"
+      - name: キーチェーンの削除
+        if: always() && steps.signing.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+        run: security delete-keychain "$KEYCHAIN" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-macos
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, verify, android, macos]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Releaseの公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          ANDROID_SIGNED: ${{ needs.android.outputs.signed }}
+          ANDROID_CERTIFICATE: ${{ needs.android.outputs.certificate }}
+          MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
+        run: |
+          set -euo pipefail
+          apk="context-hub-client-android-v$VERSION.apk"
+          zip="context-hub-client-macos-v$VERSION.zip"
+          test -f "dist/$apk"
+          test -f "dist/$zip"
+          (cd dist && sha256sum "$apk" "$zip" > SHA256SUMS.txt)
+
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo '## 入れ方'
+            echo
+            echo "- **Android**: \`$apk\` を端末で開いてインストールします。"
+            if [[ "$ANDROID_SIGNED" == true ]]; then
+              echo "  公開用の鍵で署名しています（証明書のSHA-256: \`$ANDROID_CERTIFICATE\`）。同じ鍵で署名した前の版に上書きできます。"
+            else
+              echo '  一時的な鍵で署名しています。前の版を入れている場合は上書きできないため、いったんアンインストールしてから入れてください。'
+            fi
+            echo "- **Mac**（Apple Silicon・macOS 12以降）: \`$zip\` を展開し、\`ContextHub Client.app\` をアプリケーションフォルダーへ移します。"
+            if [[ "$MACOS_SIGNED" == true ]]; then
+              echo '  Developer IDで署名し、Appleの公証を受けています。'
+            else
+              echo '  Appleの署名と公証を受けていないため、初回はmacOSに止められます。「システム設定」→「プライバシーとセキュリティ」の「このまま開く」で開いてください。'
+              echo '  それでも開けない場合は、ターミナルで `xattr -dr com.apple.quarantine "/Applications/ContextHub Client.app"` を実行します。'
+            fi
+            echo
+            echo '`SHA256SUMS.txt` でファイルが壊れていないかを確かめられます。'
+            echo
+          } > "$notes"
+
+          args=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "ContextHub Client $TAG" --notes-file "$notes" --generate-notes)
+          if [[ "$PRERELEASE" == true ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}" "dist/$apk" "dist/$zip" dist/SHA256SUMS.txt
